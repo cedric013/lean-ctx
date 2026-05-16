@@ -24,6 +24,18 @@ pub struct RequestBreakdown {
     pub image_count: usize,
     pub total_input_tokens: usize,
     pub message_count: usize,
+    #[serde(default)]
+    pub rules_tokens: usize,
+    #[serde(default)]
+    pub skills_tokens: usize,
+    #[serde(default)]
+    pub mcp_config_tokens: usize,
+    #[serde(default)]
+    pub subagent_tokens: usize,
+    #[serde(default)]
+    pub summarized_conversation_tokens: usize,
+    #[serde(default)]
+    pub conversation_tokens: usize,
 }
 
 pub fn analyze_request(body: &Value, provider: Provider) -> RequestBreakdown {
@@ -34,28 +46,68 @@ pub fn analyze_request(body: &Value, provider: Provider) -> RequestBreakdown {
     }
 }
 
+/// IDE clients (Cursor, Copilot) often send routing IDs like "model-0", "model-4"
+/// instead of real model names. We keep track of the last real model name per provider
+/// and fall back to it when we see a generic routing ID.
+fn normalize_model(raw: &str, provider: Provider) -> String {
+    use std::sync::Mutex;
+    static LAST_REAL: Mutex<[Option<String>; 3]> = Mutex::new([None, None, None]);
+
+    let is_routing_id = raw.starts_with("model-") || raw == "unknown" || raw.is_empty();
+
+    let idx = match provider {
+        Provider::Anthropic => 0,
+        Provider::OpenAi => 1,
+        Provider::Gemini => 2,
+    };
+
+    if is_routing_id {
+        if let Ok(guard) = LAST_REAL.lock() {
+            if let Some(ref real) = guard[idx] {
+                return real.clone();
+            }
+        }
+        return raw.to_string();
+    }
+
+    if let Ok(mut guard) = LAST_REAL.lock() {
+        guard[idx] = Some(raw.to_string());
+    }
+    raw.to_string()
+}
+
 fn analyze_anthropic(body: &Value) -> RequestBreakdown {
-    let model = body
+    let raw_model = body
         .get("model")
         .and_then(|m| m.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+        .unwrap_or("unknown");
+    let model = normalize_model(raw_model, Provider::Anthropic);
 
-    let system_prompt_tokens = match body.get("system") {
-        Some(Value::String(s)) => chars_to_tokens(s.len()),
-        Some(Value::Array(arr)) => {
-            arr.iter()
-                .map(|block| {
-                    block
-                        .get("text")
-                        .and_then(|t| t.as_str())
-                        .map_or(0, str::len)
-                })
-                .sum::<usize>()
-                / 4
+    let mut system_prompt_tokens = 0;
+    let mut rules_tokens = 0;
+    let mut skills_tokens = 0;
+    let mut mcp_config_tokens = 0;
+
+    match body.get("system") {
+        Some(Value::String(s)) => {
+            let sp = classify_system_prompt(s);
+            system_prompt_tokens = sp.base;
+            rules_tokens = sp.rules;
+            skills_tokens = sp.skills;
+            mcp_config_tokens = sp.mcp;
         }
-        _ => 0,
-    };
+        Some(Value::Array(arr)) => {
+            for block in arr {
+                let text = block.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                let sp = classify_system_prompt(text);
+                system_prompt_tokens += sp.base;
+                rules_tokens += sp.rules;
+                skills_tokens += sp.skills;
+                mcp_config_tokens += sp.mcp;
+            }
+        }
+        _ => {}
+    }
 
     let tool_definition_tokens = body
         .get("tools")
@@ -72,6 +124,8 @@ fn analyze_anthropic(body: &Value) -> RequestBreakdown {
     let mut tool_result_tokens = 0;
     let mut image_count = 0;
     let mut message_count = 0;
+    let mut subagent_tokens = 0;
+    let mut summarized_conversation_tokens = 0;
 
     if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
         message_count = messages.len();
@@ -85,6 +139,10 @@ fn analyze_anthropic(body: &Value) -> RequestBreakdown {
                 "user" => {
                     if has_tool_results(msg.get("content")) {
                         tool_result_tokens += content_tokens;
+                    } else if is_summary_message(msg.get("content")) {
+                        summarized_conversation_tokens += content_tokens;
+                    } else if is_subagent_message(msg.get("content")) {
+                        subagent_tokens += content_tokens;
                     } else {
                         user_message_tokens += content_tokens;
                     }
@@ -95,11 +153,18 @@ fn analyze_anthropic(body: &Value) -> RequestBreakdown {
         }
     }
 
+    let conversation_tokens = user_message_tokens + assistant_message_tokens;
+
     let total_input_tokens = system_prompt_tokens
+        + rules_tokens
+        + skills_tokens
+        + mcp_config_tokens
         + user_message_tokens
         + assistant_message_tokens
         + tool_definition_tokens
-        + tool_result_tokens;
+        + tool_result_tokens
+        + subagent_tokens
+        + summarized_conversation_tokens;
 
     RequestBreakdown {
         provider: Provider::Anthropic,
@@ -113,22 +178,33 @@ fn analyze_anthropic(body: &Value) -> RequestBreakdown {
         image_count,
         total_input_tokens,
         message_count,
+        rules_tokens,
+        skills_tokens,
+        mcp_config_tokens,
+        subagent_tokens,
+        summarized_conversation_tokens,
+        conversation_tokens,
     }
 }
 
 fn analyze_openai(body: &Value) -> RequestBreakdown {
-    let model = body
+    let raw_model = body
         .get("model")
         .and_then(|m| m.as_str())
-        .unwrap_or("unknown")
-        .to_string();
+        .unwrap_or("unknown");
+    let model = normalize_model(raw_model, Provider::OpenAi);
 
     let mut system_prompt_tokens = 0;
+    let mut rules_tokens = 0;
+    let mut skills_tokens = 0;
+    let mut mcp_config_tokens = 0;
     let mut user_message_tokens = 0;
     let mut assistant_message_tokens = 0;
     let mut tool_result_tokens = 0;
     let mut image_count = 0;
     let mut message_count = 0;
+    let mut subagent_tokens = 0;
+    let mut summarized_conversation_tokens = 0;
 
     if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
         message_count = messages.len();
@@ -138,10 +214,25 @@ fn analyze_openai(body: &Value) -> RequestBreakdown {
             image_count += count_images(msg.get("content"));
 
             match role {
-                "system" | "developer" => system_prompt_tokens += content_tokens,
+                "system" | "developer" => {
+                    let text = extract_text_content(msg.get("content"));
+                    let sp = classify_system_prompt(&text);
+                    system_prompt_tokens += sp.base;
+                    rules_tokens += sp.rules;
+                    skills_tokens += sp.skills;
+                    mcp_config_tokens += sp.mcp;
+                }
                 "assistant" => assistant_message_tokens += content_tokens,
                 "tool" => tool_result_tokens += content_tokens,
-                _ => user_message_tokens += content_tokens,
+                _ => {
+                    if is_summary_message(msg.get("content")) {
+                        summarized_conversation_tokens += content_tokens;
+                    } else if is_subagent_message(msg.get("content")) {
+                        subagent_tokens += content_tokens;
+                    } else {
+                        user_message_tokens += content_tokens;
+                    }
+                }
             }
         }
     }
@@ -156,11 +247,18 @@ fn analyze_openai(body: &Value) -> RequestBreakdown {
         .and_then(|t| t.as_array())
         .map_or(0, Vec::len);
 
+    let conversation_tokens = user_message_tokens + assistant_message_tokens;
+
     let total_input_tokens = system_prompt_tokens
+        + rules_tokens
+        + skills_tokens
+        + mcp_config_tokens
         + user_message_tokens
         + assistant_message_tokens
         + tool_definition_tokens
-        + tool_result_tokens;
+        + tool_result_tokens
+        + subagent_tokens
+        + summarized_conversation_tokens;
 
     RequestBreakdown {
         provider: Provider::OpenAi,
@@ -174,6 +272,12 @@ fn analyze_openai(body: &Value) -> RequestBreakdown {
         image_count,
         total_input_tokens,
         message_count,
+        rules_tokens,
+        skills_tokens,
+        mcp_config_tokens,
+        subagent_tokens,
+        summarized_conversation_tokens,
+        conversation_tokens,
     }
 }
 
@@ -259,6 +363,8 @@ fn analyze_gemini(body: &Value) -> RequestBreakdown {
         + tool_definition_tokens
         + tool_result_tokens;
 
+    let conversation_tokens = user_message_tokens + assistant_message_tokens;
+
     RequestBreakdown {
         provider: Provider::Gemini,
         model,
@@ -271,6 +377,12 @@ fn analyze_gemini(body: &Value) -> RequestBreakdown {
         image_count: 0,
         total_input_tokens,
         message_count,
+        rules_tokens: 0,
+        skills_tokens: 0,
+        mcp_config_tokens: 0,
+        subagent_tokens: 0,
+        summarized_conversation_tokens: 0,
+        conversation_tokens,
     }
 }
 
@@ -313,6 +425,97 @@ fn count_images(content: Option<&Value>) -> usize {
     }
 }
 
+struct SystemPromptParts {
+    base: usize,
+    rules: usize,
+    skills: usize,
+    mcp: usize,
+}
+
+fn classify_system_prompt(text: &str) -> SystemPromptParts {
+    let mut rules = 0usize;
+    let mut skills = 0usize;
+    let mut mcp = 0usize;
+    let mut base = 0usize;
+
+    let rule_markers = [
+        "<always_applied_workspace_rule",
+        "<user_rule",
+        ".cursorrules",
+        "AGENTS.md",
+        ".mdc",
+        "workspace_rule",
+        "cursor_rules",
+        "CLAUDE.md",
+        "<rules>",
+    ];
+    let skill_markers = [
+        "<agent_skill",
+        "<available_skills",
+        "SKILL.md",
+        "skills-cursor",
+        "agent_skills",
+    ];
+    let mcp_markers = [
+        "<mcp_file_system",
+        "mcp_server",
+        "MCP server",
+        "CallMcpTool",
+        "FetchMcpResource",
+        "<mcp_file_system_server",
+    ];
+
+    for line in text.lines() {
+        let tok = chars_to_tokens(line.len() + 1);
+        let l = line.trim();
+
+        if rule_markers.iter().any(|m| l.contains(m)) {
+            rules += tok;
+        } else if skill_markers.iter().any(|m| l.contains(m)) {
+            skills += tok;
+        } else if mcp_markers.iter().any(|m| l.contains(m)) {
+            mcp += tok;
+        } else {
+            base += tok;
+        }
+    }
+
+    SystemPromptParts {
+        base,
+        rules,
+        skills,
+        mcp,
+    }
+}
+
+fn is_summary_message(content: Option<&Value>) -> bool {
+    let text = extract_text_content(content);
+    text.contains("[Previous conversation summary]")
+        || text.contains("conversation summary")
+        || text.contains("Here is a summary of the conversation")
+        || text.contains("summarized conversation")
+}
+
+fn is_subagent_message(content: Option<&Value>) -> bool {
+    let text = extract_text_content(content);
+    text.contains("subagent")
+        || text.contains("background agent")
+        || text.contains("<task>")
+        || text.contains("system_notification")
+}
+
+fn extract_text_content(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => String::new(),
+    }
+}
+
 fn has_tool_results(content: Option<&Value>) -> bool {
     match content {
         Some(Value::Array(arr)) => arr
@@ -342,8 +545,13 @@ impl Default for IntrospectState {
 
 impl IntrospectState {
     pub fn record(&self, breakdown: RequestBreakdown) {
-        self.total_system_prompt_tokens
-            .fetch_add(breakdown.system_prompt_tokens as u64, Ordering::Relaxed);
+        self.total_system_prompt_tokens.fetch_add(
+            (breakdown.system_prompt_tokens
+                + breakdown.rules_tokens
+                + breakdown.skills_tokens
+                + breakdown.mcp_config_tokens) as u64,
+            Ordering::Relaxed,
+        );
         self.total_requests.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut last) = self.last_breakdown.lock() {
             *last = Some(breakdown);

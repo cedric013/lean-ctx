@@ -165,10 +165,83 @@ fn collect_pids(stdout: &[u8], exclude_pid: u32, out: &mut Vec<u32>) {
     }
 }
 
-/// Kill ALL processes matching `name` (SIGTERM then SIGKILL).
+/// Returns PIDs that are NOT MCP stdio servers (safe to kill during `lean-ctx stop`).
+/// MCP servers are child processes of the IDE and must not be killed — the IDE
+/// will immediately respawn them, causing a kill loop that requires a reboot.
+pub fn find_killable_pids(name: &str) -> Vec<u32> {
+    let all = find_pids_by_name(name);
+    let mcp_pids = find_mcp_server_pids(name);
+    all.into_iter().filter(|p| !mcp_pids.contains(p)).collect()
+}
+
+#[cfg(unix)]
+fn find_mcp_server_pids(name: &str) -> Vec<u32> {
+    find_pids_by_name(name)
+        .into_iter()
+        .filter(|&pid| is_mcp_stdio_process(pid))
+        .collect()
+}
+
+#[cfg(not(unix))]
+fn find_mcp_server_pids(_name: &str) -> Vec<u32> {
+    Vec::new()
+}
+
+#[cfg(unix)]
+fn is_mcp_stdio_process(pid: u32) -> bool {
+    if let Ok(output) = std::process::Command::new("ps")
+        .args(["-o", "ppid=,command=", "-p", &pid.to_string()])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&output.stdout);
+        let t = text.trim();
+        if t.contains("Cursor") || t.contains("cursor") || t.contains("code") {
+            return true;
+        }
+        let parts: Vec<&str> = t.split_whitespace().collect();
+        if let Some(ppid_str) = parts.first() {
+            if let Ok(ppid) = ppid_str.parse::<u32>() {
+                if let Ok(pp_out) = std::process::Command::new("ps")
+                    .args(["-o", "command=", "-p", &ppid.to_string()])
+                    .output()
+                {
+                    let pp_cmd = String::from_utf8_lossy(&pp_out.stdout);
+                    if pp_cmd.contains("Cursor")
+                        || pp_cmd.contains("cursor")
+                        || pp_cmd.contains("code")
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        let cmd_part = parts.get(1..).map(|p| p.join(" ")).unwrap_or_default();
+        // MCP stdio servers: bare `lean-ctx` with no subcommand (or just `mcp`)
+        if cmd_part.ends_with("/lean-ctx") || cmd_part == "lean-ctx" {
+            if !cmd_part.contains("proxy")
+                && !cmd_part.contains("dashboard")
+                && !cmd_part.contains("daemon")
+                && !cmd_part.contains("stop")
+                && !cmd_part.contains("hook")
+            {
+                return true;
+            }
+        }
+        // Hook observer/rewriter processes spawned by IDE
+        if cmd_part.contains("hook observe")
+            || cmd_part.contains("hook rewrite")
+            || cmd_part.contains("hook redirect")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Kill non-MCP processes matching `name` (SIGTERM then SIGKILL).
 /// Returns count of killed processes.
 pub fn kill_all_by_name(name: &str) -> usize {
-    let pids = find_pids_by_name(name);
+    let pids = find_killable_pids(name);
     if pids.is_empty() {
         return 0;
     }

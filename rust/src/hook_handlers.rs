@@ -35,7 +35,15 @@ struct ObserveEvent {
     tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    conversation_id: Option<String>,
 }
+
+const MAX_CONTENT_CHARS: usize = 50_000;
 
 fn parse_observe_event(input: &str) -> Option<ObserveEvent> {
     let v: serde_json::Value = serde_json::from_str(input).ok()?;
@@ -45,13 +53,47 @@ fn parse_observe_event(input: &str) -> Option<ObserveEvent> {
         .unwrap_or_default()
         .as_secs();
 
-    // Detect event type from payload shape (IDE-agnostic)
+    let model = v
+        .get("model")
+        .and_then(|m| m.as_str())
+        .filter(|m| !m.is_empty())
+        .map(String::from);
+    let conversation_id = v
+        .get("conversation_id")
+        .and_then(|c| c.as_str())
+        .filter(|c| !c.is_empty())
+        .map(String::from);
+
+    let transcript_path = v
+        .get("transcript_path")
+        .and_then(|t| t.as_str())
+        .filter(|t| !t.is_empty())
+        .map(String::from);
+
+    if let Some(ref m) = model {
+        persist_detected_model(m);
+    }
+    if let Some(ref tp) = transcript_path {
+        persist_transcript_path(tp, conversation_id.as_deref());
+    }
+
+    let mut event = detect_event_type(&v, ts)?;
+    event.model = model;
+    event.conversation_id = conversation_id;
+    Some(event)
+}
+
+fn detect_event_type(v: &serde_json::Value, ts: u64) -> Option<ObserveEvent> {
     if let Some(result) = v.get("result_json").or_else(|| v.get("result")) {
         let tool = v
             .get("tool_name")
             .and_then(|t| t.as_str())
             .unwrap_or("unknown");
         let tokens = estimate_tokens_json(result);
+        let content_str = match result {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
         return Some(ObserveEvent {
             ts,
             event_type: "mcp_call",
@@ -61,6 +103,9 @@ fn parse_observe_event(input: &str) -> Option<ObserveEvent> {
                 .get("server_name")
                 .and_then(|s| s.as_str())
                 .map(String::from),
+            content: Some(cap_content(&content_str)),
+            model: None,
+            conversation_id: None,
         });
     }
 
@@ -71,12 +116,19 @@ fn parse_observe_event(input: &str) -> Option<ObserveEvent> {
             .unwrap_or("")
             .to_string();
         let tokens = estimate_tokens_value(output);
+        let out_str = match output {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
         return Some(ObserveEvent {
             ts,
             event_type: "shell",
             tokens,
             tool_name: None,
             detail: Some(truncate_str(&cmd, 80)),
+            content: Some(cap_content(&format!("$ {cmd}\n{out_str}"))),
+            model: None,
+            conversation_id: None,
         });
     }
 
@@ -86,16 +138,17 @@ fn parse_observe_event(input: &str) -> Option<ObserveEvent> {
             .and_then(|p| p.as_str())
             .unwrap_or("")
             .to_string();
-        let tokens = v
-            .get("content")
-            .and_then(|c| c.as_str())
-            .map_or(0, |s| s.len() / 4);
+        let file_content = v.get("content").and_then(|c| c.as_str()).unwrap_or("");
+        let tokens = file_content.len() / 4;
         return Some(ObserveEvent {
             ts,
             event_type: "file_read",
             tokens,
             tool_name: None,
             detail: Some(truncate_str(&path, 120)),
+            content: Some(cap_content(file_content)),
+            model: None,
+            conversation_id: None,
         });
     }
 
@@ -113,11 +166,25 @@ fn parse_observe_event(input: &str) -> Option<ObserveEvent> {
             tokens,
             tool_name: None,
             detail: None,
+            content: Some(cap_content(text)),
+            model: None,
+            conversation_id: None,
         });
     }
 
     if let Some(prompt) = v.get("prompt").and_then(|p| p.as_str()) {
         let tokens = prompt.len() / 4;
+        let mut full = prompt.to_string();
+        if let Some(attachments) = v.get("attachments").and_then(|a| a.as_array()) {
+            if !attachments.is_empty() {
+                full.push_str(&format!("\n\n[{} attachments]", attachments.len()));
+                for att in attachments {
+                    if let Some(name) = att.get("name").and_then(|n| n.as_str()) {
+                        full.push_str(&format!("\n  - {name}"));
+                    }
+                }
+            }
+        }
         return Some(ObserveEvent {
             ts,
             event_type: "user_message",
@@ -127,6 +194,9 @@ fn parse_observe_event(input: &str) -> Option<ObserveEvent> {
                 .get("attachments")
                 .and_then(|a| a.as_array())
                 .map(|a| format!("{} attachments", a.len())),
+            content: Some(cap_content(&full)),
+            model: None,
+            conversation_id: None,
         });
     }
 
@@ -137,12 +207,23 @@ fn parse_observe_event(input: &str) -> Option<ObserveEvent> {
             .unwrap_or("unknown")
             .to_string();
         let tokens = v.get("tool_input").map_or(0, estimate_tokens_json);
+        let input_str = v
+            .get("tool_input")
+            .map(|ti| ti.to_string())
+            .unwrap_or_default();
         return Some(ObserveEvent {
             ts,
             event_type: "native_tool",
             tokens,
             tool_name: Some(tool),
             detail: None,
+            content: if input_str.is_empty() {
+                None
+            } else {
+                Some(cap_content(&input_str))
+            },
+            model: None,
+            conversation_id: None,
         });
     }
 
@@ -156,10 +237,12 @@ fn parse_observe_event(input: &str) -> Option<ObserveEvent> {
                 .get("session_id")
                 .and_then(|s| s.as_str())
                 .map(String::from),
+            content: None,
+            model: None,
+            conversation_id: None,
         });
     }
 
-    // Compaction marker (preCompact hook or explicit)
     let is_compaction = v.get("compaction").is_some()
         || v.get("messages_count").is_some()
         || v.get("event")
@@ -172,6 +255,9 @@ fn parse_observe_event(input: &str) -> Option<ObserveEvent> {
             tokens: 0,
             tool_name: None,
             detail: None,
+            content: None,
+            model: None,
+            conversation_id: None,
         });
     }
 
@@ -192,6 +278,146 @@ fn estimate_tokens_value(v: &serde_json::Value) -> usize {
     }
 }
 
+fn persist_detected_model(model: &str) {
+    let m = model.to_lowercase();
+    let is_bg_model = m.contains("flash")
+        || m.contains("mini")
+        || m.contains("haiku")
+        || m.contains("fast")
+        || m.contains("nano")
+        || m.contains("small");
+    if is_bg_model {
+        return;
+    }
+
+    let Ok(data_dir) = crate::core::data_dir::lean_ctx_data_dir() else {
+        return;
+    };
+    let path = data_dir.join("detected_model.json");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let window = model_context_window(model);
+    let payload = serde_json::json!({
+        "model": model,
+        "window_size": window,
+        "detected_at": ts,
+    });
+    if let Ok(json) = serde_json::to_string_pretty(&payload) {
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, &json).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+}
+
+pub fn model_context_window(model: &str) -> usize {
+    let m = model.to_lowercase();
+    if m.contains("claude-opus-4") || m.contains("opus-4") {
+        200_000
+    } else if m.contains("claude-4") || m.contains("claude-sonnet-4") {
+        200_000
+    } else if m.contains("claude-3.5") || m.contains("claude-3-5") {
+        200_000
+    } else if m.contains("claude-3") {
+        200_000
+    } else if m.contains("gpt-4o") {
+        128_000
+    } else if m.contains("gpt-4-turbo") || m.contains("gpt-4.1") {
+        128_000
+    } else if m.contains("gpt-4") {
+        128_000
+    } else if m.contains("gpt-5") || m.contains("codex") {
+        128_000
+    } else if m.contains("o1") || m.contains("o3") || m.contains("o4") {
+        200_000
+    } else if m.contains("gemini-2") || m.contains("gemini-3") {
+        1_000_000
+    } else if m.contains("gemini") {
+        1_000_000
+    } else if m.contains("deepseek") {
+        128_000
+    } else if m.contains("mistral") || m.contains("codestral") {
+        256_000
+    } else {
+        200_000
+    }
+}
+
+pub fn load_detected_model() -> Option<(String, usize)> {
+    let data_dir = crate::core::data_dir::lean_ctx_data_dir().ok()?;
+    let path = data_dir.join("detected_model.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let model = v.get("model")?.as_str()?.to_string();
+    let window = v.get("window_size")?.as_u64()? as usize;
+    let detected_at = v.get("detected_at")?.as_u64()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if now.saturating_sub(detected_at) > 7200 {
+        return None;
+    }
+    Some((model, window))
+}
+
+fn persist_transcript_path(path: &str, conversation_id: Option<&str>) {
+    let Ok(data_dir) = crate::core::data_dir::lean_ctx_data_dir() else {
+        return;
+    };
+    let meta_path = data_dir.join("active_transcript.json");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let payload = serde_json::json!({
+        "transcript_path": path,
+        "conversation_id": conversation_id,
+        "updated_at": ts,
+    });
+    if let Ok(json) = serde_json::to_string_pretty(&payload) {
+        let tmp = meta_path.with_extension("tmp");
+        if std::fs::write(&tmp, &json).is_ok() {
+            let _ = std::fs::rename(&tmp, &meta_path);
+        }
+    }
+}
+
+pub fn load_active_transcript() -> Option<(String, Option<String>)> {
+    let data_dir = crate::core::data_dir::lean_ctx_data_dir().ok()?;
+    let path = data_dir.join("active_transcript.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let tp = v.get("transcript_path")?.as_str()?.to_string();
+    let conv = v
+        .get("conversation_id")
+        .and_then(|c| c.as_str())
+        .map(String::from);
+    let updated = v.get("updated_at")?.as_u64()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if now.saturating_sub(updated) > 7200 {
+        return None;
+    }
+    Some((tp, conv))
+}
+
+fn cap_content(s: &str) -> String {
+    if s.len() <= MAX_CONTENT_CHARS {
+        s.to_string()
+    } else {
+        format!(
+            "{}…\n\n[truncated: {} total chars]",
+            &s[..MAX_CONTENT_CHARS],
+            s.len()
+        )
+    }
+}
+
 fn truncate_str(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
@@ -207,8 +433,13 @@ fn append_radar_event(event: &ObserveEvent) {
     let radar_path = data_dir.join("context_radar.jsonl");
 
     if event.event_type == "session" {
-        let prev = data_dir.join("context_radar.prev.jsonl");
-        let _ = std::fs::rename(&radar_path, &prev);
+        if let Ok(meta) = std::fs::metadata(&radar_path) {
+            const MAX_RADAR_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+            if meta.len() > MAX_RADAR_SIZE {
+                let prev = data_dir.join("context_radar.prev.jsonl");
+                let _ = std::fs::rename(&radar_path, &prev);
+            }
+        }
     }
 
     let Ok(line) = serde_json::to_string(event) else {

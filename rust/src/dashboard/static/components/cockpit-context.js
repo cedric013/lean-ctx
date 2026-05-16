@@ -1,6 +1,5 @@
 /**
- * Context Manager — unified context visibility & management.
- * Tabs: Window | Items | Runtime
+ * Context Manager — single-page context visibility & management.
  */
 const VIEW_MODES = [
   'full', 'map', 'signatures', 'diff', 'aggressive',
@@ -48,97 +47,52 @@ function operationSummary(op) {
   switch (op.type) {
     case 'exclude': return 'exclude' + (op.reason ? ' \u00b7 ' + op.reason : '');
     case 'pin': return 'pin' + (op.verbatim === false ? ' (summary)' : '');
-    case 'set_view': return 'set_view' + (op.set_view != null ? ' \u2192 ' + op.set_view : '');
-    case 'set_priority': return 'priority ' + (op.set_priority ?? op.SetPriority ?? '');
-    case 'expire': return 'expire (' + (op.after_secs ?? '') + 's)';
-    default: return op.type || JSON.stringify(op);
+    case 'set_view': return 'view \u2192 ' + (op.mode || '?');
+    case 'include': return 'include (undo)';
+    case 'unpin': return 'unpin';
+    case 'mark_outdated': return 'stale';
+    default: return op.type || '';
   }
 }
 
-function recCopy(r) {
-  const s = String(r || '');
-  if (s.includes('NoAction')) return 'Healthy \u2014 enough headroom.';
-  if (s.includes('SuggestCompression')) return 'Getting warm \u2014 consider switching files to map/signatures.';
-  if (s.includes('ForceCompression')) return 'Critical \u2014 compress aggressively or evict stale items.';
-  if (s.includes('Evict')) return 'Overloaded \u2014 evict low-relevance items immediately.';
-  return s;
-}
-
-function gaugeColor(u) {
-  const p = u * 100;
-  return p < 60 ? 'var(--green)' : p < 80 ? 'var(--yellow)' : 'var(--red)';
+function gaugeColor(ratio) {
+  if (ratio > 0.85) return 'var(--red)';
+  if (ratio > 0.6) return 'var(--yellow)';
+  return 'var(--green)';
 }
 
 function shortenPath(p) {
-  if (!p || typeof p !== 'string') return String(p || '');
-  const parts = p.split('/');
-  if (parts.length <= 3) return p;
-  const markers = ['src', 'lib', 'app', 'pkg', 'rust', 'tests', 'components'];
-  let projIdx = -1;
-  for (let i = 0; i < parts.length; i++) {
-    if (markers.includes(parts[i])) { projIdx = Math.max(0, i - 1); break; }
-  }
-  if (projIdx < 0) projIdx = Math.max(0, parts.length - 4);
-  return parts.slice(projIdx).join('/');
+  if (!p) return '';
+  const parts = p.replace(/\\/g, '/').split('/');
+  if (parts.length <= 3) return parts.join('/');
+  return '\u2026/' + parts.slice(-3).join('/');
 }
 
 function fmtTok(n) {
   if (n == null) return '0';
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
   return String(n);
 }
 
-function escFallback(s) {
-  const d = document.createElement('span');
-  d.textContent = s;
-  return d.innerHTML;
-}
+const escFallback = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 class CockpitContext extends HTMLElement {
   constructor() {
     super();
-    this._sortKey = 'phi';
+    this._data = {};
+    this._loading = false;
+    this._error = null;
+    this._sortKey = 'sent_tokens';
     this._sortDir = 'desc';
     this._modeFilter = 'all';
-    this._modeMenuOpen = null;
-    this._activeTab = 'window';
     this._historyOpen = false;
-    this._onDocClick = this._onDocClick.bind(this);
-    this._onRefresh = this._onRefresh.bind(this);
-    this._data = null;
-    this._error = null;
-    this._loading = true;
+    this._modeMenuOpen = null;
+    this._inspectorFilter = 'all';
+    this._collapsedSections = {};
   }
 
-  connectedCallback() {
-    if (this._ready) return;
-    this._ready = true;
-    this.style.display = 'block';
-    document.addEventListener('click', this._onDocClick);
-    document.addEventListener('lctx:refresh', this._onRefresh);
-    this.render();
-    this.loadData();
-  }
-
-  disconnectedCallback() {
-    document.removeEventListener('click', this._onDocClick);
-    document.removeEventListener('lctx:refresh', this._onRefresh);
-    const Ch = charts();
-    if (Ch.destroyIfNeeded) Ch.destroyIfNeeded('cockpitCtxModeDist');
-  }
-
-  _onRefresh() {
-    const v = document.getElementById('view-context');
-    if (v && v.classList.contains('active')) this.loadData();
-  }
-
-  _onDocClick() {
-    if (this._modeMenuOpen) {
-      this._modeMenuOpen.classList.remove('open');
-      this._modeMenuOpen = null;
-    }
-  }
+  connectedCallback() { this.loadData(); }
 
   async loadData() {
     const fetchJson = api();
@@ -152,12 +106,13 @@ class CockpitContext extends HTMLElement {
       '/api/context-overlay-history', '/api/context-plan', '/api/pipeline-stats',
       '/api/intent', '/api/session', '/api/context-bounce', '/api/context-client',
       '/api/context-pressure', '/api/context-dynamic-tools', '/api/context-radar',
-      '/api/context-introspect',
+      '/api/context-introspect', '/api/context-handles', '/api/context-events', '/api/context-model',
+      '/api/context-transcript',
     ];
     const results = await Promise.all(paths.map(p =>
       fetchJson(p, { timeoutMs: 12000 }).catch(e => ({ __error: e?.error || String(e), __path: p }))
     ));
-    const [ledger, field, control, history, plan, pipeline, intent, session, bounce, clientCaps, pressure, dynTools, radar, introspect] = results;
+    const [ledger, field, control, history, plan, pipeline, intent, session, bounce, clientCaps, pressure, dynTools, radar, introspect, handles, contextEvents, modelInfo, transcript] = results;
 
     const err = [ledger, field, control].find(x => x?.__error);
     if (err) this._error = err.__path + ': ' + err.__error;
@@ -166,7 +121,7 @@ class CockpitContext extends HTMLElement {
       ledger: ledger?.__error ? null : ledger,
       field: field?.__error ? null : field,
       control: control?.__error ? null : control,
-      history: Array.isArray(history) ? history : [],
+      history: Array.isArray(history) ? history : history?.__error ? [] : (history?.items || []),
       plan: plan?.__error ? null : plan,
       pipeline: pipeline?.__error ? null : pipeline,
       intent: intent?.__error ? null : intent,
@@ -177,24 +132,15 @@ class CockpitContext extends HTMLElement {
       dynTools: dynTools?.__error ? null : dynTools,
       radar: radar?.__error ? null : radar,
       introspect: introspect?.__error ? null : introspect,
+      handles: handles?.__error ? null : handles,
+      contextEvents: contextEvents?.__error ? null : contextEvents,
+      modelInfo: modelInfo?.__error ? null : modelInfo,
+      transcript: transcript?.__error ? null : transcript,
     };
     if (this._data.history && !Array.isArray(this._data.history)) this._data.history = [];
 
     this._loading = false;
     this.render();
-    this._renderModeChart();
-  }
-
-  _renderModeChart() {
-    const dist = this._data?.ledger?.mode_distribution;
-    const Ch = charts();
-    if (!Ch.doughnutChart || typeof Chart === 'undefined') return;
-    const labels = [], values = [];
-    if (dist && typeof dist === 'object') {
-      for (const k of Object.keys(dist).sort()) { labels.push(k); values.push(dist[k]); }
-    }
-    if (!labels.length) { if (Ch.destroyIfNeeded) Ch.destroyIfNeeded('cockpitCtxModeDist'); return; }
-    requestAnimationFrame(() => { try { Ch.doughnutChart('cockpitCtxModeDist', labels, values); } catch (_) {} });
   }
 
   render() {
@@ -203,318 +149,187 @@ class CockpitContext extends HTMLElement {
     const ff = F.ff || (n => String(n));
     const pc = F.pc || ((a, b) => b > 0 ? Math.round(a / b * 100) : 0);
 
-    if (this._loading) {
-      this.innerHTML = '<div class="card"><div class="loading-state">Loading context\u2026</div></div>';
-      return;
-    }
-    if (this._error && !this._data?.ledger) {
-      this.innerHTML = '<div class="card"><h3>Error</h3><p class="hs" style="color:var(--red)">' + esc(this._error) + '</p></div>';
-      return;
-    }
+    if (this._loading) { this.innerHTML = '<div class="loading-pulse" style="padding:40px;text-align:center">Loading context data\u2026</div>'; return; }
+    if (this._error) { this.innerHTML = '<div class="card" style="padding:20px;color:var(--red)">\u26a0 ' + esc(this._error) + '</div>'; return; }
 
-    const tabs = [
-      { id: 'window', label: 'Window', icon: '\u25c9' },
-      { id: 'items', label: 'Items', icon: '\u2261' },
-      { id: 'runtime', label: 'Runtime', icon: '\u2699' },
-    ];
+    let body = '';
 
-    let tabBar = '<div class="ctx-tabs">';
-    for (const t of tabs) {
-      const active = t.id === this._activeTab ? ' ctx-tab-active' : '';
-      tabBar += '<button class="ctx-tab' + active + '" data-tab="' + t.id + '">' +
-        '<span class="ctx-tab-icon">' + t.icon + '</span> ' + t.label + '</button>';
-    }
-    tabBar += '</div>';
+    // 1. Context Window (hero)
+    body += this._renderContextWindow(esc, ff, pc);
 
-    let body = tabBar;
-    const tab = this._activeTab;
-    if (tab === 'window') body += this._renderWindowTab(esc, ff, pc);
-    else if (tab === 'items') body += this._renderItemsTab(esc, ff, pc);
-    else if (tab === 'runtime') body += this._renderRuntimeTab(esc, ff);
+    // 2. Files + Overlays (merged, with actions)
+    body += this._renderFilesSection(esc, ff, pc);
+
+    // 3. Rules
+    body += this._renderRulesSection(esc, ff);
+
+    // 4. Chat History
+    body += this._renderChatHistory(esc);
+
+    // 5. Context Inspector
+    body += this._renderContextInspector(esc);
+
+    // 6. System (MCP, Bounce, Pipeline, Dynamic Tools)
+    body += this._renderSystemSection(esc, ff);
 
     this.innerHTML = body;
     this._bindAll();
   }
 
-  // ─── WINDOW TAB ─────────────────────────────────────────────────────
+  // ─── 1. CONTEXT WINDOW (hero) ─────────────────────────────────────
 
-  _renderWindowTab(esc, ff, pc) {
+  _renderContextWindow(esc, ff, pc) {
     const ledger = this._data.ledger;
-    const field = this._data.field;
-    const session = this._data.session;
     const radar = this._data.radar;
     const introspect = this._data.introspect;
-    const pressure = ledger?.pressure;
-    const util = pressure?.utilization ?? 0;
-    const win = ledger?.window_size ?? 128000;
-    const rec = pressure?.recommendation ?? '';
+    const caps = this._data.clientCaps;
+    const mi = this._data.modelInfo;
+    const session = this._data.session;
+    const pressure = this._data.pressure;
+    const entries = ledger?.entries || [];
 
-    const st = session?.stats ?? {};
-    const tokInput = st.total_tokens_input || 0;
-    const tokSaved = st.total_tokens_saved || 0;
-    const comprPct = tokInput > 0 ? Math.round(tokSaved / tokInput * 100) : 0;
+    const win = mi?.window_size ?? ledger?.window_size ?? 128000;
+    const detectedModel = mi?.model && mi.model !== 'unknown' ? mi.model : null;
+    const modelSource = mi?.source || 'client_default';
+    const clientId = caps?.client_id || mi?.client_id || 'unknown';
+    const proxyActive = introspect?.proxy_active === true;
+    const proxyRunning = introspect?.proxy_running === true;
+    const pb = introspect?.last_breakdown;
 
-    const p100 = util * 100;
-    const dash = Math.max(0, Math.min(100, p100));
+    const transcriptMsgs = this._data.transcript?.messages || [];
+    const chatTok = transcriptMsgs.reduce((s, m) => s + (parseInt(m.tokens, 10) || 0), 0);
+    const rulesTok = (radar?.rules?.total_tokens) || 0;
+    const filesTok = entries.reduce((s, e) => s + (e.sent_tokens || 0), 0);
+
+    const estTotal = proxyActive && pb ? (pb.total_input_tokens || 0) : (rulesTok + filesTok + chatTok);
+    const util = Math.min(1, estTotal / win);
+    const pctUsed = Math.round(util * 100);
     const col = gaugeColor(util);
 
-    let h = '';
+    const ideName = clientId === 'unknown' ? 'Unknown IDE' : esc(clientId.charAt(0).toUpperCase() + clientId.slice(1));
+    const hookTiers = { cursor: 1, claude: 2, windsurf: 3, codex: 4, copilot: 4, gemini: 4 };
+    const tierKey = Object.keys(hookTiers).find(k => (clientId || '').toLowerCase().includes(k));
+    const tier = tierKey ? hookTiers[tierKey] : 5;
 
-    // Hero KPIs
-    h += '<div class="ctx-kpi-grid" style="margin-bottom:16px">';
-
-    h += '<div class="card ctx-kpi">';
-    h += '<div class="ctx-kpi-value" style="color:' + col + '">' + Math.round(p100) + '%</div>';
-    h += '<div class="ctx-kpi-label">Context Usage</div>';
-    h += '<div class="ctx-kpi-detail">' + fmtTok(win) + ' window</div>';
-    h += '</div>';
-
-    h += '<div class="card ctx-kpi">';
-    h += '<div class="ctx-kpi-value" style="color:var(--green)">' + fmtTok(tokSaved) + '</div>';
-    h += '<div class="ctx-kpi-label">Tokens Saved</div>';
-    h += '<div class="ctx-kpi-detail">' + comprPct + '% compression</div>';
-    h += '</div>';
-
-    h += '<div class="card ctx-kpi">';
-    h += '<div class="ctx-kpi-value">' + ff(st.total_tool_calls || 0) + '</div>';
-    h += '<div class="ctx-kpi-label">Tool Calls</div>';
-    h += '<div class="ctx-kpi-detail">' + ff(st.files_read || 0) + ' files read</div>';
-    h += '</div>';
-
-    h += '<div class="card ctx-kpi">';
-    h += '<div class="ctx-kpi-value">' + (ledger?.entries_count ?? 0) + '</div>';
-    h += '<div class="ctx-kpi-label">Active Files</div>';
-    h += '<div class="ctx-kpi-detail">in context window</div>';
-    h += '</div>';
-
-    h += '</div>';
-
-    // Data Source + IDE Tier
-    h += this._renderDataSource(esc, introspect);
-
-    // Window Breakdown
-    h += this._renderBreakdown(esc, ff, radar, win, introspect);
-
-    // Budget Status
-    h += this._renderBudgetStatus(ledger, field, esc, ff);
-
-    return h;
-  }
-
-  _renderDataSource(esc, introspect) {
-    const caps = this._data.clientCaps;
-    const clientId = caps?.client_id || 'unknown';
-    const proxyActive = introspect?.proxy_active === true;
-
-    const HOOK_TIERS = {
-      cursor:    { tier: 1, label: 'Full', events: ['User Messages', 'Agent Responses', 'Thinking', 'MCP Tools', 'Native Tools', 'Shell', 'File Reads', 'Sessions', 'Compaction'] },
-      claude:    { tier: 2, label: 'Good', events: ['User Messages', 'MCP Tools', 'Native Tools', 'Sessions', 'Compaction'] },
-      windsurf:  { tier: 3, label: 'Partial', events: ['User Messages', 'Agent Responses', 'MCP Tools', 'Shell'] },
-      codex:     { tier: 4, label: 'Minimal', events: ['MCP Tools', 'Sessions'] },
-      copilot:   { tier: 4, label: 'Minimal', events: ['MCP Tools'] },
-      gemini:    { tier: 4, label: 'Minimal', events: ['MCP Tools'] },
-    };
-
-    const key = Object.keys(HOOK_TIERS).find(k => clientId.toLowerCase().includes(k));
-    const info = key ? HOOK_TIERS[key] : { tier: 5, label: 'MCP Only', events: [] };
+    const st = session?.stats ?? {};
+    const tokSaved = st.total_tokens_saved || 0;
+    const tokInput = st.total_tokens_input || 0;
+    const comprPct = tokInput > 0 ? Math.round(tokSaved / tokInput * 100) : 0;
 
     let h = '<div class="card" style="margin-bottom:16px">';
-    h += '<div class="card-header"><h3>Data Sources</h3></div>';
-    h += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">';
 
-    if (proxyActive) {
-      h += '<span class="badge" style="background:#10b981;color:#fff;padding:6px 12px;font-size:13px">Proxy Active</span>';
+    // Header row: Model + progress bar
+    h += '<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">';
+    if (detectedModel) {
+      h += '<div style="font-size:20px;font-weight:700">' + esc(detectedModel) + '</div>';
+      h += '<span class="badge" style="font-size:9px">' + (modelSource === 'hook_detected' ? 'auto-detected' : 'default') + '</span>';
     }
-    h += '<span class="badge" style="padding:6px 12px;font-size:13px">MCP Server</span>';
-    h += '<span class="badge" style="padding:6px 12px;font-size:13px">Hooks: Tier ' + info.tier + ' (' + esc(info.label) + ')</span>';
+    h += '<div style="margin-left:auto;font-size:13px;color:var(--muted)">' + fmtTok(win) + ' context window</div>';
     h += '</div>';
 
-    if (!proxyActive && info.tier >= 3) {
-      h += '<div class="ctx-info-note" style="margin-top:10px">Limited hook data for ' + esc(clientId) + '. '
-        + 'Enable the <strong>lean-ctx proxy</strong> (<code>lean-ctx proxy</code>) for exact token breakdowns across all categories.</div>';
-    }
-
-    if (info.events.length > 0 && !proxyActive) {
-      const allCats = ['User Messages', 'Agent Responses', 'Thinking', 'MCP Tools', 'Native Tools', 'Shell', 'File Reads', 'Sessions', 'Compaction'];
-      h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">';
-      for (const cat of allCats) {
-        const has = info.events.includes(cat);
-        const style = has ? 'background:var(--green);color:#fff' : 'background:var(--surface);color:var(--muted);text-decoration:line-through';
-        h += '<span class="badge" style="' + style + ';padding:3px 8px;font-size:11px">' + esc(cat) + '</span>';
-      }
-      h += '</div>';
-    }
-
-    h += '</div>';
-    return h;
-  }
-
-  _renderBreakdown(esc, ff, radar, windowSize, introspect) {
-    const proxyActive = introspect?.proxy_active === true;
-    const pb = introspect?.last_breakdown;
-    const b = radar?.breakdown || {};
-    const win = (proxyActive && pb) ? windowSize : (b.window_size || windowSize || 200000);
-    const rules = radar?.rules || {};
-
-    let cats, tracked, avail, srcLabel;
-
+    // Progress bar
+    h += '<div style="position:relative;height:10px;background:var(--surface-2);border-radius:5px;margin-bottom:16px;overflow:hidden">';
     if (proxyActive && pb) {
-      const toolTokens = (pb.tool_result_tokens || 0);
-      cats = [
-        { l: 'System Prompt', t: pb.system_prompt_tokens || 0, c: '#8b5cf6', desc: 'Full system prompt (rules, instructions, context)' },
-        { l: 'User Messages', t: pb.user_message_tokens || 0, c: '#3b82f6', desc: 'Your messages to the AI agent' },
-        { l: 'Agent Responses', t: pb.assistant_message_tokens || 0, c: '#06b6d4', desc: 'AI responses in the conversation' },
-        { l: 'Tool Definitions', t: pb.tool_definition_tokens || 0, c: '#a855f7', desc: pb.tool_definition_count + ' tools registered' },
-        { l: 'Tool Results', t: toolTokens, c: '#10b981', desc: 'All tool output (MCP + native)' },
-      ];
-      if (pb.image_count > 0) {
-        cats.push({ l: 'Images', t: 0, c: '#f97316', desc: pb.image_count + ' image(s) in context' });
-      }
-      tracked = pb.total_input_tokens || 0;
-      avail = Math.max(0, win - tracked);
-      srcLabel = 'Proxy (' + esc(pb.provider || 'unknown') + ' / ' + esc(pb.model || '?') + ')';
+      h += '<div style="position:absolute;left:0;top:0;height:100%;width:' + Math.min(100, pctUsed) + '%;background:' + col + ';border-radius:5px;transition:width .3s"></div>';
     } else {
-      cats = [
-        { l: 'System Prompt', t: b.system_prompt_tokens || 0, c: '#8b5cf6', desc: 'IDE rules (.cursorrules, AGENTS.md, .mdc files)' },
-        { l: 'User Messages', t: b.user_message_tokens || 0, c: '#3b82f6', desc: 'Your messages to the AI agent' },
-        { l: 'Agent Responses', t: b.agent_response_tokens || 0, c: '#06b6d4', desc: 'AI responses in the conversation' },
-        { l: 'lean-ctx Tools', t: b.lean_ctx_tool_tokens || 0, c: '#10b981', desc: 'ctx_read, ctx_search, etc. (compressed)' },
-        { l: 'Other MCP', t: b.other_mcp_tokens || 0, c: '#f59e0b', desc: 'Third-party MCP tools (uncompressed)' },
-        { l: 'Native Reads', t: b.native_read_tokens || 0, c: '#ef4444', desc: 'Direct IDE file reads (not compressed)' },
-        { l: 'Shell Output', t: b.shell_tokens || 0, c: '#ec4899', desc: 'Terminal command output' },
+      let barLeft = 0;
+      const rPct = win > 0 ? rulesTok / win * 100 : 0;
+      const fPct = win > 0 ? filesTok / win * 100 : 0;
+      const cPct = win > 0 ? Math.min(chatTok, win - rulesTok - filesTok) / win * 100 : 0;
+      if (rulesTok > 0) { h += '<div style="position:absolute;left:' + barLeft + '%;top:0;height:100%;width:' + Math.max(0.5, rPct) + '%;background:#6b7280" title="Rules: ' + fmtTok(rulesTok) + '"></div>'; barLeft += rPct; }
+      if (filesTok > 0) { h += '<div style="position:absolute;left:' + barLeft + '%;top:0;height:100%;width:' + Math.max(0.5, fPct) + '%;background:#10b981" title="Files: ' + fmtTok(filesTok) + '"></div>'; barLeft += fPct; }
+      if (chatTok > 0) { h += '<div style="position:absolute;left:' + barLeft + '%;top:0;height:100%;width:' + Math.max(0.5, cPct) + '%;background:#f59e0b" title="Conversation: ' + fmtTok(chatTok) + '"></div>'; }
+    }
+    h += '</div>';
+
+    // Stat grid (5 cols)
+    h += '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px">';
+    const cell = (label, value, sub, color) => {
+      let c = '<div style="background:var(--surface);padding:12px 10px;text-align:center">';
+      c += '<div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">' + label + '</div>';
+      c += '<div style="font-size:15px;font-weight:600' + (color ? ';color:' + color : '') + '">' + value + '</div>';
+      if (sub) c += '<div style="font-size:10px;color:var(--muted);margin-top:2px">' + sub + '</div>';
+      return c + '</div>';
+    };
+
+    const hookLabels = { 1: 'Full (9/9)', 2: 'Good (5/9)', 3: 'Partial (4/9)', 4: 'Minimal', 5: 'MCP Only' };
+    const hookLabel = hookLabels[tier] || 'MCP Only';
+    const hookCol = tier <= 2 ? 'var(--green)' : tier <= 3 ? 'var(--yellow)' : 'var(--muted)';
+
+    h += cell('IDE', ideName, hookLabel, hookCol);
+    h += cell('Context', (proxyActive ? '' : '\u2248') + pctUsed + '%', fmtTok(Math.round(util * win)) + ' / ' + fmtTok(win), col);
+    h += cell('Files', String(entries.length), fmtTok(filesTok) + ' tokens');
+    h += cell('Saved', fmtTok(tokSaved), comprPct + '% compression', 'var(--green)');
+    h += cell('Tool Calls', ff(st.total_tool_calls || 0), ff(st.files_read || 0) + ' reads');
+    h += '</div>';
+
+    // Breakdown table
+    if (proxyActive && pb) {
+      h += '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">';
+      h += '<span class="badge" style="background:#10b981;color:#fff;font-size:9px;margin-right:6px">PROXY</span>Exact counts from LLM API request.</div>';
+      const cats = [
+        { l: 'System prompt', t: pb.system_prompt_tokens || 0, c: '#6b7280' },
+        { l: 'Tools', t: pb.tool_definition_tokens || 0, c: '#8b5cf6' },
+        { l: 'Conversation', t: pb.conversation_tokens || 0, c: '#f59e0b' },
+        { l: 'Summarized', t: pb.summarized_conversation_tokens || 0, c: '#ef4444' },
       ];
-      tracked = b.tracked_total || 0;
-      avail = b.available || 0;
-      srcLabel = 'hooks + rules-scan';
+      h += '<table class="ctx-budget-table"><thead><tr><th style="text-align:left">Category</th><th class="r">Tokens</th><th class="r">% Window</th></tr></thead><tbody>';
+      for (const c of cats) {
+        if (c.t === 0) continue;
+        const p = win > 0 ? (c.t / win * 100).toFixed(1) : '0';
+        h += '<tr><td><span class="ctx-legend-dot" style="background:' + c.c + ';display:inline-block;vertical-align:middle;margin-right:8px"></span>' + esc(c.l) + '</td>';
+        h += '<td class="r"><strong>' + fmtTok(c.t) + '</strong></td><td class="r">' + p + '%</td></tr>';
+      }
+      h += '</tbody></table>';
+    } else {
+      const compressedTok = entries.filter(e => (e.mode || '') !== 'full').reduce((s, e) => s + (e.sent_tokens || 0), 0);
+      const fullTok = entries.filter(e => (e.mode || '') === 'full').reduce((s, e) => s + (e.sent_tokens || 0), 0);
+      const rows = [
+        { l: 'System prompt (rules)', t: rulesTok, c: '#6b7280', src: 'hooks' },
+        { l: 'Files \u2014 compressed', t: compressedTok, c: '#10b981', src: 'lean-ctx' },
+        { l: 'Files \u2014 full reads', t: fullTok, c: '#3b82f6', src: 'lean-ctx' },
+        { l: 'Conversation (' + transcriptMsgs.length + ' msgs)', t: chatTok, c: '#f59e0b', src: 'transcript' },
+      ];
+      h += '<table class="ctx-budget-table"><thead><tr><th style="text-align:left">Category</th><th class="r">Tokens</th><th class="r">% Window</th><th class="r">Source</th></tr></thead><tbody>';
+      for (const r of rows) {
+        if (r.t === 0) continue;
+        const p = win > 0 ? (r.t / win * 100).toFixed(1) : '0';
+        h += '<tr><td><span class="ctx-legend-dot" style="background:' + r.c + ';display:inline-block;vertical-align:middle;margin-right:8px"></span>' + esc(r.l) + '</td>';
+        h += '<td class="r"><strong>' + fmtTok(r.t) + '</strong></td><td class="r">' + p + '%</td>';
+        h += '<td class="r" style="font-size:10px;color:var(--muted)">' + esc(r.src) + '</td></tr>';
+      }
+      h += '</tbody></table>';
+
+      if (chatTok > win) {
+        h += '<div style="font-size:11px;color:var(--yellow);margin-top:8px;padding:8px;background:var(--surface);border-radius:6px;border-left:3px solid var(--yellow)">';
+        h += 'Transcript (' + fmtTok(chatTok) + ') exceeds context window \u2014 the IDE has summarized older messages. Actual usage is lower.';
+        h += '</div>';
+      }
     }
 
-    const srcBadge = proxyActive
-      ? '<span class="badge" style="background:#10b981;color:#fff;margin-left:8px">PROXY</span>'
-      : '<span class="badge" style="background:var(--muted);margin-left:8px">ESTIMATED</span>';
-
-    let h = '<div class="card">';
-    h += '<div class="card-header"><h3>Window Breakdown' + tip('context_radar') + '</h3>';
-    h += '<span class="badge">' + fmtTok(tracked) + ' / ' + fmtTok(win) + '</span>' + srcBadge + '</div>';
-    h += '<div class="ctx-explain" style="margin-bottom:12px">Source: ' + esc(srcLabel) + '</div>';
-
-    // Stacked bar
-    h += '<div class="ctx-stacked-bar">';
-    for (const c of cats) {
-      if (c.t === 0) continue;
-      const w = Math.max(1, c.t / win * 100);
-      h += '<div class="ctx-bar-seg" style="width:' + Math.min(w, 100) + '%;background:' + c.c + '" title="' + esc(c.l) + ': ' + fmtTok(c.t) + '"></div>';
-    }
-    if (avail > 0) {
-      h += '<div class="ctx-bar-seg ctx-bar-avail" style="width:' + (avail / win * 100) + '%"></div>';
-    }
-    h += '</div>';
-
-    // Detail table
-    h += '<table class="ctx-budget-table"><thead><tr>';
-    h += '<th style="text-align:left">Category</th>';
-    h += '<th class="r">Tokens</th>';
-    h += '<th class="r">% of Window</th>';
-    h += '<th style="text-align:left">Description</th>';
-    h += '</tr></thead><tbody>';
-
-    for (const c of cats) {
-      if (c.t === 0) continue;
-      const pct = win > 0 ? (c.t / win * 100).toFixed(1) : '0';
-      h += '<tr>';
-      h += '<td><span class="ctx-legend-dot" style="background:' + c.c + ';display:inline-block;vertical-align:middle;margin-right:8px"></span>' + esc(c.l) + '</td>';
-      h += '<td class="r"><strong>' + fmtTok(c.t) + '</strong></td>';
-      h += '<td class="r">' + pct + '%</td>';
-      h += '<td class="ctx-desc">' + esc(c.desc) + '</td>';
-      h += '</tr>';
-    }
-
-    const availCol = avail / win > 0.4 ? 'var(--green)' : avail / win > 0.15 ? 'var(--yellow)' : 'var(--red)';
-    h += '<tr class="ctx-budget-total">';
-    h += '<td style="color:' + availCol + '"><strong>Available</strong></td>';
-    h += '<td class="r" style="color:' + availCol + '"><strong>' + fmtTok(avail) + '</strong></td>';
-    h += '<td class="r" style="color:' + availCol + '"><strong>' + (win > 0 ? (avail / win * 100).toFixed(1) : 0) + '%</strong></td>';
-    h += '<td></td></tr>';
-    h += '</tbody></table>';
-
-    if (!proxyActive && b.compaction_count > 0) {
-      h += '<div class="ctx-info-note">' + b.compaction_count + ' compaction(s) occurred \u2014 only post-compaction content shown.</div>';
-    }
-    if (proxyActive && pb?.message_count) {
-      h += '<div class="ctx-info-note">' + pb.message_count + ' messages in conversation.</div>';
-    }
-    h += '</div>';
-
-    // Rules Files section (always visible)
-    h += this._renderRulesFiles(rules, esc, ff, win);
-
-    return h;
-  }
-
-  _renderRulesFiles(rules, esc, ff, win) {
-    const files = rules.files || [];
-
-    let h = '<div class="card" style="margin-top:16px">';
-    h += '<div class="card-header"><h3>System Prompt</h3>';
-    if (rules.total_tokens > 0) h += '<span class="badge">' + fmtTok(rules.total_tokens) + '</span>';
-    h += '</div>';
-
-    if (!files.length) {
-      h += '<div class="ctx-explain">No rule files detected on disk. Add <code>.cursorrules</code> or <code>AGENTS.md</code> to your project to define AI behavior.</div>';
-      h += '</div>';
-      return h;
-    }
-
-    h += '<div class="ctx-explain">Rule files detected on disk. Token counts are estimates (bytes/4). The IDE decides which rules are actually active based on scope and project settings.</div>';
-    h += '<table><thead><tr><th style="text-align:left">File</th><th class="r">Tokens</th><th class="r">% of Window</th></tr></thead><tbody>';
-    for (const rf of files) {
-      const pct = win > 0 ? (rf.tokens / win * 100).toFixed(2) : '0';
-      h += '<tr><td class="ctx-path-cell" title="' + esc(rf.path) + '">' + esc(shortenPath(rf.path)) + '</td>';
-      h += '<td class="r">' + ff(rf.tokens) + '</td>';
-      h += '<td class="r">' + pct + '%</td></tr>';
-    }
-    h += '</tbody></table></div>';
-    return h;
-  }
-
-  _renderBudgetStatus(ledger, field, esc, ff) {
-    const pressure = ledger?.pressure;
-    const util = pressure?.utilization ?? 0;
-    const rem = pressure?.remaining_tokens ?? 0;
-    const win = ledger?.window_size ?? 0;
-    const pct = Math.round(util * 100);
-    const fillCol = pct < 60 ? 'var(--green)' : pct < 80 ? 'var(--yellow)' : 'var(--red)';
-    const temp = field?.temperature != null ? Number(field.temperature).toFixed(2) : null;
-    const rec = pressure?.recommendation ?? '';
-
-    let h = '<div class="card" style="margin-top:16px">';
-    h += '<div class="card-header"><h3>Budget Status</h3>';
-    h += '<span class="badge" style="background:' + (pct < 60 ? 'var(--green-dim)' : pct < 80 ? 'var(--yellow-dim)' : 'var(--red-dim)') + ';color:' + fillCol + '">' + pct + '% used</span></div>';
-
-    h += '<div class="pressure-bar" style="height:10px;margin-bottom:12px"><div class="pressure-fill" style="width:' + Math.min(100, pct) + '%;background:' + fillCol + '"></div></div>';
-
-    h += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">';
-    h += '<div class="sr"><span class="sl">Used</span><span class="sv">' + fmtTok(win - rem) + '</span></div>';
-    h += '<div class="sr"><span class="sl">Remaining</span><span class="sv" style="color:' + fillCol + '">' + ff(rem) + '</span></div>';
-    h += '<div class="sr"><span class="sl">Total Budget</span><span class="sv">' + ff(win) + '</span></div>';
-    h += '</div>';
-
-    if (temp || rec) {
-      h += '<div style="display:flex;gap:16px;margin-top:12px;padding-top:12px;border-top:1px solid var(--bg-3)">';
-      if (temp) h += '<div class="sr"><span class="sl">Temperature</span><span class="sv">' + esc(temp) + '</span></div>';
-      if (rec) h += '<div class="sr"><span class="sl">Status</span><span class="sv">' + esc(recCopy(rec)) + '</span></div>';
+    // Eviction candidates (from pressure)
+    const evicts = pressure?.eviction_candidates || [];
+    if (evicts.length > 0) {
+      h += '<div style="margin-top:12px;font-size:11px"><strong style="color:var(--muted)">Eviction candidates:</strong>';
+      for (const e of evicts.slice(0, 3)) {
+        const path = e.path || e[0] || '';
+        const phi = e.phi ?? e[1] ?? 0;
+        h += ' <span style="color:var(--muted);margin-left:6px" title="phi=' + Number(phi).toFixed(3) + '">' + esc(shortenPath(path)) + '</span>';
+      }
       h += '</div>';
     }
-    h += '</div>';
 
+    h += '</div>';
     return h;
   }
 
-  // ─── ITEMS TAB ──────────────────────────────────────────────────────
+  // ─── 2. FILES + OVERLAYS (merged) ─────────────────────────────────
 
-  _renderItemsTab(esc, ff, pc) {
+  _renderFilesSection(esc, ff, pc) {
     const ledger = this._data.ledger;
     const field = this._data.field;
     const entries = ledger?.entries || [];
+    const win = this._data.modelInfo?.window_size ?? ledger?.window_size ?? 128000;
 
     const phiByPath = new Map();
     (field?.items || []).forEach(it => { if (it?.path) phiByPath.set(it.path, it.phi); });
@@ -525,11 +340,9 @@ class CockpitContext extends HTMLElement {
       const saved = orig > 0 ? Math.max(0, pc(orig - sent, orig)) : 0;
       const phi = e.phi ?? phiByPath.get(e.path) ?? null;
       return {
-        path: e.path,
-        mode: e.mode || (typeof e.active_view === 'string' ? e.active_view : '') || 'full',
+        path: e.path, mode: e.mode || (typeof e.active_view === 'string' ? e.active_view : '') || 'full',
         original_tokens: orig, sent_tokens: sent, saved_pct: saved,
-        phi: phi != null ? Number(phi).toFixed(3) : '\u2014',
-        raw: e,
+        phi: phi != null ? Number(phi).toFixed(3) : '\u2014', raw: e,
       };
     });
 
@@ -558,18 +371,19 @@ class CockpitContext extends HTMLElement {
       '<option value="' + esc(m) + '"' + (m === this._modeFilter ? ' selected' : '') + '>' + (m === 'all' ? 'All modes' : esc(m)) + '</option>'
     ).join('');
 
-    let h = '<div class="card">';
-    h += '<div class="card-header"><h3>Context Items</h3>';
+    let h = '<div class="card" style="margin-bottom:16px">';
+    h += '<div class="card-header"><h3>Files in Context</h3>';
     h += '<div style="display:flex;align-items:center;gap:8px">';
     h += '<span class="badge">' + filtered.length + '/' + rows.length + '</span>';
     h += '<select id="cockpitCtxModeFilter" class="btn" style="padding:4px 8px;font-size:11px">' + modeOpts + '</select></div></div>';
+    h += '<div class="ctx-explain">Files read via lean-ctx. Use actions to pin, exclude, or change read modes.</div>';
 
     if (filtered.length === 0) {
-      h += '<p class="hs" style="padding:16px">No entries for this filter.</p>';
+      h += '<p class="hs" style="padding:16px">No files loaded yet.</p>';
     } else {
       h += '<div class="table-scroll"><table><thead><tr>' +
-        th('path', 'Path') + th('mode', 'Mode') + th('original_tokens', 'Original', 'r') +
-        th('sent_tokens', 'Sent', 'r') + th('saved_pct', 'Saved %', 'r') + th('phi', 'Phi', 'r') +
+        th('path', 'Path') + th('mode', 'Mode') + th('sent_tokens', 'Sent', 'r') +
+        th('original_tokens', 'Original', 'r') + th('saved_pct', 'Saved %', 'r') + th('phi', 'Phi', 'r') +
         '<th>Actions</th></tr></thead><tbody>';
 
       for (const r of filtered) {
@@ -580,14 +394,13 @@ class CockpitContext extends HTMLElement {
         h += '<tr>';
         h += '<td title="' + esc(r.path) + '" class="ctx-path-cell">' + esc(shortenPath(r.path)) + '</td>';
         h += '<td><span class="tag tg">' + esc(r.mode) + '</span></td>';
-        h += '<td class="r">' + ff(r.original_tokens) + '</td>';
         h += '<td class="r">' + ff(r.sent_tokens) + '</td>';
+        h += '<td class="r">' + ff(r.original_tokens) + '</td>';
         h += '<td class="r">' + r.saved_pct + '%</td>';
         h += '<td class="r">' + r.phi + '</td>';
         h += '<td style="white-space:nowrap">';
         h += '<button type="button" class="action-btn" data-act="pin" data-path="' + pd + '">Pin</button> ';
-        h += '<button type="button" class="action-btn danger" data-act="exclude" data-path="' + pd + '">Exclude</button> ';
-        h += '<button type="button" class="action-btn" data-act="mark_outdated" data-path="' + pd + '">Stale</button> ';
+        h += '<button type="button" class="action-btn danger" data-act="exclude" data-path="' + pd + '">Excl</button> ';
         h += '<span class="cockpit-ctx-dd" data-path="' + pd + '">';
         h += '<button type="button" class="action-btn" data-act="mode_toggle">Mode \u25be</button>';
         h += '<div class="cockpit-ctx-dd-panel"><select class="cockpit-ctx-mode-sel" data-path="' + pd + '">' + selModes + '</select></div></span>';
@@ -597,34 +410,297 @@ class CockpitContext extends HTMLElement {
     }
     h += '</div>';
 
-    // Mode Distribution chart
-    const dist = ledger?.mode_distribution;
-    const hasModes = dist && typeof dist === 'object' && Object.keys(dist).length > 0;
-    h += '<div class="card" style="margin-top:16px">';
-    h += '<div class="card-header"><h3>Mode Distribution</h3></div>';
-    h += hasModes
-      ? '<canvas id="cockpitCtxModeDist" height="180" width="280" aria-label="Mode distribution"></canvas>'
-      : '<p class="hs">No entries yet \u2014 appears after reads are recorded.</p>';
-    h += '</div>';
-
-    // Overlays
+    // Active Overlays
     h += this._renderOverlays(esc);
 
-    // Context Plan
-    h += this._renderPlanSection(esc, ff);
+    // Handles (if any)
+    h += this._renderHandles(esc, ff);
 
+    return h;
+  }
+
+  // ─── 3. RULES ─────────────────────────────────────────────────────
+
+  _renderRulesSection(esc, ff) {
+    const rules = this._data.radar?.rules || {};
+    const ruleFiles = rules.files || [];
+    const win = this._data.modelInfo?.window_size ?? this._data.ledger?.window_size ?? 128000;
+
+    if (ruleFiles.length === 0) return '';
+
+    let h = '<div class="card" style="margin-bottom:16px">';
+    h += '<div class="card-header"><h3>System Prompt &amp; Rules</h3>';
+    h += '<span class="badge">' + fmtTok(rules.total_tokens || 0) + '</span></div>';
+    h += '<div class="ctx-explain">Rule files injected into the system prompt by lean-ctx.</div>';
+    h += '<table><thead><tr><th>File</th><th class="r">Tokens</th><th class="r">% Window</th></tr></thead><tbody>';
+    for (const rf of ruleFiles) {
+      const p = win > 0 ? ((rf.tokens || 0) / win * 100).toFixed(2) : '0';
+      h += '<tr><td class="ctx-path-cell" title="' + esc(rf.path || '') + '">' + esc(shortenPath(rf.path || '')) + '</td>';
+      h += '<td class="r">' + fmtTok(rf.tokens || 0) + '</td><td class="r">' + p + '%</td></tr>';
+    }
+    h += '</tbody></table></div>';
+    return h;
+  }
+
+  // ─── 4. CHAT HISTORY ──────────────────────────────────────────────
+
+  _renderChatHistory(esc) {
+    const t = this._data.transcript;
+    if (!t || !t.messages || t.messages.length === 0) return '';
+
+    const msgs = t.messages;
+    let totalTokens = 0;
+    msgs.forEach(m => { totalTokens += parseInt(m.tokens, 10) || 0; });
+    const win = this._data.modelInfo?.window_size || this._data.ledger?.window_size || 200000;
+    const overflows = totalTokens > win;
+
+    let h = '<div class="card" style="margin-bottom:16px">';
+    h += '<div class="card-header"><h3>Chat History</h3>';
+    h += '<span class="badge">' + msgs.length + ' messages \u00b7 ' + fmtTok(totalTokens) + '</span></div>';
+    h += '<div class="ctx-explain">';
+    h += 'Full conversation transcript from the active session. ';
+    if (overflows) {
+      h += '<strong style="color:var(--yellow)">Transcript (' + fmtTok(totalTokens) + ') exceeds context window (' + fmtTok(win) + '). The IDE has summarized older messages.</strong>';
+    } else {
+      h += 'After IDE compaction, the LLM may see a summarized version of older messages.';
+    }
+    h += '</div>';
+
+    h += '<div class="ctx-chat-history" style="max-height:500px;overflow-y:auto">';
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      const isUser = m.role === 'user' || m.role === 'human';
+      const isAssistant = m.role === 'assistant';
+      const isTool = m.role === 'tool' || m.role === 'tool_result';
+      const bgCol = isUser ? 'rgba(59,130,246,0.08)' : isAssistant ? 'rgba(16,185,129,0.08)' : isTool ? 'rgba(139,92,246,0.05)' : 'rgba(107,114,128,0.05)';
+      const borderCol = isUser ? '#3b82f6' : isAssistant ? '#10b981' : isTool ? '#8b5cf6' : '#6b7280';
+      const label = isUser ? 'You' : isAssistant ? 'Assistant' : isTool ? 'Tool' : m.role;
+      const icon = isUser ? '\ud83d\udcac' : isAssistant ? '\ud83e\udd16' : isTool ? '\ud83d\udee0\ufe0f' : '\u2699\ufe0f';
+
+      h += '<div class="ctx-chat-msg" data-idx="' + i + '" style="border-left:3px solid ' + borderCol + ';background:' + bgCol + ';margin:2px 0;padding:8px 12px;border-radius:0 6px 6px 0;cursor:pointer">';
+      h += '<div style="display:flex;align-items:center;gap:8px">';
+      h += '<span>' + icon + '</span>';
+      h += '<strong style="color:' + borderCol + ';font-size:12px">' + label + '</strong>';
+      h += '<span style="margin-left:auto;font-size:11px;color:var(--muted)">' + fmtTok(parseInt(m.tokens, 10) || 0) + '</span>';
+      h += '<span class="ctx-chat-arrow" style="font-size:10px;color:var(--muted);transition:transform .2s">\u25b6</span>';
+      h += '</div>';
+
+      const text = m.text || '';
+      const preview = esc(text.substring(0, 120)).replace(/\n/g, ' ');
+      if (preview) {
+        h += '<div style="font-size:11px;color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + preview + '</div>';
+      }
+      h += '<div class="ctx-chat-content" style="display:none;margin-top:8px;padding:8px;background:var(--surface);border-radius:4px;font-size:11px;font-family:monospace;white-space:pre-wrap;max-height:300px;overflow-y:auto">' + esc(text) + '</div>';
+      h += '</div>';
+    }
+    h += '</div></div>';
+    return h;
+  }
+
+  // ─── 5. CONTEXT INSPECTOR ─────────────────────────────────────────
+
+  _renderContextInspector(esc) {
+    const events = this._data.contextEvents?.events || this._data.contextEvents || [];
+    if (!Array.isArray(events) || events.length === 0) return '';
+
+    const EVENT_ICONS = {
+      user_message: '\ud83d\udcac', agent_response: '\ud83e\udd16', thinking: '\ud83d\udca1',
+      mcp_call: '\ud83d\udd27', native_tool: '\ud83d\udee0\ufe0f', shell: '\u25b6',
+      file_read: '\ud83d\udcc4', session: '\ud83d\udccd', compaction: '\u267b\ufe0f',
+    };
+    const types = [...new Set(events.map(e => e.event_type).filter(Boolean))].sort();
+
+    let h = '<div class="card" style="margin-bottom:16px">';
+    h += '<div class="card-header"><h3>Context Inspector</h3>';
+    h += '<span class="badge">' + events.length + ' events</span></div>';
+    h += '<div class="ctx-explain">Hook events captured from the IDE. Click to expand content.</div>';
+
+    h += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin:8px 0">';
+    h += '<button class="badge ctx-inspector-filter" data-filter="all" style="cursor:pointer;padding:3px 8px;font-size:10px;background:var(--accent);color:#fff">All</button>';
+    for (const t of types) {
+      h += '<button class="badge ctx-inspector-filter" data-filter="' + esc(t) + '" style="cursor:pointer;padding:3px 8px;font-size:10px">' + (EVENT_ICONS[t] || '') + ' ' + esc(t) + '</button>';
+    }
+    h += '</div>';
+
+    h += '<div style="max-height:500px;overflow-y:auto">';
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      const icon = EVENT_ICONS[ev.event_type] || '\u2022';
+      const typ = ev.event_type || '';
+      const detail = shortenPath(ev.tool_name || ev.detail || '');
+      const tok = ev.tokens ? fmtTok(ev.tokens) : '';
+      const ts = ev.ts ? new Date(ev.ts * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+      const model = ev.model || '';
+
+      h += '<div class="ctx-inspector-event" data-type="' + esc(typ) + '" style="border-bottom:1px solid var(--border);padding:6px 0;cursor:pointer">';
+      h += '<div style="display:flex;align-items:center;gap:6px;font-size:12px">';
+      h += '<span>' + icon + '</span>';
+      h += '<strong>' + esc(typ) + '</strong>';
+      if (detail) h += '<span style="color:var(--muted)">' + esc(detail) + '</span>';
+      if (model) h += '<span style="margin-left:auto;font-size:10px;color:var(--muted)">' + esc(model) + '</span>';
+      if (tok) h += '<span style="font-size:11px;color:var(--muted)">' + tok + '</span>';
+      h += '<span style="font-size:10px;color:var(--muted)">' + ts + '</span>';
+      h += '<span class="ctx-inspector-arrow" style="font-size:10px;color:var(--muted);transition:transform .2s">\u25b6</span>';
+      h += '</div>';
+      if (ev.content) {
+        h += '<div class="ctx-inspector-content" style="display:none;margin-top:6px;padding:8px;background:var(--surface);border-radius:4px;font-size:11px;font-family:monospace;white-space:pre-wrap;max-height:250px;overflow-y:auto">' + esc(String(ev.content).substring(0, 5000)) + '</div>';
+      }
+      h += '</div>';
+    }
+    h += '</div></div>';
+    return h;
+  }
+
+  // ─── 6. SYSTEM ────────────────────────────────────────────────────
+
+  _renderSystemSection(esc, ff) {
+    const bounce = this._data.bounce;
+    const caps = this._data.clientCaps;
+    const dyn = this._data.dynTools;
+    const pipe = this._data.pipeline;
+    const session = this._data.session;
+    const intent = session?.active_structured_intent || (this._data.intent?.active && this._data.intent?.intent) || null;
+
+    let h = '';
+
+    // Two-column: MCP Caps + Bounce
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">';
+
+    // MCP Capabilities
+    h += '<div class="card">';
+    h += '<div class="card-header"><h3>MCP Capabilities</h3></div>';
+    if (caps) {
+      h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">';
+      for (const f of ['resources', 'prompts', 'elicitation', 'sampling', 'dynamic_tools']) {
+        const on = caps[f];
+        const st = on ? 'background:var(--green);color:#fff' : 'background:var(--surface);color:var(--muted)';
+        h += '<span class="badge" style="' + st + ';padding:4px 8px;font-size:11px">' + esc(f) + '</span>';
+      }
+      h += '</div>';
+      if (caps.max_tools) h += '<div style="font-size:12px;color:var(--muted);margin-top:6px">Max tools: ' + caps.max_tools + '</div>';
+    } else {
+      h += '<p class="hs" style="margin-top:10px">No client detected.</p>';
+    }
+    h += '</div>';
+
+    // Bounce Detection
+    h += '<div class="card">';
+    h += '<div class="card-header"><h3>Bounce Detection</h3></div>';
+    if (bounce && bounce.total_bounces > 0) {
+      h += '<div style="display:flex;gap:16px;margin-top:10px">';
+      h += '<div><div style="font-size:18px;font-weight:600">' + (bounce.total_bounces || 0) + '</div><div style="font-size:10px;color:var(--muted)">Bounces</div></div>';
+      h += '<div><div style="font-size:18px;font-weight:600;color:var(--red)">' + fmtTok(bounce.total_wasted_tokens || 0) + '</div><div style="font-size:10px;color:var(--muted)">Wasted</div></div>';
+      h += '</div>';
+      if (bounce.summary) {
+        h += '<pre style="margin-top:8px;font-size:10px;padding:8px;background:var(--surface);border-radius:6px;white-space:pre-wrap;max-height:100px;overflow-y:auto">' + esc(bounce.summary) + '</pre>';
+      }
+    } else {
+      h += '<p class="hs" style="margin-top:10px;color:var(--green)">No bounces detected.</p>';
+    }
+    h += '</div>';
+    h += '</div>';
+
+    // Two-column: Dynamic Tools + Pipeline
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">';
+
+    // Dynamic Tools
+    h += '<div class="card">';
+    h += '<div class="card-header"><h3>Dynamic Tools</h3></div>';
+    if (dyn) {
+      const active = dyn.active_categories || [];
+      const all = dyn.all_categories || [];
+      h += '<div style="font-size:14px;font-weight:600;margin-top:10px">' + active.length + '/' + all.length + ' active</div>';
+      if (active.length > 0) {
+        h += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">';
+        for (const cat of active) h += '<span class="badge" style="background:var(--green);color:#fff;padding:2px 6px;font-size:10px">' + esc(cat) + '</span>';
+        h += '</div>';
+      }
+    } else {
+      h += '<p class="hs" style="margin-top:10px">No dynamic tool data.</p>';
+    }
+    h += '</div>';
+
+    // Pipeline
+    h += '<div class="card">';
+    h += '<div class="card-header"><h3>Pipeline</h3>';
+    if (pipe?.runs != null) h += '<span class="badge">' + pipe.runs + ' runs</span>';
+    h += '</div>';
+    if (pipe?.runs != null) {
+      const layers = pipe.per_layer || {};
+      const keys = Object.keys(layers);
+      if (keys.length) {
+        h += '<table style="margin-top:8px;font-size:11px"><thead><tr><th>Layer</th><th class="r">In</th><th class="r">Out</th><th class="r">Time</th></tr></thead><tbody>';
+        for (const k of keys) {
+          const l = layers[k];
+          h += '<tr><td>' + esc(k) + '</td><td class="r">' + fmtTok(l.total_input_tokens || 0) + '</td><td class="r">' + fmtTok(l.total_output_tokens || 0) + '</td><td class="r">' + (l.total_duration_us ? (l.total_duration_us / 1000).toFixed(0) + 'ms' : '\u2014') + '</td></tr>';
+        }
+        h += '</tbody></table>';
+      }
+    } else {
+      h += '<p class="hs" style="margin-top:10px">No pipeline data.</p>';
+    }
+    h += '</div>';
+    h += '</div>';
+
+    // Active Intent
+    if (intent?.task_type) {
+      const confPct = intent.confidence != null ? Math.round(intent.confidence * 100) : null;
+      h += '<div class="card" style="margin-bottom:16px"><div class="card-header"><h3>Active Intent</h3>';
+      h += '<span class="tag tg">' + esc(intent.task_type) + '</span></div>';
+      if (confPct != null) {
+        const cc = confPct >= 70 ? 'var(--green)' : confPct >= 40 ? 'var(--yellow)' : 'var(--muted)';
+        h += '<div style="display:flex;align-items:center;gap:14px;margin:12px 0">';
+        h += '<span class="sl">Confidence</span>';
+        h += '<div class="pressure-bar" style="flex:1;height:8px"><div class="pressure-fill" style="width:' + confPct + '%;background:' + cc + '"></div></div>';
+        h += '<span class="sv">' + confPct + '%</span></div>';
+      }
+      h += '</div>';
+    }
+
+    return h || '';
+  }
+
+  // ─── SHARED RENDER HELPERS ────────────────────────────────────────
+
+  _renderHandles(esc, ff) {
+    const handles = this._data.handles;
+    if (!handles) return '';
+    const entries = handles.handles || handles.entries || [];
+    if (!Array.isArray(entries) || entries.length === 0) return '';
+
+    let h = '<div class="card" style="margin-bottom:16px">';
+    h += '<div class="card-header"><h3>Context Handles</h3><span class="badge">' + entries.length + '</span></div>';
+    h += '<div class="table-scroll" style="max-height:300px;overflow-y:auto"><table><thead><tr>';
+    h += '<th>Ref</th><th>Path</th><th>Kind</th><th class="r">Tokens</th><th class="r">Phi</th><th>Pinned</th>';
+    h += '</tr></thead><tbody>';
+    for (const e of entries) {
+      const ref = e.ref_label || e.id || e.handle_id || '';
+      const path = e.source_path || e.path || e.file_path || '';
+      const kind = e.kind || '';
+      const tokens = parseInt(e.handle_tokens, 10) || 0;
+      const phi = e.phi != null ? Number(e.phi).toFixed(3) : '\u2014';
+      const pinned = String(e.pinned).toLowerCase() === 'true';
+      h += '<tr><td style="font-family:monospace;font-size:12px;font-weight:600;color:var(--accent)">' + esc(ref) + '</td>';
+      h += '<td title="' + esc(path) + '" class="ctx-path-cell">' + esc(shortenPath(path)) + '</td>';
+      h += '<td><span class="badge" style="font-size:10px">' + esc(kind) + '</span></td>';
+      h += '<td class="r">' + fmtTok(tokens) + '</td>';
+      h += '<td class="r">' + phi + '</td>';
+      h += '<td>' + (pinned ? '<span style="color:var(--green)">\u2713</span>' : '') + '</td></tr>';
+    }
+    h += '</tbody></table></div></div>';
     return h;
   }
 
   _renderOverlays(esc) {
     const list = this._data.control?.overlays || [];
     const history = Array.isArray(this._data.history) ? this._data.history.slice() : [];
+    if (list.length === 0 && history.length === 0) return '';
 
-    let h = '<div class="card" style="margin-top:16px">';
+    let h = '<div class="card" style="margin-bottom:16px">';
     h += '<div class="card-header"><h3>Active Overlays</h3><span class="badge">' + (list.length || 0) + '</span></div>';
 
-    if (!Array.isArray(list) || list.length === 0) {
-      h += '<p class="hs" style="text-align:center;padding:12px 0">No active overlays \u2014 use actions above to pin, exclude, or change views.</p>';
+    if (list.length === 0) {
+      h += '<p class="hs" style="text-align:center;padding:8px 0">No active overlays.</p>';
     } else {
       const cards = list.map(ov => {
         const path = targetPath(ov.target);
@@ -633,25 +709,20 @@ class CockpitContext extends HTMLElement {
         let undo = '';
         if (op?.type === 'exclude') undo = '<button type="button" class="action-btn" data-act="include" data-path="' + pd + '">Undo</button>';
         else if (op?.type === 'pin') undo = '<button type="button" class="action-btn" data-act="unpin" data-path="' + pd + '">Unpin</button>';
-        const ts = ov.created_at ? String(ov.created_at).replace('T', ' ').slice(0, 19) : '\u2014';
         return '<div class="cockpit-ctx-overlay-card">' +
-          (ov.stale ? '<span class="tag td">stale</span> ' : '') +
           '<div class="cockpit-ctx-oc-path">' + esc(path) + '</div>' +
-          '<div class="cockpit-ctx-oc-meta">' + esc(operationSummary(op)) + ' \u00b7 ' + esc(formatAuthor(ov.author)) + ' \u00b7 ' + ts + '</div>' +
-          (undo ? '<div style="margin-top:8px">' + undo + '</div>' : '') + '</div>';
+          '<div class="cockpit-ctx-oc-meta">' + esc(operationSummary(op)) + ' \u00b7 ' + esc(formatAuthor(ov.author)) + '</div>' +
+          (undo ? '<div style="margin-top:4px">' + undo + '</div>' : '') + '</div>';
       }).join('');
       h += '<div class="cockpit-ctx-overlay-grid">' + cards + '</div>';
     }
 
-    // Collapsible timeline
     if (history.length > 0) {
       history.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
-      const shown = history.slice(0, 30);
-
       h += '<details class="ctx-timeline-details"' + (this._historyOpen ? ' open' : '') + '>';
-      h += '<summary class="ctx-timeline-toggle">Overlay History (' + history.length + ' entries)</summary>';
+      h += '<summary class="ctx-timeline-toggle">Overlay History (' + history.length + ')</summary>';
       h += '<div class="cockpit-ctx-timeline">';
-      for (const item of shown) {
+      for (const item of history.slice(0, 20)) {
         const ts = item.created_at ? String(item.created_at).replace('T', ' ').slice(0, 19) : '\u2014';
         h += '<div class="cockpit-ctx-tl-item">' +
           '<div class="cockpit-ctx-tl-dot"></div>' +
@@ -663,149 +734,14 @@ class CockpitContext extends HTMLElement {
       }
       h += '</div></details>';
     }
-
     h += '</div>';
     return h;
   }
 
-  _renderPlanSection(esc, ff) {
-    const plan = this._data.plan;
-    const text = plan?.plan?.trim() || '';
-    if (!text) return '';
-
-    const lines = text.split('\n');
-    let header = '', items = [];
-    for (const line of lines) {
-      const t = line.trim();
-      if (t.startsWith('[ctx_plan]')) header = t.replace('[ctx_plan]', '').trim();
-      else if (t.startsWith('Budget:')) header += (header ? ' \u00b7 ' : '') + t;
-      else if (t.includes('/') && /\s(map|full|signatures|aggressive|entropy|diff|reference|handle|lines:\S+)\s/.test(t)) items.push(t);
-    }
-
-    let h = '<div class="card" style="margin-top:16px"><div class="card-header"><h3>Context Plan</h3></div>';
-    if (header) h += '<p class="hs" style="margin-bottom:12px">' + esc(header) + '</p>';
-    if (items.length > 0) {
-      h += '<table><thead><tr><th>Path</th><th>Mode</th><th class="r">Tokens</th><th>Status</th></tr></thead><tbody>';
-      for (const item of items) {
-        const m = item.match(/^\s*(\S+)\s+(map|full|signatures|aggressive|entropy|diff|reference|handle|lines:\S+)\s+(\d+)t?\s*(.*)/);
-        if (m) {
-          const included = m[4]?.includes('Included');
-          h += '<tr><td class="ctx-path-cell" title="' + esc(m[1]) + '">' + esc(shortenPath(m[1])) + '</td>';
-          h += '<td><span class="tag tg">' + esc(m[2]) + '</span></td>';
-          h += '<td class="r">' + esc(m[3]) + '</td>';
-          h += '<td>' + (included ? '<span class="tag" style="background:var(--green-dim);color:var(--green)">Included</span>' : esc(m[4])) + '</td></tr>';
-        }
-      }
-      h += '</tbody></table>';
-    }
-    h += '</div>';
-    return h;
-  }
-
-  // ─── RUNTIME TAB ────────────────────────────────────────────────────
-
-  _renderRuntimeTab(esc, ff) {
-    const bounce = this._data.bounce;
-    const caps = this._data.clientCaps;
-    const dyn = this._data.dynTools;
-    const pipe = this._data.pipeline;
-    const session = this._data.session;
-    const intent = session?.active_structured_intent || (this._data.intent?.active && this._data.intent?.intent) || null;
-
-    let h = '';
-
-    // IDE & Connection
-    if (caps) {
-      const feats = ['resources', 'prompts', 'elicitation', 'sampling', 'dynamic_tools'].filter(k => caps[k]);
-      const introspect = this._data.introspect;
-      const proxyActive = introspect?.proxy_active === true;
-      h += '<div class="card"><div class="card-header"><h3>IDE &amp; Connection</h3></div>';
-      h += '<div class="ctx-kpi-grid" style="margin-top:12px">';
-      h += '<div class="ctx-kpi"><div class="ctx-kpi-value">' + esc(caps.client_id || 'unknown') + '</div><div class="ctx-kpi-label">Client</div></div>';
-      h += '<div class="ctx-kpi"><div class="ctx-kpi-value">Tier ' + (caps.tier || '?') + '</div><div class="ctx-kpi-label">MCP Tier</div></div>';
-      h += '<div class="ctx-kpi"><div class="ctx-kpi-value">' + feats.length + '</div><div class="ctx-kpi-label">Features</div><div class="ctx-kpi-detail">' + (feats.join(', ') || 'none') + '</div></div>';
-      if (caps.max_tools) h += '<div class="ctx-kpi"><div class="ctx-kpi-value">' + caps.max_tools + '</div><div class="ctx-kpi-label">Max Tools</div></div>';
-      h += '<div class="ctx-kpi"><div class="ctx-kpi-value" style="color:' + (proxyActive ? 'var(--green)' : 'var(--muted)') + '">' + (proxyActive ? 'Active' : 'Off') + '</div><div class="ctx-kpi-label">Proxy</div>';
-      if (proxyActive && introspect?.last_breakdown?.model) {
-        h += '<div class="ctx-kpi-detail">' + esc(introspect.last_breakdown.model) + '</div>';
-      }
-      h += '</div>';
-      h += '</div></div>';
-    }
-
-    // Bounce Detection
-    if (bounce) {
-      h += '<div class="card" style="margin-top:16px"><div class="card-header"><h3>Bounce Detection</h3></div>';
-      h += '<div class="ctx-explain">Files read multiple times without being used, wasting tokens.</div>';
-      h += '<div class="ctx-kpi-grid" style="margin-top:12px">';
-      h += '<div class="ctx-kpi"><div class="ctx-kpi-value">' + (bounce.total_bounces || 0) + '</div><div class="ctx-kpi-label">Bounces</div></div>';
-      h += '<div class="ctx-kpi"><div class="ctx-kpi-value" style="color:var(--red)">' + fmtTok(bounce.total_wasted_tokens || 0) + '</div><div class="ctx-kpi-label">Wasted Tokens</div></div>';
-      h += '</div></div>';
-    }
-
-    // Dynamic Tools
-    if (dyn) {
-      const active = dyn.active_categories || [];
-      const all = dyn.all_categories || [];
-      h += '<div class="card" style="margin-top:16px"><div class="card-header"><h3>Dynamic Tools</h3></div>';
-      h += '<div class="ctx-kpi-grid" style="margin-top:12px">';
-      h += '<div class="ctx-kpi"><div class="ctx-kpi-value">' + active.length + '/' + all.length + '</div><div class="ctx-kpi-label">Active Groups</div><div class="ctx-kpi-detail">' + (active.join(', ') || 'none') + '</div></div>';
-      h += '<div class="ctx-kpi"><div class="ctx-kpi-value">' + (dyn.supports_list_changed ? 'Yes' : 'No') + '</div><div class="ctx-kpi-label">list_changed</div></div>';
-      h += '</div></div>';
-    }
-
-    // Pipeline
-    if (pipe?.runs != null) {
-      const layers = pipe.per_layer || {};
-      const keys = Object.keys(layers);
-      h += '<div class="card" style="margin-top:16px"><div class="card-header"><h3>Pipeline</h3><span class="badge">' + pipe.runs + ' runs</span></div>';
-      if (keys.length) {
-        h += '<table><thead><tr><th>Layer</th><th class="r">Input</th><th class="r">Output</th><th class="r">Duration</th></tr></thead><tbody>';
-        for (const k of keys) {
-          const l = layers[k];
-          h += '<tr><td>' + esc(k) + '</td><td class="r">' + fmtTok(l.total_input_tokens || 0) + '</td><td class="r">' + fmtTok(l.total_output_tokens || 0) + '</td><td class="r">' + (l.total_duration_us ? (l.total_duration_us / 1000).toFixed(0) + 'ms' : '\u2014') + '</td></tr>';
-        }
-        h += '</tbody></table>';
-      }
-      h += '</div>';
-    }
-
-    // Active Intent
-    if (intent?.task_type) {
-      const confPct = intent.confidence != null ? Math.round(intent.confidence * 100) : null;
-      h += '<div class="card" style="margin-top:16px"><div class="card-header"><h3>Active Intent</h3>';
-      h += '<span class="tag tg">' + esc(intent.task_type) + '</span></div>';
-      if (confPct != null) {
-        const cc = confPct >= 70 ? 'var(--green)' : confPct >= 40 ? 'var(--yellow)' : 'var(--muted)';
-        h += '<div style="display:flex;align-items:center;gap:14px;margin:12px 0">';
-        h += '<span class="sl">Confidence</span>';
-        h += '<div class="pressure-bar" style="flex:1;height:8px"><div class="pressure-fill" style="width:' + confPct + '%;background:' + cc + '"></div></div>';
-        h += '<span class="sv">' + confPct + '%</span></div>';
-      }
-      if (intent.targets?.length) {
-        h += '<p class="sl" style="margin:12px 0 8px">Targets</p>';
-        for (let i = 0; i < Math.min(intent.targets.length, 5); i++) {
-          h += '<div class="cockpit-ctx-target-pill">' + esc(shortenPath(intent.targets[i])) + '</div>';
-        }
-      }
-      h += '</div>';
-    }
-
-    return h || '<div class="card"><p class="hs">No runtime data available yet.</p></div>';
-  }
-
-  // ─── BINDINGS ───────────────────────────────────────────────────────
+  // ─── BINDINGS ─────────────────────────────────────────────────────
 
   _bindAll() {
     const self = this;
-
-    this.querySelectorAll('.ctx-tab').forEach(btn => {
-      btn.addEventListener('click', () => {
-        self._activeTab = btn.dataset.tab;
-        self.render();
-        self._renderModeChart();
-      });
-    });
 
     this.querySelectorAll('th[data-sort]').forEach(h => {
       h.addEventListener('click', () => {
@@ -813,12 +749,11 @@ class CockpitContext extends HTMLElement {
         if (self._sortKey === k) self._sortDir = self._sortDir === 'asc' ? 'desc' : 'asc';
         else { self._sortKey = k; self._sortDir = 'asc'; }
         self.render();
-        self._renderModeChart();
       });
     });
 
     const mf = this.querySelector('#cockpitCtxModeFilter');
-    if (mf) mf.addEventListener('change', () => { self._modeFilter = mf.value || 'all'; self.render(); self._renderModeChart(); });
+    if (mf) mf.addEventListener('change', () => { self._modeFilter = mf.value || 'all'; self.render(); });
 
     const details = this.querySelector('.ctx-timeline-details');
     if (details) details.addEventListener('toggle', () => { self._historyOpen = details.open; });
@@ -850,6 +785,41 @@ class CockpitContext extends HTMLElement {
         if (rawPath && sel.value) await self.setMode(rawPath, sel.value);
       });
       sel.addEventListener('click', e => e.stopPropagation());
+    });
+
+    this.querySelectorAll('.ctx-inspector-filter').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const filter = btn.dataset.filter;
+        self.querySelectorAll('.ctx-inspector-filter').forEach(b => { b.style.background = ''; b.style.color = ''; });
+        btn.style.background = 'var(--accent)'; btn.style.color = '#fff';
+        self.querySelectorAll('.ctx-inspector-event').forEach(ev => {
+          ev.style.display = (filter === 'all' || ev.dataset.type === filter) ? '' : 'none';
+        });
+      });
+    });
+
+    this.querySelectorAll('.ctx-chat-msg').forEach(msg => {
+      const content = msg.querySelector('.ctx-chat-content');
+      const arrow = msg.querySelector('.ctx-chat-arrow');
+      if (!content) return;
+      msg.addEventListener('click', (e) => {
+        if (e.target.closest('.ctx-chat-content')) return;
+        const open = content.style.display === 'none';
+        content.style.display = open ? 'block' : 'none';
+        if (arrow) arrow.style.transform = open ? 'rotate(90deg)' : '';
+      });
+    });
+
+    this.querySelectorAll('.ctx-inspector-event').forEach(ev => {
+      const content = ev.querySelector('.ctx-inspector-content');
+      const arrow = ev.querySelector('.ctx-inspector-arrow');
+      if (!content) return;
+      ev.addEventListener('click', (e) => {
+        if (e.target.closest('.ctx-inspector-content')) return;
+        const open = content.style.display === 'none';
+        content.style.display = open ? 'block' : 'none';
+        if (arrow) arrow.style.transform = open ? 'rotate(90deg)' : '';
+      });
     });
   }
 

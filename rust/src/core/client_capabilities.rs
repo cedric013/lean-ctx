@@ -181,12 +181,70 @@ pub fn global() -> &'static Mutex<ClientMcpCapabilities> {
 
 pub fn set_detected(caps: ClientMcpCapabilities) {
     if let Ok(mut g) = global().lock() {
-        *g = caps;
+        *g = caps.clone();
     }
+    persist_to_disk(&caps);
 }
 
 pub fn current() -> ClientMcpCapabilities {
     global().lock().map(|g| g.clone()).unwrap_or_default()
+}
+
+/// Load persisted client info from disk (for cross-process use, e.g. dashboard).
+/// Returns `None` if file missing or older than `max_age_secs`.
+pub fn load_persisted(max_age_secs: u64) -> Option<ClientMcpCapabilities> {
+    let path = persisted_path()?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let ts = val.get("ts").and_then(serde_json::Value::as_u64)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    if now.saturating_sub(ts) > max_age_secs {
+        return None;
+    }
+
+    let client_id = val
+        .get("client_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    if client_id == "unknown" {
+        return None;
+    }
+
+    Some(ClientMcpCapabilities::detect(&client_id))
+}
+
+fn persisted_path() -> Option<std::path::PathBuf> {
+    Some(
+        super::data_dir::lean_ctx_data_dir()
+            .ok()?
+            .join("client-id.json"),
+    )
+}
+
+fn persist_to_disk(caps: &ClientMcpCapabilities) {
+    let Some(path) = persisted_path() else {
+        return;
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let payload = serde_json::json!({
+        "client_id": caps.client_id,
+        "tier": caps.tier(),
+        "features": caps.format_summary(),
+        "ts": ts,
+    });
+    let tmp = path.with_extension("tmp");
+    if let Ok(json) = serde_json::to_string_pretty(&payload) {
+        if std::fs::write(&tmp, &json).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
 }
 
 #[cfg(test)]

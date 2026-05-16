@@ -241,6 +241,7 @@ pub fn run() {
                 if let Some(ref p) = project {
                     std::env::set_var("LEAN_CTX_DASHBOARD_PROJECT", p);
                 }
+                spawn_proxy_if_needed();
                 run_async(dashboard::start(port, host));
                 return;
             }
@@ -1401,6 +1402,9 @@ fn run_mcp_server() -> Result<()> {
     let server = tools::create_server();
     drop(startup_lock);
 
+    // Auto-start proxy in background so the dashboard gets exact token data.
+    spawn_proxy_if_needed();
+
     rt.block_on(async {
         core::logging::init_mcp_logging();
         core::protocol::set_mcp_context(true);
@@ -1672,8 +1676,8 @@ fn cmd_stop() {
 
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    // 4. Force-kill stragglers
-    let remaining = ipc::process::find_pids_by_name("lean-ctx");
+    // 4. Force-kill stragglers (but never MCP servers — IDE will respawn them)
+    let remaining = ipc::process::find_killable_pids("lean-ctx");
     if !remaining.is_empty() {
         eprintln!("  Force-killing {} stubborn process(es)…", remaining.len());
         for &pid in &remaining {
@@ -1684,7 +1688,7 @@ fn cmd_stop() {
 
     daemon::cleanup_daemon_files();
 
-    let final_check = ipc::process::find_pids_by_name("lean-ctx");
+    let final_check = ipc::process::find_killable_pids("lean-ctx");
     if final_check.is_empty() {
         eprintln!("  ✓ All lean-ctx processes stopped.");
     } else {
@@ -1884,6 +1888,38 @@ fn resolve_install_path() -> std::path::PathBuf {
     }
 
     std::path::PathBuf::from("/usr/local/bin/lean-ctx")
+}
+
+fn spawn_proxy_if_needed() {
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let port = crate::proxy_setup::default_port();
+    let already_running = TcpStream::connect_timeout(
+        &format!("127.0.0.1:{port}").parse().unwrap(),
+        Duration::from_millis(200),
+    )
+    .is_ok();
+
+    if already_running {
+        tracing::debug!("proxy already running on port {port}");
+        return;
+    }
+
+    let binary = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "lean-ctx".to_string());
+
+    match std::process::Command::new(&binary)
+        .args(["proxy", "start", &format!("--port={port}")])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(_) => tracing::info!("auto-started proxy on port {port}"),
+        Err(e) => tracing::debug!("could not auto-start proxy: {e}"),
+    }
 }
 
 fn resolve_worker_threads(parallelism: usize) -> usize {

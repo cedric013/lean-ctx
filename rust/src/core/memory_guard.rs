@@ -150,66 +150,69 @@ pub fn start_guard(eviction_callback: Arc<dyn Fn(PressureLevel) + Send + Sync>) 
     if GUARD_RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
-    tokio::spawn(async move {
-        let mut poll_secs = 3u64;
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(poll_secs)).await;
-            let Some(snap) = MemorySnapshot::capture() else {
-                continue;
-            };
+    std::thread::Builder::new()
+        .name("memory-guard".into())
+        .spawn(move || {
+            let mut poll_secs = 3u64;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(poll_secs));
+                let Some(snap) = MemorySnapshot::capture() else {
+                    continue;
+                };
 
-            if snap.pressure_level == PressureLevel::Critical {
-                tracing::error!(
-                    "[memory_guard] CRITICAL: RSS={:.0}MB ({:.1}% of {:.0}GB) — \
-                     emergency shutdown to prevent OS OOM kill",
-                    snap.rss_bytes as f64 / 1_048_576.0,
-                    snap.rss_percent,
-                    snap.system_ram_bytes as f64 / 1_073_741_824.0,
-                );
-                ABORT_REQUESTED.store(true, Ordering::SeqCst);
-                (eviction_callback)(PressureLevel::Critical);
-                jemalloc_purge();
+                if snap.pressure_level == PressureLevel::Critical {
+                    tracing::error!(
+                        "[memory_guard] CRITICAL: RSS={:.0}MB ({:.1}% of {:.0}GB) — \
+                         emergency shutdown to prevent OS OOM kill",
+                        snap.rss_bytes as f64 / 1_048_576.0,
+                        snap.rss_percent,
+                        snap.system_ram_bytes as f64 / 1_073_741_824.0,
+                    );
+                    ABORT_REQUESTED.store(true, Ordering::SeqCst);
+                    (eviction_callback)(PressureLevel::Critical);
+                    jemalloc_purge();
 
-                // Give eviction 2s to take effect, then re-check
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                if let Some(recheck) = MemorySnapshot::capture() {
-                    if recheck.pressure_level >= PressureLevel::Hard {
-                        tracing::error!(
-                            "[memory_guard] still at {:?} after emergency eviction — \
-                             exiting process (RSS={:.0}MB)",
-                            recheck.pressure_level,
-                            recheck.rss_bytes as f64 / 1_048_576.0,
-                        );
-                        std::process::exit(137);
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if let Some(recheck) = MemorySnapshot::capture() {
+                        if recheck.pressure_level >= PressureLevel::Hard {
+                            tracing::error!(
+                                "[memory_guard] still at {:?} after emergency eviction — \
+                                 exiting process (RSS={:.0}MB)",
+                                recheck.pressure_level,
+                                recheck.rss_bytes as f64 / 1_048_576.0,
+                            );
+                            std::process::exit(137);
+                        }
+                    }
+                }
+
+                if snap.pressure_level >= PressureLevel::Soft {
+                    poll_secs = 1;
+                    ABORT_REQUESTED
+                        .store(snap.pressure_level >= PressureLevel::Hard, Ordering::SeqCst);
+                    tracing::warn!(
+                        "[memory_guard] pressure={:?} RSS={:.0}MB limit={:.0}MB ({:.1}% of {:.0}GB)",
+                        snap.pressure_level,
+                        snap.rss_bytes as f64 / 1_048_576.0,
+                        snap.rss_limit_bytes as f64 / 1_048_576.0,
+                        snap.rss_percent,
+                        snap.system_ram_bytes as f64 / 1_073_741_824.0,
+                    );
+                    (eviction_callback)(snap.pressure_level);
+
+                    if snap.pressure_level >= PressureLevel::Hard {
+                        jemalloc_purge();
+                    }
+                } else {
+                    poll_secs = 3;
+                    if ABORT_REQUESTED.load(Ordering::Relaxed) {
+                        ABORT_REQUESTED.store(false, Ordering::SeqCst);
+                        tracing::info!("[memory_guard] pressure normalized, clearing abort flag");
                     }
                 }
             }
-
-            if snap.pressure_level >= PressureLevel::Soft {
-                poll_secs = 1;
-                ABORT_REQUESTED.store(snap.pressure_level >= PressureLevel::Hard, Ordering::SeqCst);
-                tracing::warn!(
-                    "[memory_guard] pressure={:?} RSS={:.0}MB limit={:.0}MB ({:.1}% of {:.0}GB)",
-                    snap.pressure_level,
-                    snap.rss_bytes as f64 / 1_048_576.0,
-                    snap.rss_limit_bytes as f64 / 1_048_576.0,
-                    snap.rss_percent,
-                    snap.system_ram_bytes as f64 / 1_073_741_824.0,
-                );
-                (eviction_callback)(snap.pressure_level);
-
-                if snap.pressure_level >= PressureLevel::Hard {
-                    jemalloc_purge();
-                }
-            } else {
-                poll_secs = 3;
-                if ABORT_REQUESTED.load(Ordering::Relaxed) {
-                    ABORT_REQUESTED.store(false, Ordering::SeqCst);
-                    tracing::info!("[memory_guard] pressure normalized, clearing abort flag");
-                }
-            }
-        }
-    });
+        })
+        .ok();
 }
 
 /// Force immediate purge of all caches and jemalloc arenas.

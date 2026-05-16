@@ -155,6 +155,7 @@ fn get_routes(path: &str, _query_str: &str) -> Option<(&'static str, &'static st
                     "summary": bt.format_summary(),
                     "total_bounces": bt.total_bounces(),
                     "total_wasted_tokens": bt.total_wasted_tokens(),
+                    "per_extension": bt.per_extension_json(),
                 })
             } else {
                 serde_json::json!({ "error": "lock failed" })
@@ -163,7 +164,9 @@ fn get_routes(path: &str, _query_str: &str) -> Option<(&'static str, &'static st
             Some(("200 OK", "application/json", json))
         }
         "/api/context-client" => {
-            let caps = crate::core::client_capabilities::current();
+            // Prefer persisted file (written by MCP server process) over in-memory default
+            let caps = crate::core::client_capabilities::load_persisted(86400)
+                .unwrap_or_else(crate::core::client_capabilities::current);
             let payload = serde_json::json!({
                 "client_id": caps.client_id,
                 "tier": caps.tier(),
@@ -210,9 +213,25 @@ fn get_routes(path: &str, _query_str: &str) -> Option<(&'static str, &'static st
             Some(("200 OK", "application/json", json))
         }
         "/api/context-introspect" => {
-            let payload = match crate::proxy::introspect::load_persisted(300) {
-                Some(val) => val,
-                None => serde_json::json!({ "proxy_active": false }),
+            let persisted = crate::proxy::introspect::load_persisted(300);
+            let proxy_port = crate::proxy_setup::default_port();
+            let proxy_running = std::net::TcpStream::connect_timeout(
+                &format!("127.0.0.1:{proxy_port}").parse().unwrap(),
+                std::time::Duration::from_millis(100),
+            )
+            .is_ok();
+
+            let payload = match persisted {
+                Some(mut val) => {
+                    if let Some(obj) = val.as_object_mut() {
+                        obj.insert("proxy_running".into(), proxy_running.into());
+                    }
+                    val
+                }
+                None => serde_json::json!({
+                    "proxy_active": false,
+                    "proxy_running": proxy_running,
+                }),
             };
             let json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
             Some(("200 OK", "application/json", json))
@@ -220,11 +239,26 @@ fn get_routes(path: &str, _query_str: &str) -> Option<(&'static str, &'static st
         "/api/context-radar" => {
             let data_dir = crate::core::data_dir::lean_ctx_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let window = crate::core::context_radar::default_window_for_client("cursor");
+            let client_id = crate::core::client_capabilities::load_persisted(86400)
+                .map_or_else(|| "cursor".to_string(), |c| c.client_id);
+            let window = crate::core::context_radar::default_window_for_client(&client_id);
             let radar = crate::core::context_radar::ContextRadar::load(&data_dir, window);
             let breakdown = radar.budget_breakdown();
-            let recent_events: Vec<&crate::core::context_radar::RadarEvent> =
-                radar.events.iter().rev().take(100).collect();
+            let recent_events: Vec<serde_json::Value> = radar
+                .events
+                .iter()
+                .rev()
+                .take(100)
+                .map(|e| {
+                    serde_json::json!({
+                        "ts": e.ts,
+                        "event_type": e.event_type,
+                        "tokens": e.tokens,
+                        "tool_name": e.tool_name,
+                        "detail": e.detail,
+                    })
+                })
+                .collect();
             let rules_files: Vec<serde_json::Value> = radar
                 .rules_tokens
                 .files
@@ -241,6 +275,147 @@ fn get_routes(path: &str, _query_str: &str) -> Option<(&'static str, &'static st
                 "recent_events": recent_events,
             });
             let json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+            Some(("200 OK", "application/json", json))
+        }
+        "/api/context-transcript" => {
+            let transcript = crate::hook_handlers::load_active_transcript();
+            if let Some((path, conv_id)) = transcript {
+                let tp = std::path::Path::new(&path);
+                if tp.exists() {
+                    if let Ok(raw) = std::fs::read_to_string(tp) {
+                        let messages: Vec<serde_json::Value> = raw
+                            .lines()
+                            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                            .filter_map(|entry| {
+                                let role = entry.get("role")?.as_str()?;
+                                let msg = entry.get("message")?;
+                                let content = msg.get("content")?;
+                                let text = if let Some(s) = content.as_str() {
+                                    s.to_string()
+                                } else if let Some(arr) = content.as_array() {
+                                    let parts: Vec<String> = arr
+                                        .iter()
+                                        .filter_map(|p| {
+                                            if p.get("type").and_then(|t| t.as_str())
+                                                == Some("text")
+                                            {
+                                                p.get("text")
+                                                    .and_then(|t| t.as_str())
+                                                    .map(String::from)
+                                            } else if p.get("type").and_then(|t| t.as_str())
+                                                == Some("tool_use")
+                                            {
+                                                let name = p
+                                                    .get("name")
+                                                    .and_then(|n| n.as_str())
+                                                    .unwrap_or("tool");
+                                                Some(format!("[Tool: {}]", name))
+                                            } else if p.get("type").and_then(|t| t.as_str())
+                                                == Some("tool_result")
+                                            {
+                                                Some("[Tool Result]".to_string())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
+                                    if parts.is_empty() {
+                                        return None;
+                                    }
+                                    parts.join("\n")
+                                } else {
+                                    content.to_string()
+                                };
+                                if text.is_empty() {
+                                    return None;
+                                }
+                                let tokens = text.len() / 4;
+                                let capped = if text.len() > 50000 {
+                                    format!("{}…", &text[..50000])
+                                } else {
+                                    text
+                                };
+                                Some(serde_json::json!({
+                                    "role": role,
+                                    "text": capped,
+                                    "tokens": tokens,
+                                }))
+                            })
+                            .collect();
+                        let payload = serde_json::json!({
+                            "conversation_id": conv_id,
+                            "transcript_path": path,
+                            "messages": messages,
+                            "total": messages.len(),
+                        });
+                        let json =
+                            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+                        Some(("200 OK", "application/json", json))
+                    } else {
+                        Some((
+                            "200 OK",
+                            "application/json",
+                            r#"{"messages":[],"error":"unreadable"}"#.to_string(),
+                        ))
+                    }
+                } else {
+                    Some((
+                        "200 OK",
+                        "application/json",
+                        r#"{"messages":[],"error":"file_not_found"}"#.to_string(),
+                    ))
+                }
+            } else {
+                Some((
+                    "200 OK",
+                    "application/json",
+                    r#"{"messages":[],"error":"no_transcript"}"#.to_string(),
+                ))
+            }
+        }
+        "/api/context-model" => {
+            let detected = crate::hook_handlers::load_detected_model();
+            let client = crate::core::client_capabilities::load_persisted(86400)
+                .map_or_else(|| "unknown".to_string(), |c| c.client_id);
+            let (model, window) = detected.unwrap_or_else(|| {
+                let w = crate::core::context_radar::default_window_for_client(&client);
+                ("unknown".to_string(), w)
+            });
+            let payload = serde_json::json!({
+                "model": model,
+                "window_size": window,
+                "client_id": client,
+                "source": if model != "unknown" { "hook_detected" } else { "client_default" },
+            });
+            let json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+            Some(("200 OK", "application/json", json))
+        }
+        "/api/context-events" => {
+            let data_dir = crate::core::data_dir::lean_ctx_data_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let client_id = crate::core::client_capabilities::load_persisted(86400)
+                .map_or_else(|| "cursor".to_string(), |c| c.client_id);
+            let window = crate::core::context_radar::default_window_for_client(&client_id);
+            let radar = crate::core::context_radar::ContextRadar::load(&data_dir, window);
+            let events: Vec<serde_json::Value> = radar
+                .events
+                .iter()
+                .rev()
+                .take(500)
+                .map(|e| {
+                    serde_json::json!({
+                        "ts": e.ts,
+                        "event_type": e.event_type,
+                        "tokens": e.tokens,
+                        "tool_name": e.tool_name,
+                        "detail": e.detail,
+                        "content": e.content,
+                        "model": e.model,
+                        "conversation_id": e.conversation_id,
+                    })
+                })
+                .collect();
+            let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
             Some(("200 OK", "application/json", json))
         }
         _ => None,
