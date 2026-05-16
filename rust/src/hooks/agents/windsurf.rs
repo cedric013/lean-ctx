@@ -4,8 +4,10 @@ use super::super::{
 use super::shared::prepare_project_rules_path;
 
 pub(crate) fn install_windsurf_rules(global: bool) {
+    let home = crate::core::home::resolve_home_dir().unwrap_or_default();
+
+    // hooks.json + MCP config are always global (they live in ~/.codeium/windsurf/)
     if global {
-        let home = crate::core::home::resolve_home_dir().unwrap_or_default();
         let config_path = home
             .join(".codeium")
             .join("windsurf")
@@ -15,8 +17,8 @@ pub(crate) fn install_windsurf_rules(global: bool) {
             "~/.codeium/windsurf/mcp_config.json",
             &config_path,
         );
-        install_windsurf_hooks(&home);
     }
+    install_windsurf_hooks(&home);
 
     let Some(rules_path) = prepare_project_rules_path(global, ".windsurfrules") else {
         return;
