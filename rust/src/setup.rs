@@ -214,12 +214,18 @@ pub fn run_setup() {
 
     // Step 7: Data directory + diagnostics
     terminal_ui::print_step_header(7, 11, "Environment Check");
-    let lean_dir = home.join(".lean-ctx");
+    let lean_dir = crate::core::data_dir::lean_ctx_data_dir()
+        .unwrap_or_else(|_| home.join(".config/lean-ctx"));
     if lean_dir.exists() {
-        terminal_ui::print_status_ok("~/.lean-ctx/ ready");
+        terminal_ui::print_status_ok(&format!("{} ready", lean_dir.display()));
     } else {
         let _ = std::fs::create_dir_all(&lean_dir);
-        terminal_ui::print_status_new("Created ~/.lean-ctx/");
+        terminal_ui::print_status_new(&format!("Created {}", lean_dir.display()));
+    }
+    if let Some(tokens) = crate::core::data_dir::migrate_if_split() {
+        terminal_ui::print_status_new(&format!(
+            "Migrated stats from split data dir ({tokens} tokens recovered)"
+        ));
     }
     crate::doctor::run_compact();
 
@@ -241,7 +247,8 @@ pub fn run_setup() {
     };
 
     if contribute {
-        let config_dir = home.join(".lean-ctx");
+        let config_dir = crate::core::data_dir::lean_ctx_data_dir()
+            .unwrap_or_else(|_| home.join(".config/lean-ctx"));
         let _ = std::fs::create_dir_all(&config_dir);
         let config_path = config_dir.join("config.toml");
         let mut config_content = std::fs::read_to_string(&config_path).unwrap_or_default();
@@ -322,7 +329,9 @@ pub fn run_setup() {
             } else {
                 let root_path = std::path::Path::new(root_trimmed);
                 if root_path.exists() && root_path.is_dir() {
-                    let config_path = home.join(".lean-ctx").join("config.toml");
+                    let config_path = crate::core::data_dir::lean_ctx_data_dir()
+                        .unwrap_or_else(|_| home.join(".config/lean-ctx"))
+                        .join("config.toml");
                     let mut content = std::fs::read_to_string(&config_path).unwrap_or_default();
                     if content.contains("project_root") {
                         if let Ok(re) = regex::Regex::new(r#"(?m)^project_root\s*=\s*"[^"]*""#) {
@@ -927,6 +936,41 @@ fn which_ionice_available() -> bool {
         .is_ok()
 }
 
+/// Result of setting up a single agent with all steps.
+#[derive(Debug, Default)]
+pub struct AgentSetupResult {
+    pub mcp_ok: bool,
+    pub rules: crate::rules_inject::InjectResult,
+    pub skill_installed: bool,
+    pub errors: Vec<String>,
+}
+
+/// Complete per-agent setup: MCP config + global rules + skill + hook.
+/// Single source of truth — called by both `init --agent` and `setup`.
+pub fn setup_single_agent(
+    agent_name: &str,
+    global: bool,
+    mode: crate::hooks::HookMode,
+) -> AgentSetupResult {
+    let home = dirs::home_dir().unwrap_or_default();
+    let mut result = AgentSetupResult::default();
+
+    crate::hooks::install_agent_hook_with_mode(agent_name, global, mode);
+
+    match configure_agent_mcp(agent_name) {
+        Ok(()) => result.mcp_ok = true,
+        Err(e) => result.errors.push(format!("MCP config: {e}")),
+    }
+
+    result.rules = crate::rules_inject::inject_rules_for_agent(&home, agent_name);
+
+    if let Ok(path) = crate::rules_inject::install_skill_for_agent(&home, agent_name) {
+        result.skill_installed = path.exists();
+    }
+
+    result
+}
+
 pub fn configure_agent_mcp(agent: &str) -> Result<(), String> {
     let home = dirs::home_dir().ok_or_else(|| "Cannot determine home directory".to_string())?;
     let binary = resolve_portable_binary();
@@ -1439,7 +1483,8 @@ fn configure_premium_features(home: &std::path::Path) {
     use crate::terminal_ui;
     use std::io::Write;
 
-    let config_dir = home.join(".lean-ctx");
+    let config_dir = crate::core::data_dir::lean_ctx_data_dir()
+        .unwrap_or_else(|_| home.join(".config/lean-ctx"));
     let _ = std::fs::create_dir_all(&config_dir);
     let config_path = config_dir.join("config.toml");
     let mut config_content = std::fs::read_to_string(&config_path).unwrap_or_default();

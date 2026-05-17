@@ -117,6 +117,7 @@ enum RulesFormat {
     CursorMdc,
 }
 
+#[derive(Debug, Default)]
 pub struct InjectResult {
     pub injected: Vec<String>,
     pub updated: Vec<String>,
@@ -170,29 +171,81 @@ pub fn inject_all_rules(home: &std::path::Path) -> InjectResult {
     result
 }
 
+/// Inject global rules for a single agent (by CLI key like "opencode", "cursor", etc.).
+/// Used by `init --agent` to ensure global rules are written alongside MCP config.
+pub fn inject_rules_for_agent(home: &std::path::Path, agent_key: &str) -> InjectResult {
+    if crate::core::config::Config::load().rules_scope_effective()
+        == crate::core::config::RulesScope::Project
+    {
+        return InjectResult {
+            injected: Vec::new(),
+            updated: Vec::new(),
+            already: Vec::new(),
+            errors: Vec::new(),
+        };
+    }
+
+    let targets = build_rules_targets(home);
+    let mut result = InjectResult {
+        injected: Vec::new(),
+        updated: Vec::new(),
+        already: Vec::new(),
+        errors: Vec::new(),
+    };
+
+    for target in &targets {
+        if !match_agent_name(agent_key, target.name) {
+            continue;
+        }
+        match inject_rules(target) {
+            Ok(RulesResult::Injected) => result.injected.push(target.name.to_string()),
+            Ok(RulesResult::Updated) => result.updated.push(target.name.to_string()),
+            Ok(RulesResult::AlreadyPresent) => result.already.push(target.name.to_string()),
+            Err(e) => result.errors.push(format!("{}: {e}", target.name)),
+        }
+    }
+
+    result
+}
+
+fn match_agent_name(cli_key: &str, target_name: &str) -> bool {
+    let needle = cli_key.to_lowercase();
+    let tn = target_name.to_lowercase();
+    needle.contains(&tn)
+        || tn.contains(&needle)
+        || (needle.contains("cursor") && tn.contains("cursor"))
+        || (needle.contains("claude") && tn.contains("claude"))
+        || (needle.contains("windsurf") && tn.contains("windsurf"))
+        || (needle.contains("codex") && tn.contains("claude"))
+        || (needle.contains("zed") && tn.contains("zed"))
+        || (needle.contains("copilot") && tn.contains("copilot"))
+        || (needle.contains("jetbrains") && tn.contains("jetbrains"))
+        || (needle.contains("kiro") && tn.contains("kiro"))
+        || (needle.contains("gemini") && tn.contains("gemini"))
+        || (needle == "opencode" && tn.contains("opencode"))
+        || (needle == "cline" && tn.contains("cline"))
+        || (needle == "roo" && tn.contains("roo"))
+        || (needle == "amp" && tn.contains("amp"))
+        || (needle == "trae" && tn.contains("trae"))
+        || (needle == "amazonq" && tn.contains("amazon"))
+        || (needle == "pi" && tn.contains("pi coding"))
+        || (needle == "crush" && tn.contains("crush"))
+        || (needle == "verdent" && tn.contains("verdent"))
+        || (needle == "continue" && tn.contains("continue"))
+        || (needle == "qwen" && tn.contains("qwen"))
+        || (needle == "antigravity" && tn.contains("antigravity"))
+        || (needle == "vscode" && tn.contains("copilot"))
+}
+
 /// Check if the rules file for a given MCP client is up-to-date.
 /// Returns `Some(message)` if rules are stale/missing, `None` if current.
 pub fn check_rules_freshness(client_name: &str) -> Option<String> {
     let home = dirs::home_dir()?;
     let targets = build_rules_targets(&home);
 
-    let needle = client_name.to_lowercase();
     let matched: Vec<&RulesTarget> = targets
         .iter()
-        .filter(|t| {
-            let tn = t.name.to_lowercase();
-            needle.contains(&tn)
-                || tn.contains(&needle)
-                || (needle.contains("cursor") && tn.contains("cursor"))
-                || (needle.contains("claude") && tn.contains("claude"))
-                || (needle.contains("windsurf") && tn.contains("windsurf"))
-                || (needle.contains("codex") && tn.contains("claude"))
-                || (needle.contains("zed") && tn.contains("zed"))
-                || (needle.contains("copilot") && tn.contains("copilot"))
-                || (needle.contains("jetbrains") && tn.contains("jetbrains"))
-                || (needle.contains("kiro") && tn.contains("kiro"))
-                || (needle.contains("gemini") && tn.contains("gemini"))
-        })
+        .filter(|t| match_agent_name(client_name, t.name))
         .collect();
 
     if matched.is_empty() {
@@ -1004,5 +1057,91 @@ mod tests {
         let home = std::path::PathBuf::from("/tmp/fake_home");
         let result = install_skill_for_agent(&home, "unknown_agent");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn match_agent_name_basic() {
+        assert!(match_agent_name("cursor", "Cursor"));
+        assert!(match_agent_name("opencode", "OpenCode"));
+        assert!(match_agent_name("claude", "Claude Code"));
+        assert!(match_agent_name("vscode", "VS Code / Copilot"));
+        assert!(match_agent_name("copilot", "VS Code / Copilot"));
+        assert!(match_agent_name("kiro", "AWS Kiro"));
+        assert!(match_agent_name("pi", "Pi Coding Agent"));
+        assert!(match_agent_name("crush", "Crush"));
+        assert!(match_agent_name("amp", "Amp"));
+        assert!(match_agent_name("cline", "Cline"));
+        assert!(match_agent_name("roo", "Roo Code"));
+        assert!(match_agent_name("trae", "Trae"));
+        assert!(match_agent_name("amazonq", "Amazon Q Developer"));
+        assert!(match_agent_name("verdent", "Verdent"));
+        assert!(match_agent_name("continue", "Continue"));
+        assert!(match_agent_name("antigravity", "Antigravity"));
+        assert!(match_agent_name("gemini", "Gemini CLI"));
+    }
+
+    #[test]
+    fn match_agent_name_no_false_positives() {
+        assert!(!match_agent_name("cursor", "Claude Code"));
+        assert!(!match_agent_name("opencode", "Cursor"));
+        assert!(!match_agent_name("unknown_agent", "Cursor"));
+    }
+
+    #[test]
+    fn inject_rules_for_agent_opencode() {
+        ensure_temp_dir();
+        let home = std::env::temp_dir().join("test_inject_rules_agent");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::create_dir_all(&home);
+
+        let opencode_dir = home.join(".config/opencode");
+        let _ = std::fs::create_dir_all(&opencode_dir);
+
+        let result = inject_rules_for_agent(&home, "opencode");
+        assert!(
+            !result.injected.is_empty() || !result.already.is_empty(),
+            "should inject or find rules for OpenCode"
+        );
+        assert!(result.errors.is_empty(), "no errors expected");
+
+        let agents_md = opencode_dir.join("AGENTS.md");
+        if agents_md.exists() {
+            let content = std::fs::read_to_string(&agents_md).unwrap();
+            assert!(content.contains(RULES_VERSION));
+        }
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn inject_rules_for_agent_cursor() {
+        ensure_temp_dir();
+        let home = std::env::temp_dir().join("test_inject_rules_cursor");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::create_dir_all(&home);
+
+        let cursor_dir = home.join(".cursor");
+        let _ = std::fs::create_dir_all(&cursor_dir);
+
+        let result = inject_rules_for_agent(&home, "cursor");
+        assert!(result.errors.is_empty(), "no errors expected");
+
+        let mdc_path = home.join(".cursor/rules/lean-ctx.mdc");
+        if mdc_path.exists() {
+            let content = std::fs::read_to_string(&mdc_path).unwrap();
+            assert!(content.contains(RULES_VERSION));
+        }
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn inject_rules_for_unknown_agent_is_empty() {
+        let home = std::path::PathBuf::from("/tmp/fake_home_unknown");
+        let result = inject_rules_for_agent(&home, "unknown_agent_xyz");
+        assert!(result.injected.is_empty());
+        assert!(result.updated.is_empty());
+        assert!(result.already.is_empty());
+        assert!(result.errors.is_empty());
     }
 }

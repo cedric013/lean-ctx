@@ -48,9 +48,21 @@ pub fn cmd_init(args: &[String]) {
         for agent_name in &agents {
             let mode =
                 explicit_mode.unwrap_or_else(|| crate::hooks::recommend_hook_mode(agent_name));
-            crate::hooks::install_agent_hook_with_mode(agent_name, global, mode);
-            if let Err(e) = crate::setup::configure_agent_mcp(agent_name) {
-                eprintln!("MCP config for '{agent_name}' not updated: {e}");
+            let result = crate::setup::setup_single_agent(agent_name, global, mode);
+            for name in &result.rules.injected {
+                qprintln!("  ✓ {name} rules injected");
+            }
+            for name in &result.rules.updated {
+                qprintln!("  ✓ {name} rules updated");
+            }
+            for name in &result.rules.already {
+                qprintln!("  ✓ {name} rules up-to-date");
+            }
+            if result.skill_installed {
+                qprintln!("  ✓ SKILL.md installed for {agent_name}");
+            }
+            for e in &result.errors {
+                eprintln!("  ✗ {agent_name}: {e}");
             }
             if project {
                 crate::hooks::install_agent_project_hooks(agent_name, &cwd);

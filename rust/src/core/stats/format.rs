@@ -462,8 +462,44 @@ pub fn format_gain_themed_at(t: &Theme, tick: Option<u64>) -> String {
     let dim = theme::dim();
 
     if store.total_commands == 0 {
+        let data_dir = match crate::core::data_dir::lean_ctx_data_dir() {
+            Ok(p) => p.display().to_string(),
+            Err(_) => "~/.config/lean-ctx".into(),
+        };
+        let mcp_hint = if let Ok(live) =
+            std::fs::read_to_string(std::path::Path::new(&data_dir).join("mcp-live.json"))
+        {
+            if live.contains("\"total_calls\"") {
+                format!(
+                    "\n{dim}MCP calls are tracked in mcp-live.json but stats.json is empty.{rst}\
+                     \n{dim}This may indicate a data directory split. Run: lean-ctx doctor{rst}"
+                )
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+        let split_dirs = crate::core::data_dir::all_data_dirs_with_stats();
+        let split_hint = if split_dirs.len() >= 2 {
+            format!(
+                "\n{dim}⚠ Stats found in multiple locations:{rst}\
+                 \n{dim}  {}{rst}\
+                 \n{dim}Run: lean-ctx doctor{rst}",
+                split_dirs
+                    .iter()
+                    .map(|d| d.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            String::new()
+        };
         return format!(
-            "{dim}No commands recorded yet.{rst} Use {cmd}lean-ctx -c \"command\"{rst} to start tracking.",
+            "{dim}No commands recorded yet.{rst}\
+             \n\n  MCP tools are tracked automatically when agents use lean-ctx.\
+             \n  Shell commands: use {cmd}lean-ctx -c \"command\"{rst} to track.\
+             \n\n  {dim}Stats path: {data_dir}{rst}{mcp_hint}{split_hint}",
             cmd = t.secondary.fg(),
         );
     }

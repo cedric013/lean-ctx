@@ -802,6 +802,22 @@ pub fn run() {
     };
     print_check(&stats_outcome);
 
+    let split_dirs = crate::core::data_dir::all_data_dirs_with_stats();
+    if split_dirs.len() >= 2 {
+        let dirs_str = split_dirs
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        print_check(&Outcome {
+            ok: false,
+            line: format!(
+                "{BOLD}data dir split{RST}  {RED}stats.json found in {count} locations{RST}: {dirs_str}  {DIM}(run: lean-ctx setup to auto-merge){RST}",
+                count = split_dirs.len(),
+            ),
+        });
+    }
+
     // 5) config.toml (missing is OK)
     let config_path = lean_dir.as_ref().map(|d| d.join("config.toml"));
     let config_outcome = match &config_path {
