@@ -206,6 +206,10 @@ impl TaskStore {
             std::fs::create_dir_all(parent)?;
         }
 
+        let lock_path = path.with_extension("lock");
+        let _lock =
+            crate::core::agents::FileLock::acquire(&lock_path).map_err(std::io::Error::other)?;
+
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         let tmp = path.with_extension("tmp");
         std::fs::write(&tmp, &json)?;

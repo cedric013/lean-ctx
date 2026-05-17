@@ -1,3 +1,4 @@
+pub mod audit_report;
 mod cheatsheet_cmd;
 pub mod cloud;
 mod common;

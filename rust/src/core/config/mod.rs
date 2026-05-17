@@ -320,6 +320,8 @@ pub struct Config {
     /// Override via LEAN_CTX_NO_UPDATE_CHECK env var.
     #[serde(default)]
     pub update_check_disabled: bool,
+    #[serde(default)]
+    pub updates: UpdatesConfig,
     /// Maximum BM25 cache file size in MB. Indexes exceeding this are quarantined on load
     /// and refused on save. Override via LEAN_CTX_BM25_MAX_CACHE_MB env var.
     #[serde(default = "serde_defaults::default_bm25_max_cache_mb")]
@@ -368,6 +370,55 @@ pub struct Config {
     /// Override via `LEAN_CTX_RESPONSE_VERBOSITY` env var.
     #[serde(default)]
     pub response_verbosity: ResponseVerbosity,
+    /// Cross-project boundary policy.
+    /// Controls whether cross-project search/import is allowed and whether access is audited.
+    #[serde(default)]
+    pub boundary_policy: crate::core::memory_boundary::BoundaryPolicy,
+    #[serde(default)]
+    pub secret_detection: SecretDetectionConfig,
+    /// Allow automatic project-root re-rooting when absolute paths outside the jail are seen.
+    /// When false (default), absolute paths outside the jail are rejected without re-rooting.
+    /// Override via LEAN_CTX_ALLOW_REROOT env var.
+    #[serde(default)]
+    pub allow_auto_reroot: bool,
+    /// Sandbox level for code execution (ctx_exec).
+    /// 0 = subprocess only (current), 1 = OS-level restriction (Seatbelt/Landlock).
+    /// Override via LEAN_CTX_SANDBOX_LEVEL env var.
+    #[serde(default)]
+    pub sandbox_level: u8,
+    /// When true, large tool outputs (>4000 chars) are stored as references
+    /// and a short URI is returned instead of the full content.
+    /// Override via LEAN_CTX_REFERENCE_RESULTS env var.
+    #[serde(default)]
+    pub reference_results: bool,
+    /// Default per-agent token budget. 0 means unlimited.
+    /// Override per-agent via ctx_session or programmatically.
+    #[serde(default)]
+    pub agent_token_budget: usize,
+    /// Optional shell command allowlist. When non-empty, only commands whose base binary
+    /// is in this list are permitted by ctx_shell. Empty = no allowlist (blocklist only).
+    /// Example: `shell_allowlist = ["git", "cargo", "npm", "ls", "cat", "grep", "find", "echo"]`
+    /// Override via LEAN_CTX_SHELL_ALLOWLIST env var (comma-separated).
+    #[serde(default)]
+    pub shell_allowlist: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecretDetectionConfig {
+    pub enabled: bool,
+    pub redact: bool,
+    pub custom_patterns: Vec<String>,
+}
+
+impl Default for SecretDetectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            redact: false,
+            custom_patterns: Vec::new(),
+        }
+    }
 }
 
 /// Settings for the zero-loss compression archive (large tool outputs saved to disk).
@@ -404,6 +455,12 @@ pub struct AutonomyConfig {
     pub dedup_threshold: usize,
     pub consolidate_every_calls: u32,
     pub consolidate_cooldown_secs: u64,
+    #[serde(default = "serde_defaults::default_true")]
+    pub cognition_loop_enabled: bool,
+    #[serde(default = "serde_defaults::default_cognition_loop_interval")]
+    pub cognition_loop_interval_secs: u64,
+    #[serde(default = "serde_defaults::default_cognition_loop_max_steps")]
+    pub cognition_loop_max_steps: u8,
 }
 
 impl Default for AutonomyConfig {
@@ -418,7 +475,48 @@ impl Default for AutonomyConfig {
             dedup_threshold: 8,
             consolidate_every_calls: 25,
             consolidate_cooldown_secs: 120,
+            cognition_loop_enabled: true,
+            cognition_loop_interval_secs: 3600,
+            cognition_loop_max_steps: 8,
         }
+    }
+}
+
+/// Controls automatic update behavior. All defaults are OFF — auto-updates
+/// require explicit opt-in via `lean-ctx setup` or `lean-ctx update --schedule`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdatesConfig {
+    pub auto_update: bool,
+    pub check_interval_hours: u64,
+    pub notify_only: bool,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self {
+            auto_update: false,
+            check_interval_hours: 6,
+            notify_only: false,
+        }
+    }
+}
+
+impl UpdatesConfig {
+    pub fn from_env() -> Self {
+        let mut cfg = Self::default();
+        if let Ok(v) = std::env::var("LEAN_CTX_AUTO_UPDATE") {
+            cfg.auto_update = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(v) = std::env::var("LEAN_CTX_UPDATE_INTERVAL_HOURS") {
+            if let Ok(h) = v.parse::<u64>() {
+                cfg.check_interval_hours = h.clamp(1, 168);
+            }
+        }
+        if let Ok(v) = std::env::var("LEAN_CTX_UPDATE_NOTIFY_ONLY") {
+            cfg.notify_only = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        cfg
     }
 }
 
@@ -461,6 +559,19 @@ impl AutonomyConfig {
                 cfg.consolidate_cooldown_secs = n;
             }
         }
+        if let Ok(v) = std::env::var("LEAN_CTX_COGNITION_LOOP_ENABLED") {
+            cfg.cognition_loop_enabled = v != "false" && v != "0";
+        }
+        if let Ok(v) = std::env::var("LEAN_CTX_COGNITION_LOOP_INTERVAL_SECS") {
+            if let Ok(n) = v.parse() {
+                cfg.cognition_loop_interval_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("LEAN_CTX_COGNITION_LOOP_MAX_STEPS") {
+            if let Ok(n) = v.parse() {
+                cfg.cognition_loop_max_steps = n;
+            }
+        }
         cfg
     }
 
@@ -488,6 +599,19 @@ impl AutonomyConfig {
         if let Ok(v) = std::env::var("LEAN_CTX_DEDUP_THRESHOLD") {
             if let Ok(n) = v.parse() {
                 cfg.dedup_threshold = n;
+            }
+        }
+        if let Ok(v) = std::env::var("LEAN_CTX_COGNITION_LOOP_ENABLED") {
+            cfg.cognition_loop_enabled = v != "false" && v != "0";
+        }
+        if let Ok(v) = std::env::var("LEAN_CTX_COGNITION_LOOP_INTERVAL_SECS") {
+            if let Ok(n) = v.parse() {
+                cfg.cognition_loop_interval_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("LEAN_CTX_COGNITION_LOOP_MAX_STEPS") {
+            if let Ok(n) = v.parse() {
+                cfg.cognition_loop_max_steps = n;
             }
         }
         cfg
@@ -574,6 +698,7 @@ impl Default for Config {
             shell_hook_disabled: false,
             shell_activation: ShellActivation::default(),
             update_check_disabled: false,
+            updates: UpdatesConfig::default(),
             graph_index_max_files: serde_defaults::default_graph_index_max_files(),
             bm25_max_cache_mb: serde_defaults::default_bm25_max_cache_mb(),
             memory_profile: MemoryProfile::default(),
@@ -584,6 +709,13 @@ impl Default for Config {
             lsp: std::collections::HashMap::new(),
             ide_paths: HashMap::new(),
             response_verbosity: ResponseVerbosity::default(),
+            boundary_policy: crate::core::memory_boundary::BoundaryPolicy::default(),
+            secret_detection: SecretDetectionConfig::default(),
+            allow_auto_reroot: false,
+            sandbox_level: 0,
+            reference_results: false,
+            agent_token_budget: 0,
+            shell_allowlist: Vec::new(),
         }
     }
 }
@@ -1089,6 +1221,20 @@ impl Config {
         {
             self.autonomy.consolidate_cooldown_secs = local.autonomy.consolidate_cooldown_secs;
         }
+        if !local.autonomy.cognition_loop_enabled {
+            self.autonomy.cognition_loop_enabled = false;
+        }
+        if local.autonomy.cognition_loop_interval_secs
+            != AutonomyConfig::default().cognition_loop_interval_secs
+        {
+            self.autonomy.cognition_loop_interval_secs =
+                local.autonomy.cognition_loop_interval_secs;
+        }
+        if local.autonomy.cognition_loop_max_steps
+            != AutonomyConfig::default().cognition_loop_max_steps
+        {
+            self.autonomy.cognition_loop_max_steps = local.autonomy.cognition_loop_max_steps;
+        }
         if local_toml.contains("compression_level") {
             self.compression_level = local.compression_level;
         }
@@ -1189,6 +1335,9 @@ impl Config {
         }
         if local.memory_cleanup != MemoryCleanup::default() {
             self.memory_cleanup = local.memory_cleanup;
+        }
+        if !local.shell_allowlist.is_empty() {
+            self.shell_allowlist = local.shell_allowlist;
         }
     }
 

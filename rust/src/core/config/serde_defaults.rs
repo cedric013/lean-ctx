@@ -46,3 +46,11 @@ pub(super) fn default_graph_index_max_files() -> u64 {
 pub(super) fn default_max_ram_percent() -> u8 {
     5
 }
+
+pub(super) fn default_cognition_loop_interval() -> u64 {
+    3600
+}
+
+pub(super) fn default_cognition_loop_max_steps() -> u8 {
+    8
+}

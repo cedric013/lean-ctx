@@ -306,6 +306,8 @@ mod tests {
             last_feedback: None,
             privacy: FactPrivacy::default(),
             imported_from: None,
+            archetype: KnowledgeArchetype::default(),
+            fidelity: None,
         }];
 
         let result = k.import_facts(incoming, ImportMerge::SkipExisting, "imp-1", &policy);
@@ -339,6 +341,8 @@ mod tests {
             last_feedback: None,
             privacy: FactPrivacy::default(),
             imported_from: None,
+            archetype: KnowledgeArchetype::default(),
+            fidelity: None,
         }];
 
         let result = k.import_facts(incoming, ImportMerge::Replace, "imp-1", &policy);
@@ -373,6 +377,8 @@ mod tests {
             last_feedback: None,
             privacy: FactPrivacy::default(),
             imported_from: None,
+            archetype: KnowledgeArchetype::default(),
+            fidelity: None,
         }];
 
         let result = k.import_facts(incoming, ImportMerge::SkipExisting, "imp-1", &policy);

@@ -7,6 +7,8 @@ pub struct PreDispatchResult {
     pub overridden_mode: Option<String>,
     pub reason: Option<&'static str>,
     pub pressure_downgraded: bool,
+    pub budget_blocked: bool,
+    pub budget_warning: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -23,10 +25,78 @@ pub fn pre_dispatch_read(
     project_root: Option<&str>,
     pressure: Option<&PressureAction>,
 ) -> PreDispatchResult {
+    pre_dispatch_read_for_agent(path, requested_mode, task, project_root, pressure, None)
+}
+
+pub fn pre_dispatch_read_for_agent(
+    path: &str,
+    requested_mode: &str,
+    task: Option<&str>,
+    project_root: Option<&str>,
+    pressure: Option<&PressureAction>,
+    agent_id: Option<&str>,
+) -> PreDispatchResult {
     let no_change = PreDispatchResult {
         overridden_mode: None,
         reason: None,
         pressure_downgraded: false,
+        budget_blocked: false,
+        budget_warning: None,
+    };
+
+    if let Some(aid) = agent_id {
+        let estimated_tokens = estimate_read_tokens(path, requested_mode);
+        match crate::core::agent_budget::check_budget(aid, estimated_tokens) {
+            crate::core::agent_budget::BudgetCheckResult::Exceeded { limit, consumed } => {
+                return PreDispatchResult {
+                    overridden_mode: None,
+                    reason: Some("agent-budget-exceeded"),
+                    pressure_downgraded: false,
+                    budget_blocked: true,
+                    budget_warning: Some(format!(
+                        "Agent budget exceeded: {consumed}/{limit} tokens consumed. Reset via ctx_session or set a higher limit."
+                    )),
+                };
+            }
+            crate::core::agent_budget::BudgetCheckResult::Warning {
+                remaining,
+                percent_used,
+            } => {
+                let warning = format!(
+                    "[BUDGET WARNING] Agent '{aid}' at {:.0}% budget ({remaining} tokens remaining)",
+                    percent_used * 100.0
+                );
+                let mut result = no_change.clone();
+                result.budget_warning = Some(warning);
+                if requested_mode == "diff" || requested_mode.starts_with("lines") {
+                    return result;
+                }
+                let rest = pre_dispatch_inner(path, requested_mode, task, project_root, pressure);
+                return PreDispatchResult {
+                    budget_warning: result.budget_warning,
+                    ..rest
+                };
+            }
+            crate::core::agent_budget::BudgetCheckResult::Allowed { .. } => {}
+        }
+    }
+
+    pre_dispatch_inner(path, requested_mode, task, project_root, pressure)
+}
+
+fn pre_dispatch_inner(
+    path: &str,
+    requested_mode: &str,
+    task: Option<&str>,
+    project_root: Option<&str>,
+    pressure: Option<&PressureAction>,
+) -> PreDispatchResult {
+    let no_change = PreDispatchResult {
+        overridden_mode: None,
+        reason: None,
+        pressure_downgraded: false,
+        budget_blocked: false,
+        budget_warning: None,
     };
 
     if requested_mode == "diff" || requested_mode.starts_with("lines") {
@@ -46,6 +116,8 @@ pub fn pre_dispatch_read(
                 overridden_mode: Some(downgraded),
                 reason: Some("pressure-auto-downgrade"),
                 pressure_downgraded: true,
+                budget_blocked: false,
+                budget_warning: None,
             };
         }
     }
@@ -60,6 +132,8 @@ pub fn pre_dispatch_read(
                 overridden_mode: Some("full".to_string()),
                 reason: Some("bounce-prevention"),
                 pressure_downgraded: false,
+                budget_blocked: false,
+                budget_warning: None,
             };
         }
     }
@@ -76,6 +150,8 @@ pub fn pre_dispatch_read(
                 overridden_mode: Some("full".to_string()),
                 reason: Some("intent-target"),
                 pressure_downgraded: false,
+                budget_blocked: false,
+                budget_warning: None,
             };
         }
     }
@@ -96,6 +172,8 @@ pub fn pre_dispatch_read(
                             overridden_mode: Some("map".to_string()),
                             reason: Some("graph-direct-import"),
                             pressure_downgraded: false,
+                            budget_blocked: false,
+                            budget_warning: None,
                         };
                     }
                 }
@@ -107,6 +185,8 @@ pub fn pre_dispatch_read(
                         overridden_mode: Some("map".to_string()),
                         reason: Some("graph-hub-file"),
                         pressure_downgraded: false,
+                        budget_blocked: false,
+                        budget_warning: None,
                     };
                 }
             }
@@ -126,12 +206,41 @@ pub fn pre_dispatch_read(
                     overridden_mode: Some("map".to_string()),
                     reason: Some("knowledge-high-relevance"),
                     pressure_downgraded: false,
+                    budget_blocked: false,
+                    budget_warning: None,
                 };
             }
         }
     }
 
     no_change
+}
+
+fn estimate_read_tokens(path: &str, mode: &str) -> usize {
+    let file_size = std::fs::metadata(path).map_or(4000, |m| m.len() as usize);
+    let char_estimate = file_size;
+    let full_tokens = char_estimate / 4;
+    match mode {
+        "signatures" => full_tokens / 5,
+        "map" => full_tokens / 3,
+        "aggressive" | "entropy" => full_tokens / 4,
+        "diff" => full_tokens / 10,
+        _ if mode.starts_with("lines:") => {
+            if let Some(range) = mode.strip_prefix("lines:") {
+                let parts: Vec<&str> = range.split('-').collect();
+                if parts.len() == 2 {
+                    let start = parts[0].parse::<usize>().unwrap_or(1);
+                    let end = parts[1].parse::<usize>().unwrap_or(start + 100);
+                    (end.saturating_sub(start) + 1) * 10
+                } else {
+                    full_tokens / 10
+                }
+            } else {
+                full_tokens / 10
+            }
+        }
+        _ => full_tokens,
+    }
 }
 
 fn pressure_downgrade(requested_mode: &str, action: &PressureAction) -> Option<String> {
@@ -167,6 +276,8 @@ fn check_overlay_mode_override(
                         overridden_mode: Some(mode_str.to_string()),
                         reason: Some("overlay-set-view"),
                         pressure_downgraded: false,
+                        budget_blocked: false,
+                        budget_warning: None,
                     });
                 }
             }
@@ -175,6 +286,8 @@ fn check_overlay_mode_override(
                     overridden_mode: Some("full".to_string()),
                     reason: Some("pinned"),
                     pressure_downgraded: false,
+                    budget_blocked: false,
+                    budget_warning: None,
                 });
             }
             OverlayOp::Exclude { .. } if requested_mode != "signatures" => {
@@ -182,6 +295,8 @@ fn check_overlay_mode_override(
                     overridden_mode: Some("signatures".to_string()),
                     reason: Some("excluded"),
                     pressure_downgraded: false,
+                    budget_blocked: false,
+                    budget_warning: None,
                 });
             }
             _ => {}

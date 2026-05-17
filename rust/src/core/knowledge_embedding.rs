@@ -382,6 +382,7 @@ pub fn format_scored_facts(results: &[ScoredFact<'_>]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::knowledge::KnowledgeArchetype;
 
     #[test]
     fn reset_removes_index_file() {
@@ -432,6 +433,8 @@ mod tests {
             last_feedback: None,
             privacy: crate::core::memory_boundary::FactPrivacy::default(),
             imported_from: None,
+            archetype: KnowledgeArchetype::default(),
+            fidelity: None,
         });
         knowledge.facts.push(KnowledgeFact {
             category: "arch".to_string(),
@@ -452,6 +455,8 @@ mod tests {
             last_feedback: None,
             privacy: crate::core::memory_boundary::FactPrivacy::default(),
             imported_from: None,
+            archetype: KnowledgeArchetype::default(),
+            fidelity: None,
         });
 
         let mut idx = KnowledgeEmbeddingIndex::new(&knowledge.project_hash);
@@ -504,6 +509,8 @@ mod tests {
             last_feedback: None,
             privacy: crate::core::memory_boundary::FactPrivacy::default(),
             imported_from: None,
+            archetype: KnowledgeArchetype::default(),
+            fidelity: None,
         };
         let decay = recency_decay(&fact);
         assert!(
@@ -534,6 +541,8 @@ mod tests {
             last_feedback: None,
             privacy: crate::core::memory_boundary::FactPrivacy::default(),
             imported_from: None,
+            archetype: KnowledgeArchetype::default(),
+            fidelity: None,
         };
         let decay = recency_decay(&fact);
         assert_eq!(decay, 0.0, "100-day-old fact should have 0 recency");
@@ -579,6 +588,8 @@ mod tests {
             last_feedback: None,
             privacy: crate::core::memory_boundary::FactPrivacy::default(),
             imported_from: None,
+            archetype: KnowledgeArchetype::default(),
+            fidelity: None,
         };
         let scored = vec![ScoredFact {
             fact: &fact,

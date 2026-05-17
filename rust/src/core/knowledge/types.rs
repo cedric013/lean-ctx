@@ -3,6 +3,71 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::memory_boundary::FactPrivacy;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum KnowledgeArchetype {
+    Pattern,
+    Preference,
+    Architecture,
+    Gotcha,
+    Convention,
+    Dependency,
+    Workflow,
+    Observation,
+    Decision,
+    #[default]
+    Fact,
+}
+
+impl KnowledgeArchetype {
+    pub fn salience_bonus(&self) -> u32 {
+        match self {
+            Self::Architecture => 15,
+            Self::Decision => 12,
+            Self::Gotcha => 14,
+            Self::Convention => 8,
+            Self::Dependency => 6,
+            Self::Pattern => 10,
+            Self::Workflow => 7,
+            Self::Preference => 5,
+            Self::Observation => 3,
+            Self::Fact => 0,
+        }
+    }
+
+    pub fn infer_from_category(category: &str) -> Self {
+        match category.to_lowercase().as_str() {
+            "architecture" | "arch" => Self::Architecture,
+            "decision" | "decisions" => Self::Decision,
+            "gotcha" | "gotchas" => Self::Gotcha,
+            "convention" | "conventions" | "style" => Self::Convention,
+            "dependency" | "dependencies" | "deps" => Self::Dependency,
+            "pattern" | "patterns" => Self::Pattern,
+            "workflow" | "workflows" => Self::Workflow,
+            "preference" | "preferences" | "pref" => Self::Preference,
+            "observation" | "finding" | "findings" => Self::Observation,
+            _ => Self::Fact,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FidelityScore {
+    pub structural: f64,
+    pub semantic: f64,
+    pub computed_at: DateTime<Utc>,
+}
+
+impl Default for FidelityScore {
+    fn default() -> Self {
+        Self {
+            structural: 0.0,
+            semantic: 0.0,
+            computed_at: Utc::now(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectKnowledge {
     pub project_root: String,
@@ -44,6 +109,10 @@ pub struct KnowledgeFact {
     pub privacy: FactPrivacy,
     #[serde(default)]
     pub imported_from: Option<String>,
+    #[serde(default)]
+    pub archetype: KnowledgeArchetype,
+    #[serde(default)]
+    pub fidelity: Option<FidelityScore>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,4 +146,86 @@ pub struct ConsolidatedInsight {
     pub summary: String,
     pub from_sessions: Vec<String>,
     pub timestamp: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod archetype_tests {
+    use super::*;
+
+    #[test]
+    fn infer_archetype_from_category() {
+        assert_eq!(
+            KnowledgeArchetype::infer_from_category("architecture"),
+            KnowledgeArchetype::Architecture
+        );
+        assert_eq!(
+            KnowledgeArchetype::infer_from_category("gotcha"),
+            KnowledgeArchetype::Gotcha
+        );
+        assert_eq!(
+            KnowledgeArchetype::infer_from_category("random"),
+            KnowledgeArchetype::Fact
+        );
+    }
+
+    #[test]
+    fn salience_bonus_ordering() {
+        assert!(
+            KnowledgeArchetype::Architecture.salience_bonus()
+                > KnowledgeArchetype::Fact.salience_bonus()
+        );
+        assert!(
+            KnowledgeArchetype::Gotcha.salience_bonus()
+                > KnowledgeArchetype::Convention.salience_bonus()
+        );
+    }
+
+    #[test]
+    fn default_archetype_is_fact() {
+        assert_eq!(KnowledgeArchetype::default(), KnowledgeArchetype::Fact);
+    }
+
+    #[test]
+    fn fidelity_structural_computation() {
+        let fact = KnowledgeFact {
+            category: "test".into(),
+            key: "k".into(),
+            value: "v".into(),
+            source_session: "sess1".into(),
+            confidence: 0.9,
+            created_at: Utc::now(),
+            last_confirmed: Utc::now(),
+            retrieval_count: 0,
+            last_retrieved: None,
+            valid_from: None,
+            valid_until: None,
+            supersedes: None,
+            confirmation_count: 3,
+            feedback_up: 2,
+            feedback_down: 0,
+            last_feedback: None,
+            privacy: FactPrivacy::default(),
+            imported_from: None,
+            archetype: KnowledgeArchetype::default(),
+            fidelity: None,
+        };
+        let fidelity = fact.compute_structural_fidelity();
+        assert!(fidelity >= 0.8);
+    }
+
+    #[test]
+    fn backward_compatible_deserialization() {
+        let json = r#"{
+            "category": "test",
+            "key": "k",
+            "value": "v",
+            "source_session": "s",
+            "confidence": 0.8,
+            "created_at": "2024-01-01T00:00:00Z",
+            "last_confirmed": "2024-01-01T00:00:00Z"
+        }"#;
+        let fact: KnowledgeFact = serde_json::from_str(json).unwrap();
+        assert_eq!(fact.archetype, KnowledgeArchetype::Fact);
+        assert!(fact.fidelity.is_none());
+    }
 }

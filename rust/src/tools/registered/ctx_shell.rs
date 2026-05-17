@@ -40,6 +40,10 @@ impl McpTool for CtxShellTool {
             return Ok(ToolOutput::simple(rejection));
         }
 
+        if let Err(msg) = crate::core::shell_allowlist::check_shell_allowlist(&command) {
+            return Ok(ToolOutput::simple(msg));
+        }
+
         tokio::task::block_in_place(|| {
             let session_lock = ctx
                 .session

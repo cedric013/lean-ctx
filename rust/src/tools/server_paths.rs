@@ -64,8 +64,12 @@ impl LeanCtxServer {
             Err(e) => {
                 if p.is_absolute() {
                     if let Some(new_root) = maybe_derive_project_root_from_absolute(&resolved) {
+                        let cfg_allow = std::env::var("LEAN_CTX_ALLOW_REROOT").map_or_else(
+                            |_| crate::core::config::Config::load().allow_auto_reroot,
+                            |v| v == "1" || v == "true",
+                        );
                         let candidate_under_jail = resolved.starts_with(jail_root_path);
-                        let allow_reroot = if candidate_under_jail {
+                        let allow_reroot = if !cfg_allow || candidate_under_jail {
                             false
                         } else if let Some(ref trusted_root) = self.startup_project_root {
                             std::path::Path::new(trusted_root) == new_root.as_path()

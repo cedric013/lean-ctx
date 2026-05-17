@@ -73,8 +73,12 @@ pub fn handle(
         "embeddings_status" => handle_embeddings_status(project_root),
         "embeddings_reset" => handle_embeddings_reset(project_root),
         "embeddings_reindex" => handle_embeddings_reindex(project_root),
+        "cognition_loop" => handle_cognition_loop(project_root),
+        "bridge_publish" => handle_bridge_publish(project_root, session_id),
+        "bridge_pull" => handle_bridge_pull(project_root, session_id),
+        "bridge_status" => handle_bridge_status(project_root),
         _ => format!(
-            "Unknown action: {action}. Use: policy, remember, recall, pattern, feedback, relate, unrelate, relations, relations_diagram, status, health, remove, export, consolidate, timeline, rooms, search, wakeup, embeddings_status, embeddings_reset, embeddings_reindex"
+            "Unknown action: {action}. Use: policy, remember, recall, pattern, feedback, relate, unrelate, relations, relations_diagram, status, health, remove, export, consolidate, timeline, rooms, search, wakeup, embeddings_status, embeddings_reset, embeddings_reindex, cognition_loop, bridge_publish, bridge_pull, bridge_status"
         ),
     }
 }
@@ -1125,6 +1129,39 @@ fn handle_search(query: Option<&str>) -> String {
                     }
                 }
 
+                if let Some(ref current_hash) = current_project_hash {
+                    if dir_name != *current_hash {
+                        let policy = crate::core::config::Config::load().boundary_policy;
+                        let allowed = crate::core::memory_boundary::check_boundary(
+                            current_hash,
+                            &dir_name,
+                            &policy,
+                            &crate::core::memory_boundary::CrossProjectEventType::Search,
+                        );
+                        crate::core::memory_boundary::record_audit_event(
+                            &crate::core::memory_boundary::CrossProjectAuditEvent {
+                                timestamp: Utc::now().to_rfc3339(),
+                                event_type:
+                                    crate::core::memory_boundary::CrossProjectEventType::Search,
+                                source_project_hash: current_hash.clone(),
+                                target_project_hash: dir_name.clone(),
+                                tool: "ctx_knowledge".to_string(),
+                                action: "search".to_string(),
+                                facts_accessed: 0,
+                                allowed,
+                                policy_reason: if allowed {
+                                    "boundary_policy_allowed".to_string()
+                                } else {
+                                    "boundary_policy_denied".to_string()
+                                },
+                            },
+                        );
+                        if !allowed {
+                            continue;
+                        }
+                    }
+                }
+
                 let knowledge_file = entry.path().join("knowledge.json");
                 if let Ok(content) = std::fs::read_to_string(&knowledge_file) {
                     if let Ok(knowledge) = serde_json::from_str::<ProjectKnowledge>(&content) {
@@ -1241,6 +1278,88 @@ fn handle_search(query: Option<&str>) -> String {
         ));
     }
     out
+}
+
+fn handle_cognition_loop(project_root: &str) -> String {
+    let cfg = crate::core::config::Config::load().autonomy;
+    if !cfg.cognition_loop_enabled {
+        return "Cognition loop is disabled (autonomy.cognition_loop_enabled=false).".to_string();
+    }
+    let max_steps = cfg.cognition_loop_max_steps;
+    let report = crate::core::cognition_loop::run_cognition_loop(project_root, max_steps);
+    format!("{report}")
+}
+
+fn handle_bridge_publish(project_root: &str, session_id: &str) -> String {
+    let knowledge = ProjectKnowledge::load_or_create(project_root);
+    let mut bridge =
+        crate::core::knowledge_bridge::KnowledgeBridge::load_or_create(&knowledge.project_hash);
+    let count = bridge.publish(session_id, &knowledge.facts);
+    match bridge.save() {
+        Ok(()) => format!(
+            "Published {count} fact(s) to bridge (total: {}, agent: {session_id})",
+            bridge.shared_facts.len()
+        ),
+        Err(e) => format!("Published {count} fact(s) but save failed: {e}"),
+    }
+}
+
+fn handle_bridge_pull(project_root: &str, session_id: &str) -> String {
+    let knowledge = ProjectKnowledge::load_or_create(project_root);
+    let bridge =
+        crate::core::knowledge_bridge::KnowledgeBridge::load_or_create(&knowledge.project_hash);
+    let entries = bridge.pull(session_id);
+    if entries.is_empty() {
+        return "No facts available from other agents.".to_string();
+    }
+
+    let policy = match load_policy_or_error() {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let mut target = knowledge;
+    let mut imported = 0u32;
+    for entry in &entries {
+        let fact = crate::core::knowledge_bridge::KnowledgeBridge::entry_to_fact(entry);
+        let existing = target
+            .facts
+            .iter()
+            .any(|f| f.is_current() && f.category == fact.category && f.key == fact.key);
+        if !existing {
+            target.remember(
+                &fact.category,
+                &fact.key,
+                &fact.value,
+                session_id,
+                fact.confidence,
+                &policy,
+            );
+            imported += 1;
+        }
+    }
+
+    if imported == 0 {
+        return format!(
+            "Bridge has {} fact(s) from other agents, but all already exist locally.",
+            entries.len()
+        );
+    }
+
+    match target.save() {
+        Ok(()) => format!(
+            "Pulled {imported}/{} fact(s) from bridge into local knowledge.",
+            entries.len()
+        ),
+        Err(e) => format!("Pulled {imported} fact(s) but save failed: {e}"),
+    }
+}
+
+fn handle_bridge_status(project_root: &str) -> String {
+    let knowledge = ProjectKnowledge::load_or_create(project_root);
+    let bridge =
+        crate::core::knowledge_bridge::KnowledgeBridge::load_or_create(&knowledge.project_hash);
+    bridge.summary()
 }
 
 fn handle_wakeup(project_root: &str) -> String {

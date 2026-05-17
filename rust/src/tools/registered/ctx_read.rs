@@ -21,6 +21,12 @@ fn per_file_lock(path: &str) -> Arc<Mutex<()>> {
         std::sync::OnceLock::new();
     let map = FILE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
     let mut map = map.lock().unwrap();
+
+    const MAX_ENTRIES: usize = 500;
+    if map.len() > MAX_ENTRIES {
+        map.retain(|_, v| Arc::strong_count(v) > 1);
+    }
+
     map.entry(path.to_string())
         .or_insert_with(|| Arc::new(Mutex::new(())))
         .clone()
@@ -125,13 +131,25 @@ impl CtxReadTool {
         }
 
         let pressure_action = ctx.pressure_snapshot.as_ref().map(|p| &p.recommendation);
-        let gate_result = crate::server::context_gate::pre_dispatch_read(
+        let resolved_agent_id = ctx
+            .agent_id
+            .as_ref()
+            .and_then(|a| a.blocking_read().clone());
+        let gate_result = crate::server::context_gate::pre_dispatch_read_for_agent(
             path,
             &mode,
             task_ref,
             Some(&ctx.project_root),
             pressure_action,
+            resolved_agent_id.as_deref(),
         );
+        if gate_result.budget_blocked {
+            let msg = gate_result
+                .budget_warning
+                .unwrap_or_else(|| "Agent token budget exceeded".to_string());
+            return Err(ErrorData::invalid_params(msg, None));
+        }
+        let budget_warning = gate_result.budget_warning.clone();
         if let Some(overridden) = gate_result.overridden_mode {
             mode = overridden;
         }
@@ -358,8 +376,18 @@ impl CtxReadTool {
             store.record_outcome(feedback_outcome);
         }
 
+        if let Some(aid) = resolved_agent_id.as_deref() {
+            crate::core::agent_budget::record_consumption(aid, output_tokens);
+        }
+
+        let final_output = if let Some(ref warning) = budget_warning {
+            format!("{output}\n\n{warning}")
+        } else {
+            output
+        };
+
         Ok(ToolOutput {
-            text: output,
+            text: final_output,
             original_tokens: original,
             saved_tokens: saved,
             mode: Some(resolved_mode),

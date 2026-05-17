@@ -145,7 +145,7 @@ fn compress_with_patterns(
         layers_applied: layers,
         pattern_savings: res.pattern_savings,
         terse_savings: res.terse_savings,
-        quality_passed: true,
+        quality_passed: res.quality_passed,
     }
 }
 

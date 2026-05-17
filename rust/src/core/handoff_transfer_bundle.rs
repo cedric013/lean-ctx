@@ -44,6 +44,12 @@ pub struct HandoffTransferBundleV1 {
     pub project: ProjectIdentityV1,
     pub ledger: HandoffLedgerV1,
     pub artifacts: ArtifactsExcerptV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer_public_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer_agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,7 +112,7 @@ pub fn build_bundle_v1(
         .map(build_artifacts_excerpt_v1)
         .unwrap_or_default();
 
-    HandoffTransferBundleV1 {
+    let mut bundle = HandoffTransferBundleV1 {
         schema_version: crate::core::contracts::HANDOFF_TRANSFER_BUNDLE_V1_SCHEMA_VERSION,
         exported_at: Utc::now(),
         privacy: effective_privacy.as_str().to_string(),
@@ -116,6 +122,63 @@ pub fn build_bundle_v1(
         },
         ledger,
         artifacts,
+        signature: None,
+        signer_public_key: None,
+        signer_agent_id: None,
+    };
+
+    let agent_id = role_name;
+    sign_bundle(&mut bundle, &agent_id).ok();
+
+    bundle
+}
+
+pub fn sign_bundle(bundle: &mut HandoffTransferBundleV1, agent_id: &str) -> Result<(), String> {
+    bundle.signature = None;
+    bundle.signer_public_key = None;
+    bundle.signer_agent_id = None;
+
+    let canonical =
+        serde_json::to_string(bundle).map_err(|e| format!("serialize for signing: {e}"))?;
+
+    let sig_bytes = crate::core::agent_identity::sign_bytes(agent_id, canonical.as_bytes())?;
+    let pub_key = crate::core::agent_identity::get_public_key(agent_id)?;
+
+    bundle.signature = Some(crate::core::agent_identity::hex_encode(&sig_bytes));
+    bundle.signer_public_key = Some(crate::core::agent_identity::hex_encode(&pub_key.to_bytes()));
+    bundle.signer_agent_id = Some(agent_id.to_string());
+    Ok(())
+}
+
+pub fn verify_bundle_signature(bundle: &HandoffTransferBundleV1) -> Result<String, String> {
+    let sig_hex = bundle
+        .signature
+        .as_deref()
+        .ok_or_else(|| "bundle has no signature".to_string())?;
+    let pk_hex = bundle
+        .signer_public_key
+        .as_deref()
+        .ok_or_else(|| "bundle has no signer_public_key".to_string())?;
+    let agent_id = bundle
+        .signer_agent_id
+        .as_deref()
+        .ok_or_else(|| "bundle has no signer_agent_id".to_string())?;
+
+    let sig_bytes = crate::core::agent_identity::hex_decode(sig_hex)?;
+    let pk_bytes = crate::core::agent_identity::hex_decode(pk_hex)?;
+
+    let mut verify_bundle = bundle.clone();
+    verify_bundle.signature = None;
+    verify_bundle.signer_public_key = None;
+    verify_bundle.signer_agent_id = None;
+
+    let canonical =
+        serde_json::to_string(&verify_bundle).map_err(|e| format!("serialize for verify: {e}"))?;
+
+    if crate::core::agent_identity::verify_signature(&pk_bytes, canonical.as_bytes(), &sig_bytes) {
+        Ok(agent_id.to_string())
+    } else {
+        Err("signature verification failed".to_string())
     }
 }
 

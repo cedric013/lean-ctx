@@ -34,6 +34,8 @@ pub enum PolicyAction {
     SetView { view: String },
     MaxTokens { limit: usize },
     MarkOutdated,
+    Redact,
+    Audit,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +45,9 @@ pub enum PolicyCondition {
     SourceModifiedRecently,
     TokensAbove { threshold: usize },
     Always,
+    AgentIs { agent_id: String },
+    AgentRoleIs { role: String },
+    ContentContainsSecret,
 }
 
 /// A set of loaded policies.
@@ -110,13 +115,34 @@ impl PolicySet {
         seen_before: bool,
         token_count: usize,
     ) -> Vec<PolicyEvalResult> {
+        self.evaluate_full(path, seen_before, token_count, None, None, None)
+    }
+
+    /// Evaluate with full context including agent/role/content dimensions.
+    pub fn evaluate_full(
+        &self,
+        path: &str,
+        seen_before: bool,
+        token_count: usize,
+        agent_id: Option<&str>,
+        role: Option<&str>,
+        content: Option<&str>,
+    ) -> Vec<PolicyEvalResult> {
         let mut results = Vec::new();
         for policy in &self.policies {
             if !path_matches(&policy.match_pattern, path) {
                 continue;
             }
             if let Some(ref condition) = policy.condition {
-                if !check_condition(condition, seen_before, token_count) {
+                if !check_condition(
+                    condition,
+                    seen_before,
+                    token_count,
+                    path,
+                    agent_id,
+                    role,
+                    content,
+                ) {
                     continue;
                 }
             }
@@ -154,7 +180,7 @@ impl PolicySet {
                         state = ContextState::Excluded;
                     }
                 }
-                PolicyAction::SetView { .. } => {}
+                PolicyAction::SetView { .. } | PolicyAction::Redact | PolicyAction::Audit => {}
             }
         }
         state
@@ -233,11 +259,34 @@ fn path_matches(pattern: &str, path: &str) -> bool {
     path == pattern || path.ends_with(pattern)
 }
 
-fn check_condition(condition: &PolicyCondition, seen_before: bool, token_count: usize) -> bool {
+fn check_condition(
+    condition: &PolicyCondition,
+    seen_before: bool,
+    token_count: usize,
+    path: &str,
+    agent_id: Option<&str>,
+    role: Option<&str>,
+    content: Option<&str>,
+) -> bool {
     match condition {
         PolicyCondition::SourceSeenBefore => seen_before,
         PolicyCondition::TokensAbove { threshold } => token_count > *threshold,
-        PolicyCondition::SourceModifiedRecently | PolicyCondition::Always => true,
+        PolicyCondition::SourceModifiedRecently => {
+            const RECENT_SECS: u64 = 3600;
+            std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|elapsed| elapsed.as_secs() < RECENT_SECS)
+        }
+        PolicyCondition::Always => true,
+        PolicyCondition::AgentIs { agent_id: expected } => {
+            agent_id.is_some_and(|id| id == expected)
+        }
+        PolicyCondition::AgentRoleIs { role: expected } => role.is_some_and(|r| r == expected),
+        PolicyCondition::ContentContainsSecret => {
+            content.is_some_and(|c| !crate::core::secret_detection::detect_secrets(c).is_empty())
+        }
     }
 }
 

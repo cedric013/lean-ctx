@@ -31,6 +31,15 @@ pub fn check_tool_access(tool_name: &str) -> RoleCheckResult {
             tool_name,
             "tool not allowed by role policy",
         );
+        crate::core::audit_trail::record(crate::core::audit_trail::AuditEntryData {
+            agent_id: "unknown".into(),
+            tool: tool_name.to_string(),
+            action: None,
+            input_hash: String::new(),
+            output_tokens: 0,
+            role: role_name.clone(),
+            event_type: crate::core::audit_trail::AuditEventType::ToolDenied,
+        });
         let denied_msg = format!(
             "[ROLE DENIED] Tool '{}' is not allowed for role '{}' ({}).\n\
              Allowed tools: {}\n\
@@ -57,9 +66,43 @@ pub fn check_tool_access(tool_name: &str) -> RoleCheckResult {
             tool_name,
             &format!("shell denied by policy: {}", role.role.shell_policy),
         );
+        crate::core::audit_trail::record(crate::core::audit_trail::AuditEntryData {
+            agent_id: "unknown".into(),
+            tool: tool_name.to_string(),
+            action: None,
+            input_hash: String::new(),
+            output_tokens: 0,
+            role: role_name.clone(),
+            event_type: crate::core::audit_trail::AuditEventType::ToolDenied,
+        });
         let msg = format!(
             "[ROLE DENIED] Shell access denied for role '{}'. Shell policy: {}.",
             role_name, role.role.shell_policy
+        );
+        return RoleCheckResult {
+            blocked: true,
+            role_name,
+            message: Some(msg),
+        };
+    }
+
+    let cap_result = crate::core::capabilities::check_capabilities(&role_name, tool_name);
+    if !cap_result.allowed {
+        let missing_names: Vec<&str> = cap_result
+            .missing
+            .iter()
+            .map(super::super::core::capabilities::Capability::display_name)
+            .collect();
+        crate::core::events::emit_policy_violation(
+            &role_name,
+            tool_name,
+            &format!("missing capabilities: {}", missing_names.join(", ")),
+        );
+        let msg = format!(
+            "[CAPABILITY DENIED] Tool '{}' requires capabilities [{}] which role '{}' does not grant.",
+            tool_name,
+            missing_names.join(", "),
+            role_name
         );
         return RoleCheckResult {
             blocked: true,

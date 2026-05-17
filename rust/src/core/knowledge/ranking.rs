@@ -91,7 +91,14 @@ fn salience_score(f: &KnowledgeFact) -> u32 {
         }
     });
 
-    base + quality_bonus + recency_bonus
+    let archetype_bonus = f.archetype.salience_bonus();
+
+    let fidelity_bonus = f
+        .fidelity
+        .as_ref()
+        .map_or(0u32, |fi| (fi.structural * 10.0) as u32);
+
+    base + quality_bonus + recency_bonus + archetype_bonus + fidelity_bonus
 }
 
 pub(super) fn hash_project_root(root: &str) -> String {

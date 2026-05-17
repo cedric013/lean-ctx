@@ -442,13 +442,10 @@ pub fn apply_dictionaries(text: &str, level: DictLevel) -> String {
         DictLevel::Full => vec![GENERAL, GIT, CARGO, NPM],
     };
 
-    let text_lower = text.to_lowercase();
     let mut result = text.to_string();
     for dict in dicts {
         for abbr in dict {
-            if text_lower.contains(&abbr.long.to_lowercase()) {
-                result = replace_whole_word(&result, abbr.long, abbr.short);
-            }
+            result = replace_whole_word(&result, abbr.long, abbr.short);
         }
     }
     result
@@ -465,14 +462,21 @@ fn is_word_boundary(b: u8) -> bool {
 }
 
 fn replace_whole_word(text: &str, pattern: &str, replacement: &str) -> String {
-    if pattern.is_empty() || !text.contains(pattern) {
+    if pattern.is_empty() {
+        return text.to_string();
+    }
+
+    let pattern_lower = pattern.to_lowercase();
+    let text_lower = text.to_lowercase();
+
+    if !text_lower.contains(&pattern_lower) {
         return text.to_string();
     }
 
     let mut result = String::with_capacity(text.len());
     let mut start = 0;
 
-    while let Some(pos) = text[start..].find(pattern) {
+    while let Some(pos) = text_lower[start..].find(&pattern_lower) {
         let abs_pos = start + pos;
         let end_pos = abs_pos + pattern.len();
 
@@ -484,7 +488,7 @@ fn replace_whole_word(text: &str, pattern: &str, replacement: &str) -> String {
         if before_ok && after_ok {
             result.push_str(replacement);
         } else {
-            result.push_str(pattern);
+            result.push_str(&text[start + pos..end_pos]);
         }
         start = end_pos;
     }

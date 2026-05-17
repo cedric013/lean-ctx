@@ -3,6 +3,7 @@ pub mod compress;
 pub mod forward;
 pub mod google;
 pub mod introspect;
+pub mod metrics;
 pub mod openai;
 
 use std::net::SocketAddr;
@@ -105,6 +106,7 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
         .route("/status", get(status_handler))
         .route("/v1/messages", any(anthropic::handler))
         .route("/v1/chat/completions", any(openai::handler))
+        .route("/v1/references/{id}", get(v1_resolve_reference))
         .fallback(fallback_router)
         .layer(axum::middleware::from_fn(host_guard))
         .with_state(state);
@@ -165,6 +167,18 @@ async fn health() -> impl IntoResponse {
     (StatusCode::OK, axum::Json(body))
 }
 
+async fn v1_resolve_reference(
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    match crate::server::reference_store::resolve(&id) {
+        Some(content) => (StatusCode::OK, content),
+        None => (
+            StatusCode::NOT_FOUND,
+            "Reference expired or not found".to_string(),
+        ),
+    }
+}
+
 async fn status_handler(State(state): State<ProxyState>) -> impl IntoResponse {
     use std::sync::atomic::Ordering::Relaxed;
     let s = &state.stats;
@@ -211,13 +225,21 @@ async fn proxy_auth_guard(
         .and_then(|v| v.to_str().ok())
     {
         if let Some(token) = auth.strip_prefix("Bearer ") {
-            if token == expected_token {
+            if constant_time_eq(token.as_bytes(), expected_token.as_bytes()) {
                 return Ok(next.run(req).await);
             }
         }
     }
 
     Err(StatusCode::UNAUTHORIZED)
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    use subtle::ConstantTimeEq;
+    if a.len() != b.len() {
+        return false;
+    }
+    bool::from(a.ct_eq(b))
 }
 
 async fn host_guard(

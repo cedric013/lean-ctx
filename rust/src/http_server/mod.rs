@@ -502,6 +502,27 @@ async fn v1_events(
     Sse::new(guarded).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }
 
+#[derive(Debug, Deserialize)]
+struct AuditEventsQuery {
+    #[serde(default = "default_audit_limit")]
+    limit: usize,
+}
+
+fn default_audit_limit() -> usize {
+    100
+}
+
+async fn v1_audit_events(Query(q): Query<AuditEventsQuery>) -> impl IntoResponse {
+    let capped = q.limit.min(1000);
+    let boundary_events = crate::core::memory_boundary::load_audit_events(capped);
+    let trail_events = crate::core::audit_trail::load_recent(capped);
+
+    Json(serde_json::json!({
+        "cross_project_events": boundary_events,
+        "audit_trail": trail_events,
+    }))
+}
+
 async fn v1_metrics(State(_state): State<AppState>) -> impl IntoResponse {
     let rt = crate::core::context_os::runtime();
     let snap = rt.metrics.snapshot();
@@ -673,6 +694,125 @@ async fn v1_a2a_agent_card(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
+async fn mcp_server_card() -> impl IntoResponse {
+    let card = serde_json::json!({
+        "name": "lean-ctx",
+        "version": env!("CARGO_PKG_VERSION"),
+        "description": "Context Infrastructure Layer — compression, caching, governance for AI agents",
+        "capabilities": {
+            "tools": true,
+            "resources": false,
+            "prompts": false,
+            "sampling": false
+        },
+        "tool_categories": [
+            {"name": "file_operations", "tools": ["ctx_read", "ctx_search", "ctx_tree", "ctx_edit"], "avg_token_cost": 150},
+            {"name": "session_management", "tools": ["ctx_session", "ctx_compress", "ctx_dedup", "ctx_preload"], "avg_token_cost": 80},
+            {"name": "intelligence", "tools": ["ctx_knowledge", "ctx_semantic_search", "ctx_graph", "ctx_overview"], "avg_token_cost": 200},
+            {"name": "agent_ops", "tools": ["ctx_agent", "ctx_handoff", "ctx_task", "ctx_share"], "avg_token_cost": 120}
+        ],
+        "features": {
+            "compression": "deterministic AST-based, 40-70% token reduction",
+            "caching": "session-scoped with zstd, re-reads ~13 tokens",
+            "audit_trail": "SHA-256 chained JSONL",
+            "rbac": "5 built-in roles with capability-based access",
+            "sandboxing": "Level 0 (subprocess) + Level 1 (OS-level)",
+            "secret_detection": "8 regex patterns + custom"
+        },
+        "security": {
+            "path_jail": true,
+            "rate_limiting": true,
+            "budget_tracking": true,
+            "signed_handoffs": true,
+            "timing_safe_auth": true
+        }
+    });
+    Json(card)
+}
+
+async fn v1_agents_register(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> impl IntoResponse {
+    let agent_type = body
+        .get("agent_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let role = body.get("role").and_then(|v| v.as_str());
+    let project_root = body
+        .get("project_root")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&state.project_root);
+
+    let mut registry = crate::core::agents::AgentRegistry::load_or_create();
+    let agent_id = registry.register(agent_type, role, project_root);
+    let _ = registry.save();
+
+    Json(serde_json::json!({
+        "agent_id": agent_id,
+        "status": "registered"
+    }))
+}
+
+async fn v1_agents_heartbeat(Json(body): Json<Value>) -> impl IntoResponse {
+    let agent_id = body.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+    let mut registry = crate::core::agents::AgentRegistry::load_or_create();
+    registry.update_heartbeat(agent_id);
+    let _ = registry.save();
+    Json(serde_json::json!({"status": "ok"}))
+}
+
+async fn v1_agents_list() -> impl IntoResponse {
+    let registry = crate::core::agents::AgentRegistry::load_or_create();
+    let active = registry.list_active(None);
+    Json(serde_json::json!({
+        "agents": active.iter().map(|a| serde_json::json!({
+            "agent_id": a.agent_id,
+            "agent_type": a.agent_type,
+            "role": a.role,
+            "status": a.status.to_string(),
+            "last_active": a.last_active.to_rfc3339(),
+        })).collect::<Vec<_>>()
+    }))
+}
+
+async fn v1_agents_deregister(Json(body): Json<Value>) -> impl IntoResponse {
+    let agent_id = body.get("agent_id").and_then(|v| v.as_str()).unwrap_or("");
+    let mut registry = crate::core::agents::AgentRegistry::load_or_create();
+    registry.set_status(
+        agent_id,
+        crate::core::agents::AgentStatus::Finished,
+        Some("deregistered via API"),
+    );
+    let _ = registry.save();
+    Json(serde_json::json!({"status": "deregistered"}))
+}
+
+async fn v1_agents_events_sse(
+) -> Sse<impl Stream<Item = Result<SseEvent, std::convert::Infallible>>> {
+    let stream = futures::stream::unfold(0usize, |last_count| async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            let registry = crate::core::agents::AgentRegistry::load_or_create();
+            let active = registry.list_active(None);
+            let count = active.len();
+            if count != last_count {
+                let data = serde_json::json!({
+                    "type": "agents_changed",
+                    "active_count": count,
+                    "agents": active.iter().map(|a| &a.agent_id).collect::<Vec<_>>(),
+                });
+                return Some((
+                    Ok::<_, std::convert::Infallible>(SseEvent::default().data(data.to_string())),
+                    count,
+                ));
+            }
+        }
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+}
+
 fn build_app_router(cfg: &HttpServerConfig) -> Router {
     let project_root = cfg.project_root.to_string_lossy().to_string();
     let service_project_root = project_root.clone();
@@ -716,10 +856,26 @@ fn build_app_router(cfg: &HttpServerConfig) -> Router {
         .route("/v1/events/search", get(context_views::v1_events_search))
         .route("/v1/events/lineage", get(context_views::v1_event_lineage))
         .route("/v1/metrics", get(v1_metrics))
+        .route("/v1/audit/events", get(v1_audit_events))
         .route("/v1/a2a/handoff", axum::routing::post(v1_a2a_handoff))
         .route("/v1/a2a/agent-card", get(v1_a2a_agent_card))
         .route("/.well-known/agent.json", get(v1_a2a_agent_card))
+        .route("/.well-known/mcp-server.json", get(mcp_server_card))
         .route("/a2a", axum::routing::post(a2a_jsonrpc))
+        .route(
+            "/v1/agents/register",
+            axum::routing::post(v1_agents_register),
+        )
+        .route(
+            "/v1/agents/heartbeat",
+            axum::routing::post(v1_agents_heartbeat),
+        )
+        .route("/v1/agents/list", get(v1_agents_list))
+        .route(
+            "/v1/agents/deregister",
+            axum::routing::post(v1_agents_deregister),
+        )
+        .route("/v1/agents/events", get(v1_agents_events_sse))
         .fallback_service(mcp_http)
         .layer(axum::extract::DefaultBodyLimit::max(cfg.max_body_bytes))
         .layer(middleware::from_fn_with_state(
@@ -987,6 +1143,42 @@ mod tests {
             .expect("req2");
         let resp2 = app.clone().oneshot(req2).await.expect("resp2");
         assert_eq!(resp2.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn audit_events_endpoint_returns_json() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root_str = dir.path().to_string_lossy().to_string();
+
+        let state = AppState {
+            token: None,
+            concurrency: Arc::new(tokio::sync::Semaphore::new(16)),
+            rate: Arc::new(RateLimiter::new(50, 100)),
+            project_root: root_str.clone(),
+            timeout: Duration::from_secs(30),
+            server: LeanCtxServer::new_shared_with_context(&root_str, "default", "default"),
+        };
+
+        let app = Router::new()
+            .route("/v1/audit/events", get(v1_audit_events))
+            .with_state(state);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/v1/audit/events?limit=10")
+            .header("Host", "localhost")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 1_000_000)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("cross_project_events").unwrap().is_array());
+        assert!(json.get("audit_trail").unwrap().is_array());
     }
 
     #[tokio::test]

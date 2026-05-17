@@ -67,12 +67,14 @@ fn handle_push(
 
     for path in &path_list {
         if let Some(entry) = cache.get(path) {
-            shared_files.push(SharedFile {
-                path: entry.path.clone(),
-                content: entry.content(),
-                mode: "full".to_string(),
-                tokens: entry.original_tokens,
-            });
+            if let Some(content) = entry.content() {
+                shared_files.push(SharedFile {
+                    path: entry.path.clone(),
+                    content,
+                    mode: "full".to_string(),
+                    tokens: entry.original_tokens,
+                });
+            }
         } else {
             not_found.push(*path);
         }

@@ -85,9 +85,12 @@ impl ContextEngine {
             let _ = service.waiting().await;
         });
 
-        let Some(server_msg) = rx.recv().await else {
-            return Err(anyhow!("no response from tool call"));
-        };
+        let server_msg =
+            match tokio::time::timeout(std::time::Duration::from_mins(2), rx.recv()).await {
+                Ok(Some(msg)) => msg,
+                Ok(None) => return Err(anyhow!("no response from tool call")),
+                Err(_) => return Err(anyhow!("tool call timed out after 120s")),
+            };
 
         match server_msg {
             ServerJsonRpcMessage::Response(r) => match r.result {

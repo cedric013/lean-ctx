@@ -18,6 +18,7 @@ pub struct ResidualResult {
     pub pattern_savings: u32,
     pub terse_savings: u32,
     pub total_savings_pct: f32,
+    pub quality_passed: bool,
 }
 
 /// Applies Layer 2 residual compression.
@@ -42,6 +43,7 @@ pub fn compress_residual(
             pattern_savings,
             terse_savings: 0,
             total_savings_pct: counter::savings_pct(tokens_before, tokens_after_patterns),
+            quality_passed: true,
         };
     }
 
@@ -59,6 +61,7 @@ pub fn compress_residual(
         pattern_savings,
         terse_savings,
         total_savings_pct,
+        quality_passed: engine_result.quality.passed,
     }
 }
 

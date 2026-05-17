@@ -37,28 +37,21 @@ impl ClaimExtractor {
     }
 
     pub fn verify_no_secrets_in_output(&mut self, output: &str) {
-        let secret_patterns = [
-            "AKIA",       // AWS access key
-            "sk-",        // OpenAI key
-            "ghp_",       // GitHub PAT
-            "glpat-",     // GitLab PAT
-            "-----BEGIN", // PEM private keys
-            "password=",
-            "secret_key=",
-        ];
+        let secret_matches = crate::core::secret_detection::detect_secrets(output);
 
-        let mut found_secrets = Vec::new();
-        for pattern in &secret_patterns {
-            if output.contains(pattern) {
-                found_secrets.push(*pattern);
-            }
-        }
-
-        let passed = found_secrets.is_empty();
+        let passed = secret_matches.is_empty();
         let text = if passed {
             "No secret patterns found in output".to_string()
         } else {
-            format!("Secret patterns detected: {}", found_secrets.join(", "))
+            let names: Vec<&str> = secret_matches.iter().map(|m| m.pattern_name).collect();
+            let mut unique_names: Vec<&str> = names.clone();
+            unique_names.sort_unstable();
+            unique_names.dedup();
+            format!(
+                "Secret patterns detected ({}): {}",
+                secret_matches.len(),
+                unique_names.join(", ")
+            )
         };
 
         self.proof.add_claim(policy_claim(
@@ -286,9 +279,11 @@ mod tests {
     #[test]
     fn multiple_secret_patterns_all_detected() {
         let mut ext = ClaimExtractor::new("test_multi", None);
-        ext.verify_no_secrets_in_output("AKIAIOSFODNN7 and sk-abc123 and password=foo");
+        ext.verify_no_secrets_in_output(
+            "AKIAIOSFODNN7EXAMPLE1 and sk-abcdefghijklmnopqrstuvwx and password=longvalue1234567890extra",
+        );
         let proof = ext.finalize();
         assert_eq!(proof.summary.failed, 1);
-        assert!(proof.claims[0].text.contains("AKIA"));
+        assert!(proof.claims[0].text.contains("aws_key"));
     }
 }

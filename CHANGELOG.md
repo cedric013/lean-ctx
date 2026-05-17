@@ -13,6 +13,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **`notifications/tools/list_changed`** — Outbound notification sent after dynamic tool category load/unload via `ctx_load_tools`. Clients automatically re-fetch the tool list.
 - **MCP Peer Storage** — Server stores the rmcp `Peer<RoleServer>` from `initialize()` for bidirectional notification delivery.
 
+## [3.6.4] — 2026-05-17
+
+### Added
+
+- **Cognition Loop** — Hebbian-inspired 8-step background knowledge reorganization: seed promote, structural repair, fidelity check, lateral synthesis, contradiction resolution, co-retrieval strengthening, decay, and compaction. Trigger manually via `ctx_knowledge action=cognition_loop` or configure automatic runs with `autonomy.cognition_loop_interval_secs`. (#cognition-loop)
+- **Knowledge Archetypes** — Typed knowledge nodes with 10 archetypes (Architecture, Decision, Gotcha, Convention, Dependency, Pattern, Workflow, Preference, Observation, Fact). Archetypes influence salience-based ranking and are auto-inferred from category names. Fully backward-compatible via `#[serde(default)]`.
+- **Fidelity Scoring** — Two-tier quality metric (structural + semantic) for knowledge facts. Structural fidelity is computed deterministically from source presence, confirmation count, confidence, freshness, and feedback. Fidelity scores influence recall ranking.
+- **Hebbian Edge Strengthening** — Knowledge relation edges now carry `strength` (0.0–1.0) and `decay_rate` fields. Co-retrieved facts strengthen their edges via a saturating Hebbian formula. Exponential time-based decay and threshold-based pruning keep the graph lean.
+- **Cross-Agent Knowledge Bridge** — Controlled sharing of high-confidence facts between agents. Only publishable archetypes (Architecture, Convention, Decision, Dependency, Gotcha) with confidence ≥ 0.8 can be shared. Imported facts carry provenance tracking and a 10% trust penalty. New actions: `bridge_publish`, `bridge_pull`, `bridge_status`.
+- **Auto-Update Scheduler** — Native `lean-ctx update --schedule` with OS-specific schedulers (macOS LaunchAgent, Linux systemd/cron, Windows Task Scheduler). Subcommands: `--schedule off`, `--schedule status`, `--schedule notify`, `--schedule 12h`. Default is OFF — requires explicit opt-in.
+- **Setup Auto-Update Opt-In** — Interactive `lean-ctx setup` now asks whether to enable automatic updates (Step 9/11). Respects user freedom: default is N, non-interactive mode never enables, and the setting is always changeable via CLI or config.
+- **`--quiet` flag for updater** — `lean-ctx update --quiet` suppresses output when already current. Used by the auto-update scheduler to avoid noisy cron/LaunchAgent logs.
+- **Session Update Notification** — One-shot per-session update hint via `session_update_hint()`. Returns a single notification when a newer version is available, then stays silent for the rest of the session.
+- **`[updates]` config section** — New config block with `auto_update` (default false), `check_interval_hours` (default 6), and `notify_only` (default false). Overridable via `LEAN_CTX_AUTO_UPDATE`, `LEAN_CTX_UPDATE_INTERVAL_HOURS`, `LEAN_CTX_UPDATE_NOTIFY_ONLY` env vars.
+
+### Security
+
+- **Constant-time token comparison** — Proxy bearer token validation uses `subtle::ConstantTimeEq` to prevent timing side-channels.
+- **Header forwarding allowlist** — Proxy no longer blindly forwards all headers; only an explicit `FORWARDED_HEADERS` allowlist is passed through.
+- **Secret detection** — Regex-based scanning for API keys, tokens, and credentials in file reads and tool output. Integrated into `io_boundary` as a pre-read filter.
+- **Shell allowlist** — Configurable command allowlist for sandboxed shell execution with `extract_base_command` validation.
+- **Audit trail** — SHA-256 chained audit log for security-relevant events (tool denials, cross-project reads, capability checks). CLI: `lean-ctx audit`.
+- **Capability-based access control** — `Capability` enum with per-tool requirements and per-role grants. Tools are denied if the agent's role lacks the required capabilities.
+- **macOS Seatbelt sandboxing** — `sandbox-exec` based process isolation for shell commands on macOS.
+- **Linux Landlock sandboxing** — Landlock LSM-based filesystem restrictions for shell commands on Linux.
+- **OWASP Agentic Top 10 alignment** — Module mapping lean-ctx security features to the OWASP Top 10 for Agentic Applications.
+- **Signed handoff bundles** — Ed25519 signatures on agent handoff bundles for provenance verification.
+- **PathJail expanded** — 16 path-like parameter keys now validated (including `destination`, `old_path`, `new_path`, `config_path`, `output`).
+- **Reference store** — Large tool outputs (>4000 chars) stored server-side with opaque IDs to prevent context bloat.
+- **Proxy metrics** — Atomic counters for request totals, tokens saved, and bytes compressed.
+
 ## [3.6.3] — 2026-05-17
 
 ### Fixed

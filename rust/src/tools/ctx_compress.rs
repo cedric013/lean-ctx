@@ -30,7 +30,9 @@ pub fn handle(cache: &SessionCache, include_signatures: bool, crp_mode: CrpMode)
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("");
-            let content = entry.content();
+            let Some(content) = entry.content() else {
+                continue;
+            };
             let sigs = signatures::extract_signatures(&content, ext);
             let sig_names: Vec<String> = sigs
                 .iter()
@@ -72,7 +74,7 @@ pub fn handle(cache: &SessionCache, include_signatures: bool, crp_mode: CrpMode)
 
     let contents: Vec<(String, String)> = entries
         .iter()
-        .map(|(p, e)| ((*p).clone(), e.content()))
+        .filter_map(|(p, e)| Some(((*p).clone(), e.content()?)))
         .collect();
     let files_for_codebook: Vec<(&str, &str)> = contents
         .iter()

@@ -46,6 +46,9 @@ pub async fn forward_request(
             .record_compression(original_size, compressed_size);
     }
 
+    let tokens_saved = original_size.saturating_sub(compressed_size) as u64 / 4;
+    super::metrics::record_request(tokens_saved, compressed_size as u64);
+
     let upstream_url = build_upstream_url(&parts, upstream_base, default_path);
     let response = send_upstream(
         &state,
@@ -105,6 +108,25 @@ async fn send_upstream(
     })
 }
 
+const FORWARDED_HEADERS: &[&str] = &[
+    "content-type",
+    "content-encoding",
+    "x-request-id",
+    "openai-organization",
+    "openai-processing-ms",
+    "openai-version",
+    "anthropic-ratelimit-requests-limit",
+    "anthropic-ratelimit-requests-remaining",
+    "anthropic-ratelimit-tokens-limit",
+    "anthropic-ratelimit-tokens-remaining",
+    "retry-after",
+    "x-ratelimit-limit-requests",
+    "x-ratelimit-remaining-requests",
+    "x-ratelimit-limit-tokens",
+    "x-ratelimit-remaining-tokens",
+    "cache-control",
+];
+
 async fn build_response(
     response: reqwest::Response,
     extra_stream_types: &[&str],
@@ -124,7 +146,10 @@ async fn build_response(
         let body = Body::from_stream(stream);
         let mut resp = Response::builder().status(status);
         for (k, v) in &resp_headers {
-            resp = resp.header(k, v);
+            let ks = k.as_str().to_lowercase();
+            if FORWARDED_HEADERS.contains(&ks.as_str()) {
+                resp = resp.header(k, v);
+            }
         }
         return resp
             .body(body)
@@ -139,10 +164,9 @@ async fn build_response(
     let mut resp = Response::builder().status(status);
     for (k, v) in &resp_headers {
         let ks = k.as_str().to_lowercase();
-        if ks == "transfer-encoding" || ks == "content-length" {
-            continue;
+        if FORWARDED_HEADERS.contains(&ks.as_str()) {
+            resp = resp.header(k, v);
         }
-        resp = resp.header(k, v);
     }
     resp.body(Body::from(resp_bytes))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)

@@ -122,16 +122,20 @@ pub mod context {
 // Domain: Knowledge
 // ---------------------------------------------------------------------------
 pub mod claim_extractor;
+pub mod cognition_loop;
 pub mod knowledge;
 pub mod knowledge_bootstrap;
+pub mod knowledge_bridge;
 pub mod knowledge_embedding;
 pub mod knowledge_relations;
 
 /// Convenience re-export: all knowledge-related modules.
 pub mod knowledge_domain {
     pub use super::claim_extractor;
+    pub use super::cognition_loop;
     pub use super::knowledge;
     pub use super::knowledge_bootstrap;
+    pub use super::knowledge_bridge;
     pub use super::knowledge_embedding;
     pub use super::knowledge_relations;
 }
@@ -211,6 +215,7 @@ pub mod patterns;
 // ---------------------------------------------------------------------------
 pub mod a2a;
 pub mod a2a_transport;
+pub mod agent_identity;
 pub mod agents;
 pub mod autonomy_drivers;
 
@@ -247,11 +252,14 @@ pub mod verification_observability;
 // ---------------------------------------------------------------------------
 // Domain: Config & Infrastructure
 // ---------------------------------------------------------------------------
+pub mod agent_budget;
+pub mod audit_trail;
 pub mod binary_detect;
 pub mod bounce_tracker;
 pub mod budget_tracker;
 pub mod budgets;
 pub mod cache;
+pub mod capabilities;
 pub mod cli_cache;
 pub mod client_capabilities;
 pub mod client_constraints;
@@ -284,6 +292,7 @@ pub mod llm_feedback;
 pub mod logging;
 pub mod mcp_manifest;
 pub mod mdl_selector;
+pub mod owasp_alignment;
 pub mod pathutil;
 pub mod pipeline;
 pub mod portable_binary;
@@ -296,7 +305,12 @@ pub mod redaction;
 pub mod roles;
 pub mod route_extractor;
 pub mod sandbox;
+#[cfg(target_os = "linux")]
+pub mod sandbox_landlock;
+pub mod sandbox_seatbelt;
 pub mod sanitize;
+pub mod secret_detection;
+pub mod shell_allowlist;
 pub mod startup_guard;
 pub mod stats;
 pub mod structural_diff;
@@ -309,6 +323,7 @@ pub mod theme;
 pub mod tokenizer_translation_driver;
 pub mod tokens;
 pub mod tool_lifecycle;
+pub mod update_scheduler;
 pub mod updater;
 pub mod version_check;
 pub mod workflow;

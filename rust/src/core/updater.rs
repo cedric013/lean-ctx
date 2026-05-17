@@ -6,10 +6,77 @@ const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn run(args: &[String]) {
     let check_only = args.iter().any(|a| a == "--check");
     let insecure = args.iter().any(|a| a == "--insecure");
+    let quiet = args.iter().any(|a| a == "--quiet");
 
-    println!();
-    println!("  \x1b[1m◆ lean-ctx updater\x1b[0m  \x1b[2mv{CURRENT_VERSION}\x1b[0m");
-    println!("  \x1b[2mChecking github.com/yvgude/lean-ctx …\x1b[0m");
+    // Handle --schedule subcommand
+    if let Some(pos) = args.iter().position(|a| a == "--schedule") {
+        let sub = args.get(pos + 1).map_or("", String::as_str);
+        match sub {
+            "off" | "disable" => {
+                if let Err(e) = crate::core::update_scheduler::remove_schedule() {
+                    eprintln!("  \x1b[31m✗\x1b[0m Failed to disable auto-updates: {e}");
+                    std::process::exit(1);
+                }
+                crate::core::update_scheduler::set_auto_update(false, false, 6);
+                println!("  \x1b[32m✓\x1b[0m Auto-updates disabled.");
+                println!("  \x1b[2mRe-enable anytime: lean-ctx update --schedule\x1b[0m");
+                return;
+            }
+            "status" => {
+                let info = crate::core::update_scheduler::schedule_status();
+                println!();
+                println!("  {info}");
+                println!();
+                return;
+            }
+            "notify" => {
+                let cfg = crate::core::config::Config::load();
+                let hours = cfg.updates.check_interval_hours;
+                match crate::core::update_scheduler::install_schedule(hours) {
+                    Ok(info) => {
+                        crate::core::update_scheduler::set_auto_update(true, true, hours);
+                        println!("  \x1b[32m✓\x1b[0m Update notifications enabled ({info})");
+                        println!("  \x1b[2mYou'll be notified but updates won't install automatically.\x1b[0m");
+                    }
+                    Err(e) => {
+                        eprintln!("  \x1b[31m✗\x1b[0m {e}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+            _ => {
+                let hours = if sub.is_empty() {
+                    6
+                } else {
+                    sub.trim_end_matches('h')
+                        .parse::<u64>()
+                        .unwrap_or(6)
+                        .clamp(1, 168)
+                };
+                match crate::core::update_scheduler::install_schedule(hours) {
+                    Ok(info) => {
+                        crate::core::update_scheduler::set_auto_update(true, false, hours);
+                        println!();
+                        println!("  \x1b[32m✓\x1b[0m {info}");
+                        println!("  \x1b[2mDisable anytime: lean-ctx update --schedule off\x1b[0m");
+                        println!();
+                    }
+                    Err(e) => {
+                        eprintln!("  \x1b[31m✗\x1b[0m Failed to enable auto-updates: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    if !quiet {
+        println!();
+        println!("  \x1b[1m◆ lean-ctx updater\x1b[0m  \x1b[2mv{CURRENT_VERSION}\x1b[0m");
+        println!("  \x1b[2mChecking github.com/yvgude/lean-ctx …\x1b[0m");
+    }
 
     let release = match fetch_latest_release() {
         Ok(r) => r,
@@ -27,6 +94,9 @@ pub fn run(args: &[String]) {
     };
 
     if latest_tag == CURRENT_VERSION {
+        if quiet {
+            return;
+        }
         println!("  \x1b[32m✓\x1b[0m Already up to date (v{CURRENT_VERSION}).");
         println!("  \x1b[2mIf your IDE still uses an older version, restart it to reconnect the MCP server.\x1b[0m");
         println!();
@@ -38,7 +108,9 @@ pub fn run(args: &[String]) {
         return;
     }
 
-    println!("  Update available: v{CURRENT_VERSION} → \x1b[1;32mv{latest_tag}\x1b[0m");
+    if !quiet {
+        println!("  Update available: v{CURRENT_VERSION} → \x1b[1;32mv{latest_tag}\x1b[0m");
+    }
 
     if check_only {
         println!("Run 'lean-ctx update' to install.");
@@ -46,7 +118,9 @@ pub fn run(args: &[String]) {
     }
 
     let asset_name = platform_asset_name();
-    println!("  \x1b[2mDownloading {asset_name} …\x1b[0m");
+    if !quiet {
+        println!("  \x1b[2mDownloading {asset_name} …\x1b[0m");
+    }
 
     let Some(download_url) = find_asset_url(&release, &asset_name) else {
         tracing::error!("No binary found for this platform ({asset_name}). Download manually: https://github.com/yvgude/lean-ctx/releases/latest");
@@ -87,24 +161,64 @@ pub fn run(args: &[String]) {
         std::process::exit(1);
     }
 
-    println!();
-    println!("  \x1b[1;32m✓ Updated to lean-ctx v{latest_tag}\x1b[0m");
-    println!("  \x1b[2mBinary: {}\x1b[0m", current_exe.display());
+    if quiet {
+        println!("  lean-ctx v{CURRENT_VERSION} → v{latest_tag}");
+    } else {
+        println!();
+        println!("  \x1b[1;32m✓ Updated to lean-ctx v{latest_tag}\x1b[0m");
+        println!("  \x1b[2mBinary: {}\x1b[0m", current_exe.display());
+    }
 
-    println!();
-    println!("  \x1b[36m\x1b[1mRefreshing setup (shell hook, MCP configs, rules)…\x1b[0m");
+    if !quiet {
+        println!();
+        println!("  \x1b[36m\x1b[1mRefreshing setup (shell hook, MCP configs, rules)…\x1b[0m");
+    }
     post_update_rewire();
 
+    if !quiet {
+        println!();
+        crate::terminal_ui::print_logo_animated();
+        println!();
+        println!(
+            "  \x1b[33m\x1b[1m⟳ Restart your IDE and shell to activate the new version.\x1b[0m"
+        );
+        println!(
+            "    \x1b[2mClose and re-open Cursor, VS Code, Claude Code, etc. completely.\x1b[0m"
+        );
+        println!("    \x1b[2mThe MCP server must reconnect to use the updated binary.\x1b[0m");
+        println!(
+            "    \x1b[2mRun 'source ~/.zshrc' (or restart terminal) for updated shell aliases.\x1b[0m"
+        );
+    }
     println!();
-    crate::terminal_ui::print_logo_animated();
-    println!();
-    println!("  \x1b[33m\x1b[1m⟳ Restart your IDE and shell to activate the new version.\x1b[0m");
-    println!("    \x1b[2mClose and re-open Cursor, VS Code, Claude Code, etc. completely.\x1b[0m");
-    println!("    \x1b[2mThe MCP server must reconnect to use the updated binary.\x1b[0m");
-    println!(
-        "    \x1b[2mRun 'source ~/.zshrc' (or restart terminal) for updated shell aliases.\x1b[0m"
-    );
-    println!();
+
+    if !quiet
+        && !crate::core::update_scheduler::has_user_decided()
+        && std::io::IsTerminal::is_terminal(&std::io::stdin())
+    {
+        print!("  Want to get updates like this automatically? \x1b[1m[y/N]\x1b[0m ");
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_ok() {
+            let answer = input.trim().to_lowercase();
+            if answer == "y" || answer == "yes" {
+                let cfg = crate::core::config::Config::load();
+                let hours = cfg.updates.check_interval_hours;
+                match crate::core::update_scheduler::install_schedule(hours) {
+                    Ok(info) => {
+                        crate::core::update_scheduler::set_auto_update(true, false, hours);
+                        println!("  \x1b[32m✓\x1b[0m {info}");
+                        println!("  \x1b[2mDisable anytime: lean-ctx update --schedule off\x1b[0m");
+                    }
+                    Err(e) => println!("  \x1b[33m⚠\x1b[0m Could not set up scheduler: {e}"),
+                }
+            } else {
+                crate::core::update_scheduler::set_auto_update(false, false, 6);
+                println!("  \x1b[2m○ Skipped — enable later: lean-ctx update --schedule\x1b[0m");
+            }
+        }
+    }
 }
 
 fn verify_download_integrity(

@@ -294,47 +294,50 @@ fn handle_with_options_inner(
                 output_tokens: sent,
             };
         }
-        let content = existing.content();
         let original_tokens = existing.original_tokens;
-        let resolved_mode = if mode == "auto" {
-            resolve_auto_mode(path, original_tokens, task)
-        } else {
-            mode.to_string()
-        };
-        if is_cacheable_mode(&resolved_mode) {
-            let cache_key = compressed_cache_key(&resolved_mode, crp_mode);
-            if let Some(cached_output) = cache.get_compressed(path, &cache_key) {
-                let out = crate::core::redaction::redact_text_if_enabled(cached_output);
-                let sent = count_tokens(&out);
-                return ReadOutput {
-                    content: out,
-                    resolved_mode,
-                    output_tokens: sent,
-                };
+        let content_opt = existing.content();
+        if let Some(content) = content_opt {
+            let resolved_mode = if mode == "auto" {
+                resolve_auto_mode(path, original_tokens, task)
+            } else {
+                mode.to_string()
+            };
+            if is_cacheable_mode(&resolved_mode) {
+                let cache_key = compressed_cache_key(&resolved_mode, crp_mode);
+                if let Some(cached_output) = cache.get_compressed(path, &cache_key) {
+                    let out = crate::core::redaction::redact_text_if_enabled(cached_output);
+                    let sent = count_tokens(&out);
+                    return ReadOutput {
+                        content: out,
+                        resolved_mode,
+                        output_tokens: sent,
+                    };
+                }
             }
+            let (out, _) = process_mode(
+                &content,
+                &resolved_mode,
+                &file_ref,
+                &short,
+                ext,
+                original_tokens,
+                crp_mode,
+                path,
+                task,
+            );
+            if is_cacheable_mode(&resolved_mode) {
+                let cache_key = compressed_cache_key(&resolved_mode, crp_mode);
+                cache.set_compressed(path, &cache_key, out.clone());
+            }
+            let out = crate::core::redaction::redact_text_if_enabled(&out);
+            let sent = count_tokens(&out);
+            return ReadOutput {
+                content: out,
+                resolved_mode,
+                output_tokens: sent,
+            };
         }
-        let (out, _) = process_mode(
-            &content,
-            &resolved_mode,
-            &file_ref,
-            &short,
-            ext,
-            original_tokens,
-            crp_mode,
-            path,
-            task,
-        );
-        if is_cacheable_mode(&resolved_mode) {
-            let cache_key = compressed_cache_key(&resolved_mode, crp_mode);
-            cache.set_compressed(path, &cache_key, out.clone());
-        }
-        let out = crate::core::redaction::redact_text_if_enabled(&out);
-        let sent = count_tokens(&out);
-        return ReadOutput {
-            content: out,
-            resolved_mode,
-            output_tokens: sent,
-        };
+        cache.invalidate(path);
     }
 
     let content = match read_file_lossy(path) {
@@ -586,16 +589,17 @@ fn handle_full_with_auto_delta(
         cache.record_cache_hit(path);
         if let Some(existing) = cache.get(path) {
             if !crate::core::protocol::meta_visible() {
-                let cached = existing.content();
-                return format_full_output(
-                    file_ref,
-                    short,
-                    ext,
-                    &cached,
-                    existing.original_tokens,
-                    existing.line_count,
-                    task,
-                );
+                if let Some(cached) = existing.content() {
+                    return format_full_output(
+                        file_ref,
+                        short,
+                        ext,
+                        &cached,
+                        existing.original_tokens,
+                        existing.line_count,
+                        task,
+                    );
+                }
             }
             let out = format!(
                 "[using cached version — file read failed]\n{file_ref}={short} cached {}t {}L",
@@ -615,7 +619,7 @@ fn handle_full_with_auto_delta(
 
     let old_content = cache
         .get(path)
-        .map(crate::core::cache::CacheEntry::content)
+        .and_then(crate::core::cache::CacheEntry::content)
         .unwrap_or_default();
     let store_result = cache.store(path, &disk_content);
 
@@ -1057,7 +1061,9 @@ fn extract_line_range(content: &str, range_str: &str) -> String {
 
 fn handle_diff(cache: &mut SessionCache, path: &str, file_ref: &str) -> (String, usize) {
     let short = protocol::shorten_path(path);
-    let old_content = cache.get(path).map(crate::core::cache::CacheEntry::content);
+    let old_content = cache
+        .get(path)
+        .and_then(crate::core::cache::CacheEntry::content);
 
     let new_content = match read_file_lossy(path) {
         Ok(c) => c,

@@ -284,6 +284,7 @@ fn word_similarity(a: &str, b: &str) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::knowledge::KnowledgeArchetype;
 
     fn make_fact(category: &str, key: &str, value: &str, confidence: f32) -> KnowledgeFact {
         KnowledgeFact {
@@ -305,6 +306,8 @@ mod tests {
             last_feedback: None,
             privacy: crate::core::memory_boundary::FactPrivacy::default(),
             imported_from: None,
+            archetype: KnowledgeArchetype::default(),
+            fidelity: None,
         }
     }
 
@@ -335,6 +338,8 @@ mod tests {
             last_feedback: None,
             privacy: crate::core::memory_boundary::FactPrivacy::default(),
             imported_from: None,
+            archetype: KnowledgeArchetype::default(),
+            fidelity: None,
         }
     }
 

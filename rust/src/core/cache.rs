@@ -41,11 +41,10 @@ fn zstd_compress(data: &str) -> Vec<u8> {
     zstd::encode_all(data.as_bytes(), ZSTD_LEVEL).unwrap_or_else(|_| data.as_bytes().to_vec())
 }
 
-fn zstd_decompress(data: &[u8]) -> String {
+fn zstd_decompress(data: &[u8]) -> Option<String> {
     zstd::decode_all(data)
         .ok()
         .and_then(|v| String::from_utf8(v).ok())
-        .unwrap_or_default()
 }
 
 impl CacheEntry {
@@ -75,7 +74,7 @@ impl CacheEntry {
     }
 
     /// Decompresses and returns the full file content.
-    pub fn content(&self) -> String {
+    pub fn content(&self) -> Option<String> {
         zstd_decompress(&self.compressed_content)
     }
 
@@ -310,7 +309,7 @@ impl SessionCache {
     pub fn get_full_content(&self, path: &str) -> Option<String> {
         self.entries
             .get(&normalize_key(path))
-            .map(CacheEntry::content)
+            .and_then(CacheEntry::content)
     }
 
     /// Records a cache hit, updates access stats, and emits a cache-hit event.

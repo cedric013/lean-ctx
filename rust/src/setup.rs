@@ -75,12 +75,12 @@ pub fn run_setup() {
     terminal_ui::print_setup_header();
 
     // Step 1: Shell hook (legacy aliases + universal shell hook)
-    terminal_ui::print_step_header(1, 10, "Shell Hook");
+    terminal_ui::print_step_header(1, 11, "Shell Hook");
     crate::cli::cmd_init(&["--global".to_string()]);
     crate::shell_hook::install_all(false);
 
     // Step 2: Daemon (optional acceleration for CLI routing)
-    terminal_ui::print_step_header(2, 10, "Daemon");
+    terminal_ui::print_step_header(2, 11, "Daemon");
     if crate::daemon::is_daemon_running() {
         terminal_ui::print_status_ok("Daemon running — restarting with current binary…");
         let _ = crate::daemon::stop_daemon();
@@ -93,7 +93,7 @@ pub fn run_setup() {
     }
 
     // Step 3: Editor auto-detection + configuration
-    terminal_ui::print_step_header(3, 10, "AI Tool Detection");
+    terminal_ui::print_step_header(3, 11, "AI Tool Detection");
 
     let targets = crate::core::editor_registry::build_targets(&home);
     let mut newly_configured: Vec<&str> = Vec::new();
@@ -159,7 +159,7 @@ pub fn run_setup() {
     }
 
     // Step 4: Agent rules injection
-    terminal_ui::print_step_header(4, 10, "Agent Rules");
+    terminal_ui::print_step_header(4, 11, "Agent Rules");
     let rules_result = crate::rules_inject::inject_all_rules(&home);
     for name in &rules_result.injected {
         terminal_ui::print_status_new(&format!("{name:<20} \x1b[2mrules injected\x1b[0m"));
@@ -191,7 +191,7 @@ pub fn run_setup() {
     }
 
     // Step 5: API Proxy (autostart + env configuration)
-    terminal_ui::print_step_header(5, 10, "API Proxy");
+    terminal_ui::print_step_header(5, 11, "API Proxy");
     let proxy_port = crate::proxy_setup::default_port();
     crate::proxy_autostart::install(proxy_port, false);
     // Give the proxy a moment to start before configuring env vars
@@ -199,7 +199,7 @@ pub fn run_setup() {
     crate::proxy_setup::install_proxy_env(&home, proxy_port, false);
 
     // Step 6: SKILL.md installation
-    terminal_ui::print_step_header(6, 10, "Skill Files");
+    terminal_ui::print_step_header(6, 11, "Skill Files");
     let skill_result = install_skill_files(&home);
     for (name, installed) in &skill_result {
         if *installed {
@@ -213,7 +213,7 @@ pub fn run_setup() {
     }
 
     // Step 7: Data directory + diagnostics
-    terminal_ui::print_step_header(7, 10, "Environment Check");
+    terminal_ui::print_step_header(7, 11, "Environment Check");
     let lean_dir = home.join(".lean-ctx");
     if lean_dir.exists() {
         terminal_ui::print_status_ok("~/.lean-ctx/ ready");
@@ -224,7 +224,7 @@ pub fn run_setup() {
     crate::doctor::run_compact();
 
     // Step 8: Data sharing
-    terminal_ui::print_step_header(8, 10, "Help Improve lean-ctx");
+    terminal_ui::print_step_header(8, 11, "Help Improve lean-ctx");
     println!("  Share anonymous compression stats to make lean-ctx better.");
     println!("  \x1b[1mNo code, no file names, no personal data — ever.\x1b[0m");
     println!();
@@ -257,12 +257,49 @@ pub fn run_setup() {
         terminal_ui::print_status_skip("Skipped — enable later with: lean-ctx config");
     }
 
-    // Step 9: Premium Features Configuration
-    terminal_ui::print_step_header(9, 10, "Premium Features");
+    // Step 9: Auto-Update opt-in
+    terminal_ui::print_step_header(9, 11, "Auto-Updates");
+    println!("  Keep lean-ctx up to date automatically.");
+    println!("  \x1b[1mChecks GitHub every 6h, installs only when a new release exists.\x1b[0m");
+    println!(
+        "  \x1b[2mNo restarts mid-session. Change anytime: lean-ctx update --schedule off\x1b[0m"
+    );
+    println!();
+    print!("  Enable automatic updates? \x1b[1m[y/N]\x1b[0m ");
+    std::io::stdout().flush().ok();
+
+    let mut auto_input = String::new();
+    let auto_update = if std::io::stdin().read_line(&mut auto_input).is_ok() {
+        let answer = auto_input.trim().to_lowercase();
+        answer == "y" || answer == "yes"
+    } else {
+        false
+    };
+
+    if auto_update {
+        let cfg = crate::core::config::Config::load();
+        let hours = cfg.updates.check_interval_hours;
+        match crate::core::update_scheduler::install_schedule(hours) {
+            Ok(info) => {
+                crate::core::update_scheduler::set_auto_update(true, false, hours);
+                terminal_ui::print_status_ok(&format!("Enabled — {info}"));
+            }
+            Err(e) => {
+                terminal_ui::print_status_warn(&format!("Scheduler setup failed: {e}"));
+                terminal_ui::print_status_skip("Enable later: lean-ctx update --schedule");
+            }
+        }
+    } else {
+        crate::core::update_scheduler::set_auto_update(false, false, 6);
+        terminal_ui::print_status_skip("Skipped — enable later: lean-ctx update --schedule");
+    }
+
+    // Step 10: Premium Features Configuration
+    terminal_ui::print_step_header(10, 11, "Premium Features");
     configure_premium_features(&home);
 
-    // Step 10: Code Intelligence — build graph in background
-    terminal_ui::print_step_header(10, 10, "Code Intelligence");
+    // Step 11: Code Intelligence — build graph in background
+    terminal_ui::print_step_header(11, 11, "Code Intelligence");
     let cwd = std::env::current_dir().ok();
     let cwd_is_home = cwd
         .as_ref()

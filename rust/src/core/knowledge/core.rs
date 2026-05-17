@@ -2,7 +2,8 @@ use chrono::Utc;
 
 use super::ranking::{fact_version_id_v1, hash_project_root, string_similarity};
 use super::types::{
-    Contradiction, ContradictionSeverity, KnowledgeFact, ProjectKnowledge, ProjectPattern,
+    Contradiction, ContradictionSeverity, KnowledgeArchetype, KnowledgeFact, ProjectKnowledge,
+    ProjectPattern,
 };
 use crate::core::memory_boundary::FactPrivacy;
 use crate::core::memory_policy::MemoryPolicy;
@@ -141,6 +142,8 @@ impl ProjectKnowledge {
                     last_feedback: None,
                     privacy: FactPrivacy::default(),
                     imported_from: None,
+                    archetype: KnowledgeArchetype::default(),
+                    fidelity: None,
                 });
             }
         } else {
@@ -164,6 +167,8 @@ impl ProjectKnowledge {
                 last_feedback: None,
                 privacy: FactPrivacy::default(),
                 imported_from: None,
+                archetype: KnowledgeArchetype::default(),
+                fidelity: None,
             });
         }
 

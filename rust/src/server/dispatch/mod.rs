@@ -127,9 +127,12 @@ impl LeanCtxServer {
             };
 
             let mut resolved_paths = std::collections::HashMap::new();
-            for key in ["path", "project_root", "root"] {
-                if let Some(raw) = args_map.get(key).and_then(|v| v.as_str()) {
+            for key in PATH_LIKE_KEYS {
+                if let Some(raw) = args_map.get(*key).and_then(|v| v.as_str()) {
                     if let Ok(resolved) = self.resolve_path(raw).await {
+                        if !["path", "project_root", "root"].contains(key) {
+                            tracing::trace!("[pathjail] resolved non-standard path key '{key}': {raw} -> {resolved}");
+                        }
                         resolved_paths.insert(key.to_string(), resolved);
                     }
                 }
@@ -173,6 +176,8 @@ impl LeanCtxServer {
                 None
             };
 
+            let output_token_estimate = crate::core::tokens::count_tokens(&output.text) as u32;
+
             if let Some(ref path) = output.path {
                 {
                     let sent_tokens = if output.original_tokens > 0 {
@@ -207,12 +212,107 @@ impl LeanCtxServer {
                 )
                 .await;
             }
-            return Ok(header_line.unwrap_or(output.text));
+
+            {
+                let agent_id = self
+                    .agent_id
+                    .read()
+                    .await
+                    .clone()
+                    .unwrap_or_else(|| "unknown".into());
+                let input_hash = crate::core::audit_trail::hash_input(args_map);
+                let role = crate::core::roles::active_role_name();
+                crate::core::audit_trail::record(crate::core::audit_trail::AuditEntryData {
+                    agent_id,
+                    tool: name.to_string(),
+                    action: None,
+                    input_hash,
+                    output_tokens: output_token_estimate,
+                    role,
+                    event_type: crate::core::audit_trail::AuditEventType::ToolCall,
+                });
+            }
+
+            let final_text = header_line.unwrap_or(output.text);
+
+            let reference_enabled = std::env::var("LEAN_CTX_REFERENCE_RESULTS").map_or_else(
+                |_| crate::core::config::Config::load().reference_results,
+                |v| v == "1" || v == "true",
+            );
+
+            if reference_enabled && final_text.len() > REFERENCE_THRESHOLD {
+                let ref_id = super::reference_store::store(final_text.clone());
+                let preview_end = final_text.len().min(200);
+                let summary = format!(
+                    "[Reference: {ref_id}] Output stored ({} chars, ~{} tokens). Resolve: /v1/references/{ref_id}\nPreview: {}...",
+                    final_text.len(),
+                    final_text.len() / 4,
+                    &final_text[..preview_end]
+                );
+                return Ok(summary);
+            }
+
+            return Ok(final_text);
         }
 
         Err(ErrorData::invalid_params(
             format!("Unknown tool: {name}"),
             None,
         ))
+    }
+}
+
+const REFERENCE_THRESHOLD: usize = 4000;
+
+const PATH_LIKE_KEYS: &[&str] = &[
+    "path",
+    "project_root",
+    "root",
+    "file",
+    "directory",
+    "dir",
+    "target",
+    "source",
+    "destination",
+    "old_path",
+    "new_path",
+    "from",
+    "to",
+    "base_path",
+    "config_path",
+    "output",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_like_keys_has_no_duplicates() {
+        let mut seen = std::collections::HashSet::new();
+        for key in PATH_LIKE_KEYS {
+            assert!(seen.insert(*key), "duplicate PATH_LIKE_KEYS entry: {key}");
+        }
+    }
+
+    #[test]
+    fn path_like_keys_includes_primary_keys() {
+        for primary in &["path", "project_root", "root"] {
+            assert!(
+                PATH_LIKE_KEYS.contains(primary),
+                "primary key '{primary}' missing from PATH_LIKE_KEYS"
+            );
+        }
+    }
+
+    #[test]
+    fn path_like_keys_all_non_empty() {
+        for key in PATH_LIKE_KEYS {
+            assert!(!key.is_empty(), "PATH_LIKE_KEYS contains empty string");
+        }
+        assert!(
+            PATH_LIKE_KEYS.len() >= 3,
+            "PATH_LIKE_KEYS must have at least the 3 primary keys"
+        );
     }
 }

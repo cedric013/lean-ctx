@@ -205,6 +205,10 @@ pub fn run() {
                 crate::cli::cmd_verify(&rest);
                 return;
             }
+            "audit" => {
+                println!("{}", crate::cli::audit_report::generate_report());
+                return;
+            }
             "instructions" => {
                 crate::cli::cmd_instructions(&rest);
                 return;

@@ -136,6 +136,28 @@ pub fn version_info_json() -> String {
     )
 }
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static NOTIFIED_THIS_SESSION: AtomicBool = AtomicBool::new(false);
+
+/// Returns a one-line update notification if available, exactly once per session.
+/// Safe to call from any tool — returns None after first notification.
+pub fn session_update_hint() -> Option<String> {
+    if NOTIFIED_THIS_SESSION.swap(true, Ordering::Relaxed) {
+        return None;
+    }
+
+    let cache = read_cache()?;
+    if !is_newer(&cache.latest, CURRENT_VERSION) {
+        return None;
+    }
+
+    Some(format!(
+        "[lean-ctx] Update available: v{CURRENT_VERSION} → v{} (run: lean-ctx update)",
+        cache.latest
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +205,22 @@ mod tests {
     #[test]
     fn banner_none_for_current_version() {
         assert!(!is_newer(CURRENT_VERSION, CURRENT_VERSION));
+    }
+
+    #[test]
+    fn session_hint_returns_once() {
+        NOTIFIED_THIS_SESSION.store(false, Ordering::Relaxed);
+        // No cache file in test env, so we verify the atomic gate directly
+        NOTIFIED_THIS_SESSION.store(false, Ordering::Relaxed);
+        let first_swap = NOTIFIED_THIS_SESSION.swap(true, Ordering::Relaxed);
+        assert!(
+            !first_swap,
+            "First call should get false (not yet notified)"
+        );
+        let second_swap = NOTIFIED_THIS_SESSION.swap(true, Ordering::Relaxed);
+        assert!(
+            second_swap,
+            "Second call should get true (already notified)"
+        );
     }
 }

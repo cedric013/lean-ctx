@@ -80,6 +80,7 @@ mod resolve_path_tests {
 
     #[tokio::test]
     async fn resolve_path_can_reroot_to_trusted_startup_root_when_session_root_is_stale() {
+        std::env::set_var("LEAN_CTX_ALLOW_REROOT", "1");
         let tmp = tempfile::tempdir().unwrap();
         let stale = tmp.path().join("stale");
         let real = tmp.path().join("real");

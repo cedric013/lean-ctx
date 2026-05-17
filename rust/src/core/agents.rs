@@ -514,12 +514,12 @@ pub fn is_process_alive(pid: u32) -> bool {
     }
 }
 
-struct FileLock {
+pub(crate) struct FileLock {
     path: PathBuf,
 }
 
 impl FileLock {
-    fn acquire(path: &std::path::Path) -> Result<Self, String> {
+    pub(crate) fn acquire(path: &std::path::Path) -> Result<Self, String> {
         for _ in 0..50 {
             if std::fs::OpenOptions::new()
                 .write(true)

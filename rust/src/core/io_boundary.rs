@@ -1,16 +1,94 @@
 use std::path::{Path, PathBuf};
 
-use crate::core::{events, pathjail, roles};
+use crate::core::{events, pathjail, roles, secret_detection};
+
+/// Reads a file without following symlinks (TOCTOU protection).
+/// Falls back to regular read on non-Unix platforms.
+#[cfg(unix)]
+pub fn read_file_nofollow(path: &str) -> Result<String, std::io::Error> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path);
+    match file {
+        Ok(mut f) => {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            f.read_to_end(&mut buf)?;
+            Ok(String::from_utf8_lossy(&buf).into_owned())
+        }
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => Err(std::io::Error::other(format!(
+            "Symlink detected at {path} — refusing to follow (TOCTOU protection)"
+        ))),
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(not(unix))]
+pub fn read_file_nofollow(path: &str) -> Result<String, std::io::Error> {
+    std::fs::read_to_string(path)
+}
 
 /// Reads a file as lossy UTF-8, rejecting binary files.
-/// Moved here from tools::ctx_read to break reverse-dependency.
+/// Uses O_NOFOLLOW on Unix to prevent TOCTOU symlink attacks.
 pub fn read_file_lossy(path: &str) -> Result<String, std::io::Error> {
     if crate::core::binary_detect::is_binary_file(path) {
         let msg = crate::core::binary_detect::binary_file_message(path);
         return Err(std::io::Error::other(msg));
     }
-    let bytes = std::fs::read(path)?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    read_file_nofollow(path)
+}
+
+/// Result of a file read with secret scanning applied.
+pub struct ScannedRead {
+    pub content: String,
+    pub secret_matches: Vec<secret_detection::SecretMatch>,
+    pub was_redacted: bool,
+}
+
+/// Reads a file and applies secret detection/redaction per config.
+///
+/// - `enabled=true, redact=false`: returns original content + warnings in `secret_matches`
+/// - `enabled=true, redact=true`: returns redacted content + `was_redacted=true`
+/// - `enabled=false`: returns original content, no scanning
+pub fn read_file_scanned(path: &str) -> Result<ScannedRead, std::io::Error> {
+    let raw = read_file_lossy(path)?;
+    let cfg = crate::core::config::Config::load();
+    let sd = &cfg.secret_detection;
+
+    if !sd.enabled {
+        return Ok(ScannedRead {
+            content: raw,
+            secret_matches: Vec::new(),
+            was_redacted: false,
+        });
+    }
+
+    let (content, matches) = secret_detection::scan_and_redact(&raw, sd);
+
+    if !matches.is_empty() {
+        let role_name = roles::active_role_name();
+        let names: Vec<&str> = matches.iter().map(|m| m.pattern_name).collect();
+        let mut unique: Vec<&str> = names;
+        unique.sort_unstable();
+        unique.dedup();
+        let msg = format!(
+            "[SECRET DETECTION] {} secret(s) found in {}: {}",
+            matches.len(),
+            path,
+            unique.join(", ")
+        );
+        events::emit_policy_violation(&role_name, "read_file", &msg);
+        tracing::warn!("{msg}");
+    }
+
+    let was_redacted = sd.redact && !matches.is_empty();
+    Ok(ScannedRead {
+        content,
+        secret_matches: matches,
+        was_redacted,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,6 +239,27 @@ Role '{role_name}' does not allow scanning .gitignore'd paths. Switch to role 'a
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn nofollow_rejects_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.txt");
+        std::fs::write(&real, "secret").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let result = read_file_nofollow(&link.to_string_lossy());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn nofollow_reads_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("regular.txt");
+        std::fs::write(&file, "hello").unwrap();
+        let content = read_file_nofollow(&file.to_string_lossy()).unwrap();
+        assert_eq!(content, "hello");
+    }
 
     #[test]
     fn env_is_secret_like() {
