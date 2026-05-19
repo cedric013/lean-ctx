@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lean-ctx": {
+      "args": [],
+      "command": "lean-ctx",
+      "env": {
+        "LEAN_CTX_DATA_DIR": "/tmp/test-vscode/.config/lean-ctx"
+      }
+    }
+  }
+}
