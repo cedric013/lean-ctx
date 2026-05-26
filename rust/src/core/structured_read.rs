@@ -168,7 +168,7 @@ fn deduplicate_consecutive(lines: &[String]) -> String {
     result.join("\n")
 }
 
-/// TOML structure: [section] headers + top-level key=value pairs.
+/// TOML structure: `[section]` headers + top-level key=value pairs.
 pub fn extract_toml_structure(content: &str) -> String {
     let mut sections: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut current_section = String::new();
