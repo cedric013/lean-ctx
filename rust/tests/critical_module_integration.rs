@@ -1,9 +1,10 @@
-/// Integration tests for modules identified as critical during the architecture audit.
-/// Covers: pathjail, degradation_policy, gotcha_tracker/learn, cache CCR.
+// Integration tests for modules identified as critical during the architecture audit.
+// Covers: pathjail, degradation_policy, gotcha_tracker/learn, cache CCR.
 
 // ---------------------------------------------------------------------------
 // pathjail: security-critical path containment
 // ---------------------------------------------------------------------------
+#[cfg(not(feature = "no-jail"))]
 #[test]
 fn pathjail_blocks_traversal() {
     use lean_ctx::core::pathjail;
