@@ -37,7 +37,6 @@ pub(super) fn cmd_team(rest: &[String]) {
                     tracing::error!("Team server error: {e}");
                     std::process::exit(1);
                 }
-                return;
             }
             #[cfg(not(feature = "team-server"))]
             {
@@ -247,7 +246,6 @@ pub(super) fn cmd_team(rest: &[String]) {
                         std::process::exit(1);
                     }
                 }
-                return;
             }
             #[cfg(not(feature = "team-server"))]
             {
