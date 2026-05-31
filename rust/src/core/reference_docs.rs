@@ -35,6 +35,18 @@ pub fn generated_docs() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// True when on-disk content equals freshly generated content, ignoring
+/// line-ending differences. Windows checkouts may store the committed docs
+/// with CRLF while the generator emits LF; the drift gate compares *content*,
+/// not byte-exact line endings.
+pub fn content_matches(on_disk: &str, generated: &str) -> bool {
+    normalize_newlines(on_disk) == normalize_newlines(generated)
+}
+
+fn normalize_newlines(s: &str) -> String {
+    s.replace("\r\n", "\n")
+}
+
 // ---------------------------------------------------------------------------
 // MCP tools
 // ---------------------------------------------------------------------------
@@ -237,6 +249,15 @@ mod tests {
                 "config key `{key}` missing from generated doc"
             );
         }
+    }
+
+    #[test]
+    fn content_matches_ignores_line_endings() {
+        // A CRLF checkout (Windows) must still match LF-generated content.
+        assert!(content_matches("a\r\nb\r\n", "a\nb\n"));
+        assert!(content_matches("a\nb\n", "a\nb\n"));
+        // Real content differences still fail.
+        assert!(!content_matches("a\nb\n", "a\nc\n"));
     }
 
     #[test]

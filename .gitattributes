@@ -1,0 +1,5 @@
+# Code-generated reference docs are emitted with LF by `gen_docs`. Pin them to
+# LF on every platform so the docs-drift gate (`cargo test` + `gen_docs --check`)
+# is byte-stable — Windows checkouts would otherwise convert them to CRLF and
+# fail the comparison.
+docs/reference/generated/*.md text eol=lf

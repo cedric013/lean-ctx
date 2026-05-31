@@ -18,9 +18,8 @@ fn generated_reference_docs_are_committed_and_current() {
                 path.display()
             )
         });
-        assert_eq!(
-            on_disk,
-            expected,
+        assert!(
+            reference_docs::content_matches(&on_disk, &expected),
             "{} is out of date. Run: cargo run --example gen_docs --features dev-tools",
             path.display()
         );

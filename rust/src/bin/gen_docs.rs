@@ -46,7 +46,7 @@ fn main() {
         for (name, expected) in &docs {
             let path = dir.join(name);
             let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
-            if on_disk != *expected {
+            if !reference_docs::content_matches(&on_disk, expected) {
                 stale.push(path.display().to_string());
             }
         }
@@ -79,7 +79,10 @@ fn main() {
 }
 
 fn write_if_changed(path: &Path, content: &str) -> Result<bool, String> {
-    if std::fs::read_to_string(path).ok().as_deref() == Some(content) {
+    if std::fs::read_to_string(path)
+        .ok()
+        .is_some_and(|on_disk| reference_docs::content_matches(&on_disk, content))
+    {
         return Ok(false);
     }
     if let Some(parent) = path.parent() {
