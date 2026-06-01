@@ -1,6 +1,6 @@
 # lean-ctx-bin
 
-Pre-built binary distribution of [lean-ctx](https://github.com/yvgude/lean-ctx) — the Cognitive Filter for AI Engineering.
+Pre-built binary distribution of [lean-ctx](https://github.com/yvgude/lean-ctx) — the Cognitive Context Layer for AI coding agents.
 
 No Rust toolchain required. The correct binary for your platform is downloaded automatically during `npm install`.
 

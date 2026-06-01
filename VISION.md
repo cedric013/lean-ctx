@@ -1,10 +1,10 @@
 # LeanCTX Vision
 
-## The Cognitive Filter
+## The Cognitive Context Layer
 
 In 2026, we've moved past "just sending a prompt." High performance with LLMs isn't about bigger context windows — it's about **Information Density**.
 
-LeanCTX is the **Intelligence Buffer** between human and machine. Not a proxy. Not a wrapper. A **Cognitive Filter** that ensures every token reaching the LLM carries maximum signal. Every byte of noise stripped away is a byte of reasoning gained.
+LeanCTX is the **Cognitive Context Layer** between your AI and your code — a cognitive filter and intelligence buffer in one. Not a proxy. Not a wrapper. It ensures every token reaching the LLM carries maximum signal. Every byte of noise stripped away is a byte of reasoning gained.
 
 > The winners won't be those who can afford 1M token contexts.
 > They'll be those who achieve the same result with 10K.
@@ -108,9 +108,9 @@ LeanCTX delivers strong coverage of Dimensions 1 and 3, with foundations for 2 a
 - Works with 30+ AI tools: Cursor, Claude Code, Copilot, Windsurf, Pi, Codex, Gemini, Kiro, Cline, JetBrains, Amp, Crush, Antigravity, OpenCode, OpenClaw, Hermes, and more
 - Single Rust binary, zero telemetry, local-first
 
-## Where We're Going — Context OS
+## Where We're Going
 
-LeanCTX is evolving from a Context Layer into a **Context OS for AI Development** — a lightweight operating system for everything between code/infrastructure and LLMs.
+LeanCTX is evolving from a single context layer into a full **cognitive context layer** for everything between code/infrastructure and LLMs.
 
 ### Strategic Leaps
 

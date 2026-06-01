@@ -187,6 +187,6 @@ LEAN_CTX_DISABLED_TOOLS=ctx_graph,ctx_benchmark pi
 
 ## Links
 
-- [lean-ctx](https://leanctx.com) — The Cognitive Filter for AI Engineering
+- [lean-ctx](https://leanctx.com) — the Cognitive Context Layer for AI coding agents
 - [GitHub](https://github.com/yvgude/lean-ctx)
 - [Discord](https://discord.gg/pTHkG9Hew9)

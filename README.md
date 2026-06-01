@@ -9,7 +9,7 @@
 ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝     ╚═════╝   ╚═╝   ╚═╝  ╚═╝
 </pre>
 
-**The Context OS for AI Development**
+**The Cognitive Context Layer for AI coding agents**
 
 Your AI coding agent wastes thousands of tokens rereading files, parsing noisy
 shell output, and losing context between sessions — and you have no control
@@ -52,7 +52,7 @@ right fidelity, and **verifies** what comes back. Zero config required. Local-fi
 
 ---
 
-> **LeanCTX** stands for **Lean Context**: a lightweight cognitive layer that helps AI agents perceive, compress, remember, route, and reuse context across workflows.
+> **LeanCTX** is the **Cognitive Context Layer** between your AI and your code: it perceives, compresses, remembers, routes, and governs every token that flows between them — all from one local Rust binary.
 
 > It governs every token between your code and the AI — so you make better decisions, not just cheaper ones. Works with **Cursor, Claude Code, Copilot, Windsurf, Codex, Gemini** and 24+ other agents — no config needed.
 
@@ -113,7 +113,7 @@ Your AI agent reads files and runs commands. LeanCTX compresses both automatical
 
 - **File reads**: 10 modes (`full`, `map`, `signatures`, `diff`, `lines:N-M`) — cached re-reads cost ~13 tokens
 - **Shell output**: 56 pattern modules compress git, npm, cargo, docker, kubectl, terraform and more (270 passthrough rules)
-- **Tree-sitter AST**: structural understanding for 21 languages — not just text compression
+- **Tree-sitter AST**: structural understanding for 18 languages — not just text compression
 
 ### 2. Routing — the right fidelity per read
 
@@ -153,11 +153,11 @@ Performance is accuracy, not just speed. You stay in control of the window.
 
 </details>
 
-## Where it's going — the Context OS
+## Where it's going
 
-LeanCTX is growing from a context *layer* into a lightweight **Context OS for AI
-development**: version-controlled context strategy, one unified graph, and a
-governance layer for whole teams of agents.
+LeanCTX is growing from a single context *layer* into a full **cognitive context
+layer** for whole teams: version-controlled context strategy, one unified graph, and a
+governance layer across many agents.
 
 - **Context as Code** — declarative pipelines, profiles, and policies in TOML, versioned like infrastructure
 - **Unified Context Graph** — code, tests, commits, CI runs, and knowledge entries in a single semantic graph
