@@ -65,6 +65,19 @@ impl TaskClassifier {
         if k.is_empty() {
             return TaskCategory::General;
         }
+
+        // lean-ctx records its own activity as "commands" too: MCP tool calls
+        // (`ctx_*`) and CLI read-mode / hook keys (`cli_*`). Route those through the
+        // tool/mode classifier so reads land in Exploration, edits in Refactoring, etc.
+        // — instead of collapsing everything into General (the shell heuristics below
+        // only understand real shell commands like git/cargo/grep).
+        if k.starts_with("ctx_") {
+            return Self::classify_tool(&k);
+        }
+        if let Some(mode) = k.strip_prefix("cli_") {
+            return Self::classify_cli_mode(mode);
+        }
+
         if k.starts_with("git ") || k == "git" {
             return TaskCategory::Git;
         }
@@ -103,6 +116,20 @@ impl TaskClassifier {
 
         TaskCategory::General
     }
+
+    /// Classifies a CLI command key with the `cli_` prefix already stripped. These are the
+    /// shell-hook compression modes: read/inspect modes and search map to Exploration; the
+    /// catch-all `shell` bucket aggregates arbitrary shell commands, so it stays General.
+    fn classify_cli_mode(mode: &str) -> TaskCategory {
+        match mode {
+            "grep" | "rg" | "ripgrep" | "search" | "find" | "ls" | "tree" => {
+                TaskCategory::Exploration
+            }
+            "full" | "map" | "signatures" | "aggressive" | "entropy" | "diff" | "lines"
+            | "reference" | "task" | "auto" | "outline" | "read" => TaskCategory::Exploration,
+            _ => TaskCategory::General,
+        }
+    }
 }
 
 fn normalize(s: &str) -> String {
@@ -126,6 +153,61 @@ mod tests {
         assert_eq!(
             TaskClassifier::classify_tool("ctx_semantic_search"),
             TaskCategory::Architecture
+        );
+    }
+
+    #[test]
+    fn ctx_command_keys_route_through_tool_classifier() {
+        // The regression behind the "everything is General" task breakdown: lean-ctx's own
+        // tool/mode command keys must not collapse into General.
+        assert_eq!(
+            TaskClassifier::classify_command_key("ctx_search"),
+            TaskCategory::Exploration
+        );
+        assert_eq!(
+            TaskClassifier::classify_command_key("ctx_read"),
+            TaskCategory::Exploration
+        );
+        assert_eq!(
+            TaskClassifier::classify_command_key("ctx_edit"),
+            TaskCategory::Refactoring
+        );
+        assert_eq!(
+            TaskClassifier::classify_command_key("ctx_knowledge"),
+            TaskCategory::Knowledge
+        );
+    }
+
+    #[test]
+    fn cli_mode_keys_are_classified() {
+        assert_eq!(
+            TaskClassifier::classify_command_key("cli_grep"),
+            TaskCategory::Exploration
+        );
+        assert_eq!(
+            TaskClassifier::classify_command_key("cli_full"),
+            TaskCategory::Exploration
+        );
+        assert_eq!(
+            TaskClassifier::classify_command_key("cli_signatures"),
+            TaskCategory::Exploration
+        );
+        // The mixed shell bucket stays General (it aggregates arbitrary commands).
+        assert_eq!(
+            TaskClassifier::classify_command_key("cli_shell"),
+            TaskCategory::General
+        );
+    }
+
+    #[test]
+    fn real_shell_commands_still_classify() {
+        assert_eq!(
+            TaskClassifier::classify_command_key("cargo build"),
+            TaskCategory::BuildDeploy
+        );
+        assert_eq!(
+            TaskClassifier::classify_command_key("git status"),
+            TaskCategory::Git
         );
     }
 }

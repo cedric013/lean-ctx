@@ -92,7 +92,7 @@ Every CLI command lean-ctx exposes, grouped by purpose. Source of truth:
 | `stop` | Stop ALL lean-ctx processes (LaunchAgent-safe) |
 | `restart` | Restart daemon (apply config.toml) |
 | `dev-install` | Build release + atomic install + restart (dev) |
-| `uninstall` | Remove everything; `--dry-run`, `--keep-config` |
+| `uninstall` | Stop processes + remove configs, autostart, data, **and the binary**; `--dry-run`, `--keep-config`, `--keep-binary` |
 | `cache` | Read cache: `stats`, `clear`, `reset`, `invalidate`, `prune` |
 | `harden` | Harden native read/grep in MCP configs; `--hard`, `--undo` |
 

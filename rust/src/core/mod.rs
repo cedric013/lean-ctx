@@ -356,6 +356,7 @@ pub mod sandbox_landlock;
 pub mod sandbox_seatbelt;
 pub mod sanitize;
 pub mod savings_footer;
+pub mod savings_ledger;
 pub mod search_delta;
 pub mod search_index;
 pub mod secret_detection;
@@ -382,6 +383,8 @@ pub mod visualizer;
 pub mod workflow;
 pub mod workspace_config;
 pub mod wrapped;
+pub mod wrapped_share;
+pub mod wrapped_svg;
 
 // ---------------------------------------------------------------------------
 // Feature-gated modules

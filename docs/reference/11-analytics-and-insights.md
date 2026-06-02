@@ -43,11 +43,17 @@ lean-ctx gain                      # headline savings summary
 | `--tasks` | savings grouped by task |
 | `--agents` | savings grouped by agent (see Journey 8) |
 | `--heatmap` | which files/commands save the most |
-| `--wrapped` | "Spotify Wrapped"-style recap |
+| `--wrapped` | "Spotify Wrapped"-style recap (terminal) |
+| `--svg` (`--card`) | the Wrapped recap as a shareable SVG (social/OG image) → `lean-ctx-wrapped.svg` |
+| `--share` (`--page`) | a self-hostable HTML share page (SVG embedded inline) → `lean-ctx-wrapped.html` |
 | `--pipeline` | provider-pipeline processing stats |
 | `--deep` | everything: report + tasks + cost + agents + heatmap |
 | `--json` | machine-readable (for scripts/CI) |
 | `--reset` | clear all savings data |
+
+`--svg`/`--share` accept an optional path (`--svg=card.svg`, `--share=out.html`) and
+respect `--period`. `--share` also takes `--base-url=https://…` to emit absolute
+Open Graph / Twitter image meta for link unfurling (see §2).
 
 Refinements: `--model <name>` (price against a specific model), `--period <p>`
 (time window, default `all`), `--limit <n>` (rows, default 10).
@@ -57,14 +63,67 @@ Refinements: `--model <name>` (price against a specific model), `--period <p>`
 
 ---
 
-## 2. `wrapped` — the shareable recap
+## 2. Sharing & proof — `wrapped`, share cards, and the verified `savings` ledger
+
+### 2.1 `wrapped` — the shareable recap
 
 ```bash
 lean-ctx wrapped                   # (also: lean-ctx gain --wrapped)
+lean-ctx gain --wrapped --period=month
 ```
 
 A celebratory, screenshot-friendly summary of tokens/cost saved over a period —
 good for sharing with your team or justifying the tool to a lead.
+
+### 2.2 Share cards — `--svg` and `--share`
+
+```bash
+lean-ctx gain --svg                                  # -> lean-ctx-wrapped.svg
+lean-ctx gain --share                                # -> lean-ctx-wrapped.html
+lean-ctx gain --share --base-url=https://you.dev/w   # + social preview meta
+```
+
+- `--svg` renders the recap as a dependency-free 1200×630 SVG (perfect as a social
+  / OpenGraph image; convert to PNG with any SVG tool).
+- `--share` emits a **self-contained, self-hostable** HTML page with the SVG
+  embedded inline (renders offline, anywhere). Host it wherever you like — your
+  site, a gist, GitHub Pages — and that URL *is* the permalink. lean-ctx uploads
+  nothing; this is an opt-in artifact, consistent with the zero-telemetry default.
+- With `--base-url`, the page gains Open Graph / Twitter meta so the link unfurls
+  into a rich card (point it at a hosted PNG render of the SVG, since networks
+  don't render SVG `og:image`).
+
+### 2.3 `savings` — the verified savings ledger (auditable)
+
+```bash
+lean-ctx savings                   # summary: gross, bounce, net, tokenizer, integrity
+lean-ctx savings verify            # re-walk the SHA-256 hash chain (tamper-evidence)
+lean-ctx savings export            # every event as JSON
+```
+
+Where `gain`/`wrapped` show **aggregate** savings, `savings` is the **per-event,
+auditable** record behind them. Every value-producing read appends one append-only
+event to `~/.lean-ctx/savings/ledger.jsonl` capturing the counterfactual
+(`baseline` vs `actual` tokens), the resolved pricing model, the **tokenizer** that
+produced the counts (`o200k_base`), a privacy-preserving repo hash, and a SHA-256
+`prev → entry` hash chain. It is **local-only and on by default** (opt out with
+`LEAN_CTX_SAVINGS_LEDGER=off`).
+
+Honesty is the point of the ledger:
+
+- **Tokenizer transparency** — counts use `o200k_base` as a proxy; your model's own
+  tokenizer may differ a few percent, so the tokenizer is recorded explicitly
+  rather than assumed.
+- **Bounce-netting** — when a compressed read is later invalidated by a full
+  re-read ("bounce"), a negative adjustment is recorded so totals show the
+  **realized** saving, not a gross upper bound. `gain --wrapped` nets the same
+  bounce out of its headline, and the ledger summary shows gross → bounce → net.
+- **Tamper-evidence** — `savings verify` recomputes the chain end to end; any
+  edited, reordered, inserted, or removed entry is detected.
+
+> Why a separate ledger? It is the trusted substrate for value-based reporting:
+> a number you can hand to a finance team and have it survive scrutiny. See
+> `docs/business/03-verified-savings-ledger.md`.
 
 ---
 
@@ -216,7 +275,9 @@ transcripts so long histories don't bloat the data dir.
 | You want… | Reach for |
 |-----------|-----------|
 | Headline savings | `gain` (§1) |
-| A shareable recap | `wrapped` (§2) |
+| A shareable recap | `wrapped` (§2.1) |
+| A social/OG image or hostable page | `gain --svg` / `gain --share` (§2.2) |
+| An auditable, per-event savings record | `savings` (§2.3) |
 | Tokens **and** memory footprint | `token-report` (§3) |
 | Where am I still wasting tokens? | `discover`, `ghost` (§4) |
 | Is lean-ctx slowing me down? | `slow-log` (§5) |
@@ -234,6 +295,7 @@ transcripts so long histories don't bloat the data dir.
 | Path | Contents |
 |------|----------|
 | `~/.lean-ctx/` stats store | savings/usage that `gain`/`stats` read |
+| `~/.lean-ctx/savings/ledger.jsonl` | verified per-event savings ledger (`savings`) |
 | `~/.lean-ctx/pipeline_stats.json` | provider-pipeline stats (`gain --pipeline`) |
 | tee logs | captured full command outputs |
 | gotchas/bug memory | recorded footguns |

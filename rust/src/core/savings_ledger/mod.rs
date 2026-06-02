@@ -1,0 +1,187 @@
+//! Verified Savings Ledger (G1) — the per-event, auditable counterfactual store.
+//!
+//! Local-only and on by default (set `LEAN_CTX_SAVINGS_LEDGER=off` to disable). It never
+//! leaves the machine; opt-in org roll-up + cryptographic signing are later phases. See
+//! `docs/business/03-verified-savings-ledger.md`.
+
+pub mod event;
+pub mod store;
+
+pub use event::SavingsEvent;
+pub use store::{LedgerSummary, VerifyResult};
+
+use std::sync::OnceLock;
+
+fn enabled() -> bool {
+    enabled_from(std::env::var("LEAN_CTX_SAVINGS_LEDGER").ok().as_deref())
+}
+
+/// Pure opt-out logic (testable without mutating process env). Enabled unless explicitly
+/// set to a falsy value.
+fn enabled_from(value: Option<&str>) -> bool {
+    match value {
+        Some(v) => !matches!(
+            v.trim().to_lowercase().as_str(),
+            "off" | "0" | "false" | "no"
+        ),
+        None => true,
+    }
+}
+
+/// Resolved (model_key, input_price_per_m) for this process. The active model is stable
+/// within a process, so we resolve the pricing table once.
+fn model_and_price() -> &'static (String, f64) {
+    static CACHE: OnceLock<(String, f64)> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        let env_model = std::env::var("LEAN_CTX_MODEL")
+            .or_else(|_| std::env::var("LCTX_MODEL"))
+            .ok();
+        let quote =
+            crate::core::gain::model_pricing::ModelPricing::load().quote(env_model.as_deref());
+        (quote.model_key, quote.cost.input_per_m)
+    })
+}
+
+/// Privacy-preserving repo attribution: truncated SHA-256 of the process working
+/// directory. Never the file path or contents. Process-scoped (cached once).
+fn repo_hash() -> &'static str {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        use sha2::{Digest, Sha256};
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut hasher = Sha256::new();
+        hasher.update(cwd.as_bytes());
+        let hex = format!("{:x}", hasher.finalize());
+        hex.get(..16).unwrap_or(&hex).to_string()
+    })
+}
+
+fn agent_id() -> &'static str {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        std::env::var("LEAN_CTX_AGENT_ID")
+            .or_else(|_| std::env::var("LCTX_AGENT_ID"))
+            .unwrap_or_else(|_| "local".to_string())
+    })
+}
+
+/// The tokenizer family that produced the token counts we record (G2). Resolved once.
+fn tokenizer() -> &'static str {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(crate::core::tokens::counting_family_label)
+}
+
+/// Shared event skeleton with the per-process attribution + pricing context filled in.
+/// Chain hashes are computed by `store::append`.
+fn new_event(tool: &str) -> SavingsEvent {
+    let (model_id, price_per_m) = model_and_price();
+    SavingsEvent {
+        ts: chrono::Utc::now().to_rfc3339(),
+        tool: tool.to_string(),
+        model_id: model_id.clone(),
+        tokenizer: tokenizer().to_string(),
+        baseline_tokens: 0,
+        actual_tokens: 0,
+        saved_tokens: 0,
+        bounce_adjustment: 0,
+        unit_price_per_m_usd: *price_per_m,
+        saved_usd: 0.0,
+        repo_hash: repo_hash().to_string(),
+        agent_id: agent_id().to_string(),
+        prev_hash: String::new(),
+        entry_hash: String::new(),
+    }
+}
+
+/// Best-effort append of one auditable savings event for a value-producing read.
+/// Skips zero-saving events (keeps the ledger meaningful and cheap) and never panics.
+pub fn record_read_event(original_tokens: usize, saved_tokens: usize) {
+    if saved_tokens == 0 || !enabled() {
+        return;
+    }
+    let Some(path) = store::default_path() else {
+        return;
+    };
+    let baseline = original_tokens as u64;
+    let saved = saved_tokens as u64;
+
+    let mut event = new_event("ctx_read");
+    event.baseline_tokens = baseline;
+    event.actual_tokens = baseline.saturating_sub(saved);
+    event.saved_tokens = saved;
+    event.saved_usd = saved as f64 / 1_000_000.0 * event.unit_price_per_m_usd;
+    let _ = store::append(&path, event);
+}
+
+/// Best-effort append of a *bounce* event (G7): a compressed read later invalidated by a
+/// full re-read, so the earlier saving was (partly) illusory. Recorded as a negative
+/// adjustment with `tool = "bounce"` so totals net out without editing the original entry.
+pub fn record_bounce_event(wasted_tokens: usize) {
+    if wasted_tokens == 0 || !enabled() {
+        return;
+    }
+    let Some(path) = store::default_path() else {
+        return;
+    };
+    let wasted = wasted_tokens as u64;
+
+    let mut event = new_event("bounce");
+    event.baseline_tokens = wasted;
+    event.actual_tokens = wasted;
+    event.bounce_adjustment = wasted;
+    event.saved_usd = -(wasted as f64 / 1_000_000.0 * event.unit_price_per_m_usd);
+    let _ = store::append(&path, event);
+}
+
+/// Total bounce-adjusted tokens recorded, optionally limited to the last `days` (by event
+/// timestamp). `None` = all time. Used to net the Wrapped headline per period.
+pub fn bounce_tokens(days: Option<u32>) -> u64 {
+    let Some(path) = store::default_path() else {
+        return 0;
+    };
+    store::bounce_tokens_since(&path, days)
+}
+
+/// Aggregated totals + model/day/tool slices over the whole ledger.
+pub fn summary() -> LedgerSummary {
+    store::default_path()
+        .map(|p| store::summarize(&p))
+        .unwrap_or_default()
+}
+
+/// Re-walks the hash chain and reports whether it is intact.
+pub fn verify() -> VerifyResult {
+    store::default_path().map_or_else(VerifyResult::empty, |p| store::verify(&p))
+}
+
+/// Every recorded event (for `ledger export`).
+pub fn all_events() -> Vec<SavingsEvent> {
+    store::default_path()
+        .map(|p| store::load(&p))
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opt_out_logic_is_correct() {
+        assert!(enabled_from(None), "enabled by default when unset");
+        assert!(enabled_from(Some("on")));
+        assert!(enabled_from(Some("1")));
+        assert!(!enabled_from(Some("off")));
+        assert!(!enabled_from(Some("0")));
+        assert!(!enabled_from(Some("false")));
+        assert!(!enabled_from(Some(" No ")), "trim + case-insensitive");
+    }
+
+    #[test]
+    fn repo_hash_is_truncated_hex() {
+        let h = repo_hash();
+        assert_eq!(h.len(), 16);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+}

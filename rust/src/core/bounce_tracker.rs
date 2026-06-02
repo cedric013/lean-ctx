@@ -28,6 +28,10 @@ pub struct BounceTracker {
     seq_counter: u64,
     total_bounces: u64,
     total_wasted_tokens: usize,
+    /// When true (only for the process-global tracker), detected bounces are appended to
+    /// the persistent savings ledger so a fresh `gain` process sees historical bounce.
+    /// Local trackers in unit tests leave this `false` to avoid touching the real ledger.
+    persist: bool,
 }
 
 fn is_compressed_mode(mode: &str) -> bool {
@@ -97,14 +101,19 @@ impl BounceTracker {
 
         if let Some(ev) = events.iter().next_back() {
             if ev.was_compressed && full_seq.saturating_sub(ev.seq) <= BOUNCE_WINDOW {
+                let wasted = ev.tokens_sent;
                 self.total_bounces += 1;
-                self.total_wasted_tokens += ev.tokens_sent;
+                self.total_wasted_tokens += wasted;
 
                 let ext = extension_of(norm_path);
                 if !ext.is_empty() {
                     let stats = self.per_extension.entry(ext).or_default();
                     stats.bounces += 1;
-                    stats.wasted_tokens += ev.tokens_sent;
+                    stats.wasted_tokens += wasted;
+                }
+
+                if self.persist {
+                    crate::core::savings_ledger::record_bounce_event(wasted);
                 }
             }
         }
@@ -226,7 +235,16 @@ impl BounceTracker {
 static GLOBAL_TRACKER: OnceLock<Mutex<BounceTracker>> = OnceLock::new();
 
 pub fn global() -> &'static Mutex<BounceTracker> {
-    GLOBAL_TRACKER.get_or_init(|| Mutex::new(BounceTracker::new()))
+    GLOBAL_TRACKER.get_or_init(|| {
+        // Seed from the persistent ledger so every process (including a fresh `gain`)
+        // accounts for historical bounce, then mark this tracker as the persisting one.
+        let summary = crate::core::savings_ledger::summary();
+        let mut bt = BounceTracker::new();
+        bt.total_wasted_tokens = summary.bounce_tokens as usize;
+        bt.total_bounces = summary.bounce_events as u64;
+        bt.persist = true;
+        Mutex::new(bt)
+    })
 }
 
 #[cfg(test)]

@@ -87,6 +87,10 @@ pub fn run() {
                 cmd_gain(&rest);
                 return;
             }
+            "savings" => {
+                cmd_savings(&rest);
+                return;
+            }
             "token-report" | "report-tokens" => {
                 let code = token_report::run_cli(&rest);
                 if code != 0 {
@@ -498,7 +502,8 @@ pub fn run() {
             "uninstall" => {
                 let dry_run = rest.iter().any(|a| a == "--dry-run");
                 let keep_config = rest.iter().any(|a| a == "--keep-config");
-                uninstall::run(dry_run, keep_config);
+                let keep_binary = rest.iter().any(|a| a == "--keep-binary");
+                uninstall::run(dry_run, keep_config, keep_binary);
                 return;
             }
             "bypass" => {

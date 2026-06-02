@@ -144,6 +144,10 @@ fn save_to_disk(hm: &HeatMap) -> std::io::Result<()> {
 }
 
 pub fn record_file_access(file_path: &str, original_tokens: usize, saved_tokens: usize) {
+    // Universal per-read chokepoint (CLI via tool_lifecycle, MCP via ctx_read/ctx_multi_read):
+    // also append one auditable savings event. Best-effort; never blocks/breaks the read.
+    crate::core::savings_ledger::record_read_event(original_tokens, saved_tokens);
+
     let file_path = std::fs::canonicalize(file_path).map_or_else(
         |_| file_path.to_string(),
         |p| p.to_string_lossy().into_owned(),

@@ -150,8 +150,15 @@ lean-ctx gain --live         # live-updating
 lean-ctx gain --graph        # trend graph
 lean-ctx gain --daily        # per-day breakdown
 lean-ctx gain --wrapped      # "year in review" summary
+lean-ctx gain --svg          # shareable SVG card (social/OG image)
+lean-ctx gain --share        # self-hostable HTML share page (opt-in permalink)
 lean-ctx gain --json         # machine-readable
 ```
+
+For an **auditable, per-event** record behind these aggregates — with tokenizer
+transparency, bounce-netting, and a tamper-evident SHA-256 chain — use
+`lean-ctx savings` (and `lean-ctx savings verify`). It's local-only and on by
+default; see Journey 11 §2.3.
 
 **Empty state:** a fresh install shows "No savings recorded yet — and that's
 expected," with next steps. Savings accrue as your AI uses the `ctx_*` tools;

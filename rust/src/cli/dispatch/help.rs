@@ -116,7 +116,11 @@ COMMANDS:
     gain --live                    Live mode: auto-refreshes every 1s in-place
     gain --graph                   30-day savings chart
     gain --daily                   Bordered day-by-day table with USD
+    gain --wrapped                 Shareable Wrapped card (terminal)
+    gain --svg [=<path>]           Shareable Wrapped card as SVG (social/OG image)
+    gain --share [=<path>]         Self-hostable Wrapped page (HTML, opt-in permalink)
     gain --json                    Raw JSON export of all stats
+    savings [summary|verify|export] Verified per-event savings ledger (local, auditable)
          token-report [--json]          Token + memory report (project + session + CEP)
     pack --pr                      PR Context Pack (changed files, impact, tests, artifacts)
     index <status|build|build-full|watch>  Codebase index utilities
@@ -190,7 +194,11 @@ COMMANDS:
                                    Manage lean-ctx plugins
     rules sync|diff|lint|status|init
                                    ContextOps: cross-agent rules governance
-    uninstall [--keep-config]       Remove all lean-ctx artifacts (--keep-config preserves MCP/rules)
+    uninstall [--keep-config] [--keep-binary] [--dry-run]
+                                   Full clean removal: stops all processes, removes hooks,
+                                   MCP configs, rules, autostart, data, AND the binary itself.
+                                   --keep-config preserves MCP/rules · --keep-binary keeps the
+                                   binary · --dry-run previews without changing anything
 
 SHELL HOOK PATTERNS (95+):
     git       status, log, diff, add, commit, push, pull, fetch, clone,
@@ -245,6 +253,12 @@ EXAMPLES:
     lean-ctx dashboard --host=0.0.0.0  Bind to all interfaces (remote access)
     lean-ctx gain --wrapped        Wrapped report card (recommended)
     lean-ctx gain --wrapped --period=month  Monthly Wrapped report card
+    lean-ctx gain --svg            Shareable SVG card -> lean-ctx-wrapped.svg
+    lean-ctx gain --svg=card.svg --period=month  Monthly SVG card to a chosen path
+    lean-ctx gain --share          Self-hostable Wrapped page -> lean-ctx-wrapped.html
+    lean-ctx gain --share --base-url=https://you.dev/w  Page with social preview meta
+    lean-ctx savings               Verified per-event savings ledger (auditable)
+    lean-ctx savings verify        Re-check the savings ledger SHA-256 hash chain
     lean-ctx sessions list         List all CCP sessions
     lean-ctx sessions show         Show latest session state
     lean-ctx discover              Find missed savings in shell history

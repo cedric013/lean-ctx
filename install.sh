@@ -5,10 +5,14 @@
 #   ./install.sh                # download pre-built binary (no Rust needed)
 #   ./install.sh --download     # download pre-built binary (no Rust needed)
 #   ./install.sh --build-only   # build only, don't install
+#   ./install.sh --uninstall    # fully remove lean-ctx (processes, configs, autostart, data, binary)
 #
 # One-liner (no Rust required):
 #   curl -fsSL https://leanctx.com/install.sh | sh
 #   curl -fsSL https://leanctx.com/install.sh | bash
+#
+# Uninstall one-liner:
+#   curl -fsSL https://leanctx.com/install.sh | sh -s -- --uninstall
 
 set -eu
 
@@ -214,15 +218,62 @@ install_from_source() {
   finish
 }
 
+uninstall() {
+  echo "Mode: uninstall"
+  echo ""
+
+  # The binary's own `uninstall` does the thorough cleanup — stops every process, then
+  # removes hooks, MCP configs, rules, autostart (LaunchAgent/systemd), data, and the
+  # binary itself. Prefer it; forward any extra flags (e.g. --keep-config, --dry-run).
+  if command -v lean-ctx >/dev/null 2>&1; then
+    lean-ctx uninstall "$@" || true
+  else
+    echo "lean-ctx not on PATH — removing known artifacts directly."
+    if [ "$(uname -s)" = "Darwin" ]; then
+      for label in com.leanctx.proxy com.leanctx.daemon; do
+        plist="$HOME/Library/LaunchAgents/$label.plist"
+        [ -f "$plist" ] && launchctl unload "$plist" 2>/dev/null || true
+        rm -f "$plist" 2>/dev/null || true
+      done
+    else
+      for svc in lean-ctx-proxy lean-ctx-daemon; do
+        systemctl --user disable --now "$svc" 2>/dev/null || true
+        rm -f "$HOME/.config/systemd/user/$svc.service" 2>/dev/null || true
+      done
+      systemctl --user daemon-reload 2>/dev/null || true
+    fi
+    rm -rf "$HOME/.lean-ctx" "$HOME/.config/lean-ctx" 2>/dev/null || true
+    echo "  Removed autostart + data dir."
+    echo "  (Reinstall the binary and run 'lean-ctx uninstall' for full editor-config cleanup.)"
+  fi
+
+  # Belt-and-suspenders: ensure the binary + PATH symlinks install.sh created are gone,
+  # even if the self-delete failed or the binary was never on PATH.
+  for b in "$INSTALL_DIR/lean-ctx" "/usr/local/bin/lean-ctx"; do
+    if [ -e "$b" ] || [ -L "$b" ]; then
+      rm -f "$b" 2>/dev/null && echo "  Removed $b" || true
+    fi
+  done
+
+  echo ""
+  echo "lean-ctx uninstalled. Restart your shell to drop stale aliases."
+  echo "Verify with: command -v lean-ctx   # should print nothing"
+}
+
 case "${1:-}" in
   --download)    install_download ;;
   --build-only)  install_from_source --build-only ;;
+  --uninstall)   shift; uninstall "$@" ;;
   --help|-h)
-    echo "Usage: $0 [--download|--build-only|--help]"
+    echo "Usage: $0 [--download|--build-only|--uninstall|--help]"
     echo ""
     echo "  (no args)     Download pre-built binary (builds from source if run inside the lean-ctx repo)"
     echo "  --download    Download pre-built binary (no Rust needed)"
     echo "  --build-only  Build only, don't install"
+    echo "  --uninstall   Fully remove lean-ctx (processes, configs, autostart, data, binary)"
+    echo ""
+    echo "Uninstall one-liner:"
+    echo "  curl -fsSL https://leanctx.com/install.sh | sh -s -- --uninstall"
     echo ""
     echo "Environment:"
     echo "  LEAN_CTX_INSTALL_DIR  Custom install directory (default: ~/.local/bin)"

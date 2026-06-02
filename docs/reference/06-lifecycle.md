@@ -76,31 +76,41 @@ restarts — updates install in the background and take effect on next launch.
 ## 2. `lean-ctx uninstall` — clean removal
 
 ```bash
-lean-ctx uninstall                 # remove everything lean-ctx wrote
+lean-ctx uninstall                 # full removal: processes, configs, autostart, data, binary
 lean-ctx uninstall --keep-config   # keep MCP configs + rules (for reinstall)
+lean-ctx uninstall --keep-binary   # remove everything except the binary
 lean-ctx uninstall --dry-run       # preview every change, write nothing
+```
+
+No binary on PATH (or you installed via `curl … | sh`)? The same removal runs
+straight from the installer:
+
+```bash
+curl -fsSL https://leanctx.com/install.sh | sh -s -- --uninstall
 ```
 
 **Under the hood** (`uninstall::run`) — removes, in order:
 
-1. Shell hook + proxy env exports (RC files cleaned surgically).
-2. MCP configs + rules files (unless `--keep-config`).
-3. Agent hook files, plan-mode settings, skill dirs, project agent files.
-4. Proxy autostart + daemon autostart (LaunchAgent/systemd).
-5. Orphaned `.lean-ctx.bak` / `.tmp` backups across all known editor dirs.
-6. The data directory (`~/.lean-ctx`, `~/.config/lean-ctx`) + project-local
+1. **Stops everything first** — daemon, proxy, and any stray `lean-ctx` processes
+   (mirrors `lean-ctx stop`; the current process and IDE-owned MCP servers are
+   excluded). This guarantees nothing respawns or holds the files we delete next.
+2. Shell hook + proxy env exports (RC files cleaned surgically).
+3. MCP configs + rules files (unless `--keep-config`).
+4. Agent hook files, plan-mode settings, skill dirs, project agent files.
+5. Proxy autostart + daemon autostart (LaunchAgent/systemd `unload` + file removal).
+6. Orphaned `.lean-ctx.bak` / `.tmp` backups across all known editor dirs.
+7. The data directory (`~/.lean-ctx`, `~/.config/lean-ctx`) + project-local
    `.lean-ctx/` and `.lean-ctx-id`.
+8. **The binary itself** (unless `--keep-binary`): the managed copy/symlink in
+   `~/.local/bin` (or `$LEAN_CTX_INSTALL_DIR`), `/usr/local/bin`, and the running
+   executable. On Unix the running binary is unlinked safely (the process keeps
+   working until exit). Package-manager and in-repo dev installs are **not** touched:
+   - cargo install → defers with `cargo uninstall lean-ctx`
+   - Homebrew → defers with `brew uninstall lean-ctx`
+   - a build under `target/release` → left alone (your repo checkout)
 
 Every edit backs up first; successful surgical edits then clean their backups.
-
-**The binary is not auto-deleted** (it may be running). It prints the right
-removal command for your install method:
-
-- cargo install → `cargo uninstall lean-ctx`
-- Homebrew → `brew uninstall lean-ctx`
-- everything else → `rm <path>`
-
-…then: `command -v lean-ctx  # should print nothing once removed`.
+Afterwards: restart your shell, then `command -v lean-ctx  # should print nothing`.
 
 ---
 

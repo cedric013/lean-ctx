@@ -146,7 +146,18 @@ fn ceil_char_boundary(s: &str, idx: usize) -> usize {
 /// Backward-compatible — equivalent to
 /// `count_tokens_for(text, TokenizerFamily::O200kBase)`.
 pub fn count_tokens(text: &str) -> usize {
-    count_tokens_for(text, TokenizerFamily::O200kBase)
+    count_tokens_for(text, COUNTING_FAMILY)
+}
+
+/// The tokenizer family [`count_tokens`] uses for all read/savings accounting.
+///
+/// Centralised so honesty surfaces (the savings ledger, Wrapped) can record exactly
+/// which tokenizer produced their token counts, rather than assuming the model's own.
+pub const COUNTING_FAMILY: TokenizerFamily = TokenizerFamily::O200kBase;
+
+/// Label of the tokenizer used for counting (e.g. `"o200k_base"`).
+pub fn counting_family_label() -> String {
+    COUNTING_FAMILY.to_string()
 }
 
 /// Counts BPE tokens using the specified tokenizer family.

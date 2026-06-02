@@ -1,4 +1,5 @@
 mod agents;
+mod binary;
 mod parsers;
 
 use std::fs;
@@ -83,7 +84,7 @@ pub(super) fn safe_remove(path: &Path, dry_run: bool) -> Result<(), std::io::Err
 // Main entry
 // ---------------------------------------------------------------------------
 
-pub fn run(dry_run: bool, keep_config: bool) {
+pub fn run(dry_run: bool, keep_config: bool, keep_binary: bool) {
     let Some(home) = dirs::home_dir() else {
         tracing::warn!("Could not determine home directory");
         return;
@@ -105,6 +106,9 @@ pub fn run(dry_run: bool, keep_config: bool) {
     if keep_config {
         println!("  Mode: keep-config (MCP configs and rules preserved for reinstall)\n");
     }
+
+    // Stop everything first so nothing respawns or holds the files/data we remove next.
+    binary::stop_processes(dry_run);
 
     let mut removed_any = false;
 
@@ -145,6 +149,10 @@ pub fn run(dry_run: bool, keep_config: bool) {
 
     removed_any |= remove_data_dir(&home, dry_run);
 
+    // Remove the binary itself last: once it's gone we can't re-exec, and on Unix the
+    // running process keeps working until exit.
+    removed_any |= binary::remove_binaries(&home, dry_run, keep_binary);
+
     println!();
 
     if removed_any {
@@ -159,14 +167,13 @@ pub fn run(dry_run: bool, keep_config: bool) {
                  Reinstall with: cargo install lean-ctx\n"
             );
         } else {
-            println!("  lean-ctx configuration removed.\n");
+            println!(
+                "  lean-ctx fully removed. Restart your shell to drop stale aliases.\n  \
+                 Verify with: command -v lean-ctx   # should print nothing\n"
+            );
         }
     } else {
         println!("  Nothing to remove — lean-ctx was not configured.\n");
-    }
-
-    if !dry_run {
-        print_binary_removal_instructions();
     }
 }
 
@@ -437,26 +444,4 @@ fn cleanup_bak_files(home: &Path) {
     if cleaned > 0 {
         println!("  ✓ Cleaned up {cleaned} backup file(s)");
     }
-}
-
-// ---------------------------------------------------------------------------
-// Binary removal instructions
-// ---------------------------------------------------------------------------
-
-fn print_binary_removal_instructions() {
-    let binary_path = std::env::current_exe()
-        .map_or_else(|_| "lean-ctx".to_string(), |p| p.display().to_string());
-
-    println!("  To complete uninstallation, remove the binary:\n");
-
-    if binary_path.contains(".cargo") {
-        println!("    cargo uninstall lean-ctx\n");
-    } else if binary_path.contains("homebrew") || binary_path.contains("Cellar") {
-        println!("    brew uninstall lean-ctx\n");
-    } else {
-        println!("    rm {binary_path}\n");
-    }
-
-    println!("  Then restart your shell, and verify it's gone:\n");
-    println!("    command -v lean-ctx   # should print nothing once removed\n");
 }

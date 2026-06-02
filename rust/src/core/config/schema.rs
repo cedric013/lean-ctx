@@ -314,6 +314,15 @@ impl ConfigSchema {
             ),
         );
         root.insert(
+            "shadow_mode".into(),
+            key_with_env(
+                "bool",
+                serde_json::json!(false),
+                "Transparently intercept native Read/Grep/Shell calls via hooks and route them through lean-ctx",
+                "LEAN_CTX_SHADOW_MODE",
+            ),
+        );
+        root.insert(
             "shell_hook_disabled".into(),
             key_with_env(
                 "bool",
@@ -723,6 +732,33 @@ impl ConfigSchema {
                 "u64",
                 serde_json::json!(cfg.autonomy.consolidate_cooldown_secs),
                 "Minimum seconds between consolidation runs",
+            ),
+        );
+        autonomy.insert(
+            "cognition_loop_enabled".into(),
+            key_with_env(
+                "bool",
+                serde_json::json!(cfg.autonomy.cognition_loop_enabled),
+                "Enable the background cognition loop (periodic knowledge consolidation)",
+                "LEAN_CTX_COGNITION_LOOP_ENABLED",
+            ),
+        );
+        autonomy.insert(
+            "cognition_loop_interval_secs".into(),
+            key_with_env(
+                "u64",
+                serde_json::json!(cfg.autonomy.cognition_loop_interval_secs),
+                "Seconds between cognition loop iterations",
+                "LEAN_CTX_COGNITION_LOOP_INTERVAL_SECS",
+            ),
+        );
+        autonomy.insert(
+            "cognition_loop_max_steps".into(),
+            key_with_env(
+                "u8",
+                serde_json::json!(cfg.autonomy.cognition_loop_max_steps),
+                "Maximum steps per cognition loop iteration",
+                "LEAN_CTX_COGNITION_LOOP_MAX_STEPS",
             ),
         );
         sections.insert(

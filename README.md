@@ -148,7 +148,8 @@ Performance is accuracy, not just speed. You stay in control of the window.
 - **Archive Full-Text Search** (`ctx_expand search_all`): FTS5-powered cross-archive search over all previously archived tool outputs
 - **PR Context Packs**: `lean-ctx pack --pr` builds a PR-ready context pack (changed files, related tests, impact, artifacts)
 - **Context Packages**: `lean-ctx pack create` bundles Knowledge + Graph + Session into portable `.ctxpkg` files with SHA-256 integrity
-- **Observability**: `lean-ctx gain --live` for real-time savings, `lean-ctx wrapped` for weekly/monthly summaries, `lean-ctx watch` for TUI monitoring
+- **Observability**: `lean-ctx gain --live` for real-time savings, `lean-ctx wrapped` for weekly/monthly summaries (`gain --svg`/`--share` for a shareable card or self-hostable page), `lean-ctx watch` for TUI monitoring
+- **Verified savings**: `lean-ctx savings` is an auditable, per-event ledger (tokenizer transparency, bounce-netting, tamper-evident SHA-256 chain) — local-only, on by default
 - **HTTP mode**: `lean-ctx serve` for Streamable HTTP MCP + `/v1/tools/call` (used by the Cookbook + SDK)
 
 </details>
@@ -369,7 +370,8 @@ Compression levels, tool profiles, themes, and rules governance.
 
 ```bash
 lean-ctx gain --deep          # savings, cost, per-agent, heatmap
-lean-ctx wrapped              # shareable recap
+lean-ctx wrapped              # shareable recap (also: gain --svg / gain --share)
+lean-ctx savings              # verified per-event ledger (auditable; savings verify)
 ```
 All analytics live in the CLI/dashboard — never burning agent tokens.
 → **[Journey 11 — Analytics & Insights](docs/reference/11-analytics-and-insights.md)**
@@ -516,15 +518,31 @@ See [SECURITY.md](SECURITY.md).
 
 ## Uninstall
 
-```bash
-lean-ctx-off       # disable immediately (current shell session)
-lean-ctx uninstall # remove hooks + editor configs + data dir
+One command removes **everything** — it stops all processes, then deletes hooks,
+editor configs, rules, autostart (LaunchAgent/systemd), the data dir, **and the
+binary itself**:
 
-# Remove the binary (pick your install method)
-brew uninstall lean-ctx
-npm uninstall -g lean-ctx-bin
-cargo uninstall lean-ctx
-pi uninstall npm:pi-lean-ctx                        # Pi Coding Agent
+```bash
+lean-ctx uninstall                 # full clean removal
+lean-ctx uninstall --dry-run       # preview every change, write nothing
+lean-ctx uninstall --keep-config   # keep MCP configs + rules (for reinstall)
+lean-ctx-off                       # or just disable for the current shell session
+```
+
+No binary on PATH (or you used the curl installer)? Run the same removal from the installer:
+
+```bash
+curl -fsSL https://leanctx.com/install.sh | sh -s -- --uninstall
+```
+
+If you installed via a package manager, `uninstall` removes everything it wrote and
+tells you the one command to finish removing the binary:
+
+```bash
+brew uninstall lean-ctx        # Homebrew
+cargo uninstall lean-ctx       # cargo install
+npm uninstall -g lean-ctx-bin  # npm
+pi uninstall npm:pi-lean-ctx   # Pi Coding Agent
 ```
 
 ## Star History

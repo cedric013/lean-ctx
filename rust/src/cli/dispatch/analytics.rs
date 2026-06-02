@@ -46,6 +46,47 @@ pub(super) fn cmd_gain(rest: &[String]) {
         })
         .unwrap_or(10);
 
+    if let Some(svg_path) = svg_target(rest) {
+        let report = core::wrapped::WrappedReport::generate(&period);
+        match std::fs::write(&svg_path, report.to_svg()) {
+            Ok(()) => println!(
+                "Wrapped card written to {svg_path}\n\
+                 Share it directly, open it in a browser, or convert to PNG with any SVG tool."
+            ),
+            Err(e) => {
+                eprintln!("Failed to write {svg_path}: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    if let Some(html_path) = share_target(rest) {
+        let report = core::wrapped::WrappedReport::generate(&period);
+        let base = base_url_arg(rest);
+        match std::fs::write(&html_path, report.to_share_html(base.as_deref())) {
+            Ok(()) => {
+                println!("Share page written to {html_path}");
+                if base.is_some() {
+                    println!(
+                        "Host it at your base URL; for social preview cards, place a PNG \
+                         (rasterise the SVG) at <base>/lean-ctx-wrapped.png."
+                    );
+                } else {
+                    println!(
+                        "Self-contained (SVG embedded) — host it anywhere to get a permalink. \
+                         Pass --base-url=https://… to emit social preview meta."
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to write {html_path}: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     if rest.iter().any(|a| a == "--graph") {
         println!("{}", core::stats::format_gain_graph());
     } else if rest.iter().any(|a| a == "--daily") {
@@ -111,6 +152,180 @@ pub(super) fn cmd_gain(rest: &[String]) {
     } else {
         println!("{}", core::stats::format_gain());
     }
+}
+
+/// Resolves the output path for the shareable SVG Wrapped card, or `None` when no
+/// card was requested. Accepts `--svg`, `--svg=<path>`, `--card`, `--card=<path>`;
+/// a bare flag falls back to `lean-ctx-wrapped.svg` in the current directory.
+fn svg_target(rest: &[String]) -> Option<String> {
+    let mut requested = false;
+    let mut path: Option<String> = None;
+    for (i, a) in rest.iter().enumerate() {
+        if let Some(v) = a
+            .strip_prefix("--svg=")
+            .or_else(|| a.strip_prefix("--card="))
+        {
+            requested = true;
+            path = Some(v.to_string());
+        } else if a == "--svg" || a == "--card" {
+            requested = true;
+            if let Some(next) = rest.get(i + 1) {
+                if !next.starts_with('-') {
+                    path = Some(next.clone());
+                }
+            }
+        }
+    }
+    requested.then(|| path.unwrap_or_else(|| "lean-ctx-wrapped.svg".to_string()))
+}
+
+/// Resolves the output path for the self-hostable HTML share page, or `None` when not
+/// requested. Accepts `--share`, `--share=<path>`, `--page`, `--page=<path>`; a bare flag
+/// falls back to `lean-ctx-wrapped.html`.
+fn share_target(rest: &[String]) -> Option<String> {
+    let mut requested = false;
+    let mut path: Option<String> = None;
+    for (i, a) in rest.iter().enumerate() {
+        if let Some(v) = a
+            .strip_prefix("--share=")
+            .or_else(|| a.strip_prefix("--page="))
+        {
+            requested = true;
+            path = Some(v.to_string());
+        } else if a == "--share" || a == "--page" {
+            requested = true;
+            if let Some(next) = rest.get(i + 1) {
+                if !next.starts_with('-') {
+                    path = Some(next.clone());
+                }
+            }
+        }
+    }
+    requested.then(|| path.unwrap_or_else(|| "lean-ctx-wrapped.html".to_string()))
+}
+
+/// Reads `--base-url=<url>` / `--base-url <url>` (the location the share page will be
+/// hosted at, used for absolute social-preview image meta).
+fn base_url_arg(rest: &[String]) -> Option<String> {
+    rest.iter().enumerate().find_map(|(i, a)| {
+        if let Some(v) = a.strip_prefix("--base-url=") {
+            return Some(v.to_string());
+        }
+        if a == "--base-url" {
+            return rest.get(i + 1).cloned();
+        }
+        None
+    })
+}
+
+pub(super) fn cmd_savings(rest: &[String]) {
+    let action = rest.first().map_or("summary", String::as_str);
+    match action {
+        "verify" => {
+            let v = core::savings_ledger::verify();
+            if v.valid {
+                println!(
+                    "Savings ledger: OK — {} event(s), SHA-256 chain intact.",
+                    v.total
+                );
+            } else {
+                println!(
+                    "Savings ledger: TAMPERED — chain broke at entry {} (of {} verified).",
+                    v.first_invalid_at.unwrap_or(0),
+                    v.total
+                );
+                std::process::exit(1);
+            }
+        }
+        "export" => {
+            let events = core::savings_ledger::all_events();
+            match serde_json::to_string_pretty(&events) {
+                Ok(json) => println!("{json}"),
+                Err(e) => {
+                    eprintln!("Export failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        "summary" | "" => print!("{}", format_savings_summary()),
+        _ => {
+            eprintln!("Usage: lean-ctx savings [summary|verify|export]");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn format_savings_summary() -> String {
+    use core::wrapped::format_tokens;
+    let s = core::savings_ledger::summary();
+    if s.total_events == 0 {
+        return "Savings ledger is empty — it fills as lean-ctx compresses your reads.\n"
+            .to_string();
+    }
+    let v = core::savings_ledger::verify();
+    let mut out = String::new();
+    out.push_str("Verified Savings Ledger (local, auditable)\n");
+    out.push_str("──────────────────────────────────────────\n");
+    out.push_str(&format!("Events:        {}\n", s.total_events));
+    if s.bounce_events > 0 {
+        out.push_str(&format!(
+            "Saved tokens:  {}  (gross)\n",
+            format_tokens(s.saved_tokens)
+        ));
+        out.push_str(&format!(
+            "Bounce:        {}  ({} compressed->full re-read(s))\n",
+            format_tokens(s.bounce_tokens),
+            s.bounce_events
+        ));
+        out.push_str(&format!(
+            "Net saved:     {}\n",
+            format_tokens(s.net_saved_tokens())
+        ));
+        out.push_str(&format!(
+            "Net (USD):     ${:.2}  (net of bounce; excludes prompt-cache discounts)\n",
+            s.saved_usd
+        ));
+    } else {
+        out.push_str(&format!(
+            "Saved tokens:  {}\n",
+            format_tokens(s.saved_tokens)
+        ));
+        out.push_str(&format!(
+            "Saved (USD):   ${:.2}  (upper bound, model input price)\n",
+            s.saved_usd
+        ));
+    }
+    if !s.tokenizers.is_empty() {
+        out.push_str(&format!("Tokenizer:     {}\n", s.tokenizers.join(", ")));
+    }
+    out.push_str(&format!(
+        "Integrity:     {}\n",
+        if v.valid {
+            "SHA-256 chain intact"
+        } else {
+            "BROKEN — run `lean-ctx savings verify`"
+        }
+    ));
+    if !s.by_model.is_empty() {
+        out.push_str("\nBy model:\n");
+        for (model, tok, usd) in s.by_model.iter().take(5) {
+            out.push_str(&format!(
+                "  {model:<22} {:>10} tok  ${usd:.2}\n",
+                format_tokens(*tok)
+            ));
+        }
+    }
+    if s.by_day.len() >= 2 {
+        out.push_str("\nRecent days:\n");
+        let recent: Vec<_> = s.by_day.iter().rev().take(7).collect();
+        for (day, tok, usd) in recent.into_iter().rev() {
+            out.push_str(&format!(
+                "  {day}  {:>10} tok  ${usd:.2}\n",
+                format_tokens(*tok)
+            ));
+        }
+    }
+    out
 }
 
 pub(super) fn cmd_graph(rest: &[String]) {
@@ -316,5 +531,86 @@ pub(super) fn cmd_compact(rest: &[String]) {
             eprintln!("Error: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base_url_arg, share_target, svg_target};
+
+    fn args(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn no_flag_means_no_card() {
+        assert_eq!(svg_target(&args(&["--wrapped", "--period=month"])), None);
+    }
+
+    #[test]
+    fn bare_flag_uses_default_path() {
+        assert_eq!(
+            svg_target(&args(&["--svg"])).as_deref(),
+            Some("lean-ctx-wrapped.svg")
+        );
+        assert_eq!(
+            svg_target(&args(&["--card"])).as_deref(),
+            Some("lean-ctx-wrapped.svg")
+        );
+    }
+
+    #[test]
+    fn explicit_path_is_used() {
+        assert_eq!(
+            svg_target(&args(&["--svg=out.svg"])).as_deref(),
+            Some("out.svg")
+        );
+        assert_eq!(
+            svg_target(&args(&["--card=c.svg"])).as_deref(),
+            Some("c.svg")
+        );
+        assert_eq!(
+            svg_target(&args(&["--svg", "chosen.svg"])).as_deref(),
+            Some("chosen.svg")
+        );
+    }
+
+    #[test]
+    fn following_flag_is_not_consumed_as_path() {
+        assert_eq!(
+            svg_target(&args(&["--svg", "--period=week"])).as_deref(),
+            Some("lean-ctx-wrapped.svg")
+        );
+    }
+
+    #[test]
+    fn share_target_resolves_paths() {
+        assert_eq!(share_target(&args(&["--wrapped"])), None);
+        assert_eq!(
+            share_target(&args(&["--share"])).as_deref(),
+            Some("lean-ctx-wrapped.html")
+        );
+        assert_eq!(
+            share_target(&args(&["--page=out.html"])).as_deref(),
+            Some("out.html")
+        );
+        assert_eq!(
+            share_target(&args(&["--share", "--base-url=https://x"])).as_deref(),
+            Some("lean-ctx-wrapped.html"),
+            "a following flag must not be eaten as the path"
+        );
+    }
+
+    #[test]
+    fn base_url_is_parsed_both_forms() {
+        assert_eq!(
+            base_url_arg(&args(&["--base-url=https://me.dev"])).as_deref(),
+            Some("https://me.dev")
+        );
+        assert_eq!(
+            base_url_arg(&args(&["--base-url", "https://me.dev"])).as_deref(),
+            Some("https://me.dev")
+        );
+        assert_eq!(base_url_arg(&args(&["--share"])), None);
     }
 }

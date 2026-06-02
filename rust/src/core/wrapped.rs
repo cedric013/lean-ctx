@@ -12,6 +12,14 @@ pub struct WrappedReport {
     pub compression_rate_pct: f64,
     pub files_touched: u64,
     pub daily_savings: Vec<u64>,
+    /// Tokens netted out of `tokens_saved` because a compressed read later bounced to a
+    /// full re-read (G7). Sourced from the persistent savings ledger for the period.
+    pub bounce_tokens: u64,
+    /// Resolved pricing model key used to value the saved tokens (e.g. "claude-3.5-sonnet").
+    pub model_key: String,
+    /// True when no model could be resolved and a blended fallback price was used.
+    /// Surfaced everywhere so an estimate is never presented as a precise figure.
+    pub pricing_estimated: bool,
 }
 
 impl WrappedReport {
@@ -19,7 +27,7 @@ impl WrappedReport {
         let store = stats::load();
         let sessions = SessionState::list_sessions();
 
-        let (tokens_saved, tokens_input, total_commands) = match period {
+        let (gross_tokens_saved, tokens_input, total_commands) = match period {
             "week" => aggregate_recent_stats(&store, 7),
             "month" => aggregate_recent_stats(&store, 30),
             _ => (
@@ -31,12 +39,30 @@ impl WrappedReport {
             ),
         };
 
+        // G7: net out compressed->full bounce recorded in the persistent ledger for this
+        // period, so the headline is the *realized* saving, not a gross upper bound.
+        let period_days = match period {
+            "week" => Some(7),
+            "month" => Some(30),
+            _ => None,
+        };
+        let bounce_tokens = crate::core::savings_ledger::bounce_tokens(period_days);
+        let tokens_saved = gross_tokens_saved.saturating_sub(bounce_tokens);
+
         let env_model = std::env::var("LEAN_CTX_MODEL")
             .or_else(|_| std::env::var("LCTX_MODEL"))
             .ok();
         let pricing = crate::core::gain::model_pricing::ModelPricing::load();
         let quote = pricing.quote(env_model.as_deref());
+        // Saved tokens would have been *input* tokens, so value them at the input rate.
+        // Still an upper bound on the bounce-adjusted figure: it ignores prompt-cache
+        // discounts. We never inflate beyond this.
         let cost_avoided_usd = quote.cost.estimate_usd(tokens_saved, 0, 0, 0);
+        let pricing_estimated = matches!(
+            quote.match_kind,
+            crate::core::gain::model_pricing::PricingMatchKind::Fallback
+        );
+        let model_key = quote.model_key.clone();
 
         let sessions_count = match period {
             "week" => count_recent_sessions(&sessions, 7),
@@ -98,7 +124,33 @@ impl WrappedReport {
             compression_rate_pct,
             files_touched,
             daily_savings,
+            bounce_tokens,
+            model_key,
+            pricing_estimated,
         }
+    }
+
+    /// One-line, conservative explanation of how the headline numbers were derived.
+    /// Reused by the ASCII footer, the compact summary, and the SVG share card so the
+    /// figure is always explainable and never over-claimed.
+    pub fn methodology_line(&self) -> String {
+        let price = if self.pricing_estimated {
+            format!(
+                "{} blended fallback price (set LEAN_CTX_MODEL for exact)",
+                self.model_key
+            )
+        } else {
+            format!("{} input price", self.model_key)
+        };
+        let basis = if self.bounce_tokens > 0 {
+            format!(
+                "measured original - compressed - {} bounce tokens",
+                format_tokens(self.bounce_tokens)
+            )
+        } else {
+            "measured original - compressed tokens".to_string()
+        };
+        format!("Savings = {basis}; USD is an upper bound at {price}")
     }
 
     /// Renders a premium, shareable "Wrapped" card. Colors are emitted only when
@@ -211,6 +263,15 @@ impl WrappedReport {
             "    {dim}\"Your AI saw only what mattered.\"{rst}   {accent}leanctx.com{rst}",
             accent = t.accent.fg(),
         ));
+        let est_marker = if self.pricing_estimated {
+            " (est.)"
+        } else {
+            ""
+        };
+        out.push(format!(
+            "    {dim}model {model}{est_marker}  ·  USD = upper bound{rst}",
+            model = self.model_key,
+        ));
         out.push(String::new());
 
         out.join("\n")
@@ -227,10 +288,15 @@ impl WrappedReport {
             .collect::<Vec<_>>()
             .join(" | ");
 
+        let est_marker = if self.pricing_estimated {
+            " (est.)"
+        } else {
+            ""
+        };
         format!(
-            "WRAPPED [{}]: {} tok saved, {} avoided, {} sessions, {} cmds | Top: {} | Compression: {:.1}%",
-            self.period, saved_str, cost_str, self.sessions_count,
-            self.total_commands, top_str, self.compression_rate_pct,
+            "WRAPPED [{}]: {} tok saved, {} avoided{}, {} sessions, {} cmds | Top: {} | Compression: {:.1}% | model={}",
+            self.period, saved_str, cost_str, est_marker, self.sessions_count,
+            self.total_commands, top_str, self.compression_rate_pct, self.model_key,
         )
     }
 }
@@ -251,7 +317,7 @@ fn count_recent_sessions(sessions: &[crate::core::session::SessionSummary], days
     sessions.iter().filter(|s| s.updated_at > cutoff).count()
 }
 
-fn format_tokens(tokens: u64) -> String {
+pub(crate) fn format_tokens(tokens: u64) -> String {
     if tokens >= 1_000_000 {
         format!("{:.1}M", tokens as f64 / 1_000_000.0)
     } else if tokens >= 1_000 {
@@ -281,6 +347,9 @@ mod tests {
             compression_rate_pct: 60.2,
             files_touched: 1_234,
             daily_savings: vec![10, 50, 30, 30, 80, 80, 20, 5, 5, 40, 60, 40, 5, 50, 15],
+            bounce_tokens: 0,
+            model_key: "claude-3.5-sonnet".into(),
+            pricing_estimated: false,
         }
     }
 
@@ -338,5 +407,44 @@ mod tests {
         let out = sample().format_compact();
         assert!(out.starts_with("WRAPPED"), "compact summary changed: {out}");
         assert!(out.contains("Compression:"));
+        assert!(
+            out.contains("model="),
+            "compact must name the pricing model: {out}"
+        );
+    }
+
+    #[test]
+    fn methodology_is_conservative_and_explainable() {
+        let m = sample().methodology_line();
+        assert!(
+            m.contains("upper bound"),
+            "must state it is an upper bound: {m}"
+        );
+        assert!(m.contains("claude-3.5-sonnet"), "must name the model: {m}");
+    }
+
+    #[test]
+    fn ascii_footer_surfaces_model_and_upper_bound() {
+        let out = sample().format_ascii();
+        assert!(
+            out.contains("model claude-3.5-sonnet"),
+            "footer must name model:\n{out}"
+        );
+        assert!(
+            out.contains("USD = upper bound"),
+            "footer must flag upper bound:\n{out}"
+        );
+    }
+
+    #[test]
+    fn estimated_pricing_is_flagged() {
+        let mut r = sample();
+        r.pricing_estimated = true;
+        assert!(
+            r.format_ascii().contains("(est.)"),
+            "estimated price must show (est.)"
+        );
+        assert!(r.format_compact().contains("(est.)"));
+        assert!(r.methodology_line().contains("fallback"));
     }
 }
