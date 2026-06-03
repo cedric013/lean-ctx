@@ -110,6 +110,7 @@ impl fmt::Display for ToolProfile {
 const MINIMAL_TOOLS: &[&str] = &[
     "ctx_read",
     "ctx_shell",
+    "shell",
     "ctx_search",
     "ctx_tree",
     "ctx_session",
@@ -119,6 +120,7 @@ const STANDARD_TOOLS: &[&str] = &[
     // Everything in minimal
     "ctx_read",
     "ctx_shell",
+    "shell",
     "ctx_search",
     "ctx_tree",
     "ctx_session",
@@ -212,13 +214,13 @@ mod tests {
     }
 
     #[test]
-    fn minimal_has_5_tools() {
-        assert_eq!(MINIMAL_TOOLS.len(), 5);
+    fn minimal_has_6_tools() {
+        assert_eq!(MINIMAL_TOOLS.len(), 6);
     }
 
     #[test]
-    fn standard_has_20_tools() {
-        assert_eq!(STANDARD_TOOLS.len(), 20);
+    fn standard_has_21_tools() {
+        assert_eq!(STANDARD_TOOLS.len(), 21);
     }
 
     #[test]

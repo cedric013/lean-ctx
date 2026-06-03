@@ -59,9 +59,9 @@ pub fn categorize_tool(name: &str) -> ToolCategory {
         | "ctx_compress_memory" => ToolCategory::Internal,
 
         // Core: always visible
-        "ctx_read" | "ctx_search" | "ctx_shell" | "ctx_tree" | "ctx_edit" | "ctx_session"
-        | "ctx_knowledge" | "ctx_overview" | "ctx_graph" | "ctx_call" | "ctx_compress"
-        | "ctx_cache" | "ctx_retrieve" => ToolCategory::Core,
+        "ctx_read" | "ctx_search" | "ctx_shell" | "shell" | "ctx_tree" | "ctx_edit"
+        | "ctx_session" | "ctx_knowledge" | "ctx_overview" | "ctx_graph" | "ctx_call"
+        | "ctx_compress" | "ctx_cache" | "ctx_retrieve" => ToolCategory::Core,
 
         // Merged tools (redirects in registry, treated as Core for backward compat)
         "ctx_multi_read" | "ctx_smart_read" | "ctx_delta" | "ctx_outline" | "ctx_context" => {

@@ -65,6 +65,7 @@ pub mod ctx_task;
 pub mod ctx_tree;
 pub mod ctx_verify;
 pub mod ctx_workflow;
+pub mod shell_alias;
 
 /// Resolve a relative path against session state (sync version).
 /// Replicates the core logic of `LeanCtxServer::resolve_path` without

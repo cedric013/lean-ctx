@@ -1,0 +1,73 @@
+use rmcp::model::Tool;
+use rmcp::ErrorData;
+use serde_json::{json, Map, Value};
+
+use crate::server::tool_trait::{get_str, McpTool, ToolContext, ToolOutput};
+use crate::tool_defs::tool_def;
+
+/// A `shell` tool alias that transparently delegates to `ctx_shell`'s compression
+/// logic. Registered conditionally for clients (like Codex Desktop) whose agent
+/// model prefers a tool named `shell` / `bash` over `ctx_shell`.
+///
+/// This solves the "Codex Desktop doesn't compress" issue (#337): the Desktop app
+/// loads the MCP server but the agent ignores `ctx_shell` and uses its native
+/// `Bash` tool instead. By providing a `shell` tool with a familiar interface,
+/// the model naturally routes commands through our compression pipeline.
+pub struct ShellAliasTool;
+
+impl McpTool for ShellAliasTool {
+    fn name(&self) -> &'static str {
+        "shell"
+    }
+
+    fn tool_def(&self) -> Tool {
+        tool_def(
+            "shell",
+            "Execute a shell command. Returns token-optimized compressed output (95+ patterns for git, npm, cargo, docker, tsc, etc). Equivalent to running the command in a terminal but with automatic output compression for efficiency.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute"
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Working directory (optional, defaults to project root)"
+                    }
+                },
+                "required": ["command"]
+            }),
+        )
+    }
+
+    fn handle(
+        &self,
+        args: &Map<String, Value>,
+        ctx: &ToolContext,
+    ) -> Result<ToolOutput, ErrorData> {
+        let command = get_str(args, "command")
+            .ok_or_else(|| ErrorData::invalid_params("command is required", None))?;
+
+        if let Some(rejection) = crate::tools::ctx_shell::validate_command(&command) {
+            return Ok(ToolOutput::simple(rejection));
+        }
+
+        if let Err(msg) = crate::core::shell_allowlist::check_shell_allowlist(&command) {
+            return Ok(ToolOutput::simple(msg));
+        }
+
+        tokio::task::block_in_place(|| {
+            let cwd = get_str(args, "cwd");
+            let mut shell_args = Map::new();
+            shell_args.insert("command".to_string(), Value::String(command));
+            if let Some(dir) = cwd {
+                shell_args.insert("cwd".to_string(), Value::String(dir));
+            }
+            // raw=false → always compress (the whole point of this alias)
+            shell_args.insert("raw".to_string(), Value::Bool(false));
+
+            crate::tools::registered::ctx_shell::CtxShellTool.handle(&shell_args, ctx)
+        })
+    }
+}
