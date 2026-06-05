@@ -76,7 +76,21 @@ pub fn apply_confidence_decay(facts: &mut [KnowledgeFact], config: &LifecycleCon
             let freq_protect = 1.0 / (1.0 + retrieval_count.ln_1p()); // 1.0 .. ~0.2
             let recency_protect = (1.0 - (days_since_retrieved / 30.0).min(1.0)).max(0.0); // 1.0 if today, 0.0 after 30d
             let protect = (freq_protect * (1.0 - 0.5 * recency_protect)).max(0.05);
-            let decay = config.decay_rate_per_day * days_since_confirmed * protect;
+            // Reward bridge: explicit thumbs-up/down feedback steers retention.
+            // Net-positive feedback scales decay down (keep longer); net-negative
+            // scales it up (forget faster). Logarithmic so a few votes matter but
+            // can't run away, and the penalty is capped so one downvote never
+            // collapses an otherwise healthy fact.
+            let net_feedback = i64::from(fact.feedback_up) - i64::from(fact.feedback_down);
+            let feedback_factor = match net_feedback.cmp(&0) {
+                std::cmp::Ordering::Greater => 1.0 / (1.0 + (net_feedback as f32).ln_1p()),
+                std::cmp::Ordering::Less => {
+                    (1.0 + (net_feedback.unsigned_abs() as f32).ln_1p()).min(4.0)
+                }
+                std::cmp::Ordering::Equal => 1.0,
+            };
+            let decay =
+                config.decay_rate_per_day * days_since_confirmed * protect * feedback_factor;
             let new_confidence = (fact.confidence - decay).max(0.05);
             if (new_confidence - fact.confidence).abs() > 0.001 {
                 fact.confidence = new_confidence;
@@ -363,6 +377,37 @@ mod tests {
 
         let count = apply_confidence_decay(&mut facts, &config);
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn feedback_steers_decay_keep_vs_forget() {
+        let config = LifecycleConfig::default();
+        let mut praised = make_old_fact("arch", "loved", "keep me", 0.9, 10);
+        praised.feedback_up = 5;
+        let mut panned = make_old_fact("arch", "hated", "forget me", 0.9, 10);
+        panned.feedback_down = 5;
+        let neutral = make_old_fact("arch", "meh", "neutral", 0.9, 10);
+
+        let mut facts = vec![praised, panned, neutral];
+        apply_confidence_decay(&mut facts, &config);
+
+        let (praised_c, panned_c, neutral_c) = (
+            facts[0].confidence,
+            facts[1].confidence,
+            facts[2].confidence,
+        );
+
+        // Reward bridge: up-voted retains more than neutral, neutral more than down-voted.
+        assert!(
+            praised_c > neutral_c,
+            "praised {praised_c} should outlast neutral {neutral_c}"
+        );
+        assert!(
+            neutral_c > panned_c,
+            "neutral {neutral_c} should outlast panned {panned_c}"
+        );
+        // Even a heavily down-voted fact only fades toward the floor — never hard-deleted.
+        assert!(panned_c >= 0.05);
     }
 
     #[test]

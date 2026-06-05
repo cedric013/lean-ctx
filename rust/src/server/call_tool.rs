@@ -753,6 +753,11 @@ impl LeanCtxServer {
         let current_count = self.call_count.load(std::sync::atomic::Ordering::Relaxed);
         if current_count > 0 && current_count.is_multiple_of(100) {
             std::thread::spawn(crate::cloud_sync::cloud_background_tasks);
+            // Self-managing memory: opportunistically consolidate knowledge in the
+            // background (time-gated + single-flight inside `maybe_run`).
+            if let Some(root) = self.session.read().await.project_root.clone() {
+                crate::core::cognition_scheduler::maybe_run(&root);
+            }
         }
 
         Ok(CallToolResult::success(vec![Content::text(result_text)]))
