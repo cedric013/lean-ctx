@@ -21,7 +21,7 @@ const STAMP: &str = ".lean-ctx-fetched";
 
 /// Ensure a fresh local checkout of `repo` exists and return its path.
 ///
-/// Reuses the cached checkout while it is younger than [`CACHE_TTL`]; otherwise
+/// Reuses the cached checkout while it is younger than the cache TTL; otherwise
 /// refreshes (or performs) a shallow fetch of the requested ref (default: the
 /// remote's `HEAD`).
 pub fn ensure_repo(repo: &RepoRef, timeout: Duration) -> Result<PathBuf, String> {
@@ -164,7 +164,8 @@ mod tests {
         let dir = repo_cache_dir(&rr("https://github.com/o/r/blob/main/x.rs")).unwrap();
         std::env::remove_var("LEAN_CTX_DATA_DIR");
 
-        let s = dir.to_string_lossy();
+        // Normalize separators so the assertion holds on Windows (`\`) too.
+        let s = dir.to_string_lossy().replace('\\', "/");
         assert!(s.contains("cache/repos/github.com/o/r/main"), "got {s}");
     }
 
@@ -175,7 +176,8 @@ mod tests {
         std::env::set_var("LEAN_CTX_DATA_DIR", &tmp);
         let dir = repo_cache_dir(&rr("https://github.com/o/r")).unwrap();
         std::env::remove_var("LEAN_CTX_DATA_DIR");
-        assert!(dir.to_string_lossy().ends_with("/_HEAD"));
+        // Component-wise check is separator-agnostic (Windows uses `\`).
+        assert!(dir.ends_with("_HEAD"), "got {}", dir.display());
     }
 
     #[test]

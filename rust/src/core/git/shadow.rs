@@ -44,6 +44,11 @@ pub fn init(project: &Path) -> Result<(), String> {
         ("core.excludesFile", exc.as_ref()),
         ("commit.gpgsign", "false"),
         ("gc.auto", "0"),
+        // Snapshots must be byte-faithful: never translate line endings, or a
+        // restore on Windows (global core.autocrlf=true) hands back CRLF for an
+        // LF source and the content no longer round-trips.
+        ("core.autocrlf", "false"),
+        ("core.safecrlf", "false"),
     ] {
         git(&["config", k, v], project, Duration::from_secs(10), &env)?.ok_stdout()?;
     }
