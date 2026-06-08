@@ -46,6 +46,10 @@ pub fn run() {
                 } else {
                     shell::join_command(cmd_args)
                 };
+                // The `lean-ctx -c` wrapper runs inside the agent shell, which
+                // carries runtime/session vars the MCP server never sees. Bridge
+                // them so ctx_shell can forward them too (#370).
+                core::agent_runtime_env::capture();
                 if std::env::var("LEAN_CTX_ACTIVE").is_ok()
                     || std::env::var("LEAN_CTX_DISABLED").is_ok()
                 {
@@ -505,6 +509,10 @@ pub fn run() {
             }
             "hook" => {
                 hook_handlers::mark_hook_environment();
+                // Hooks run inside the agent shell environment, so they can see
+                // runtime/session vars (e.g. CODEX_THREAD_ID) that the long-lived
+                // MCP server process never receives. Bridge them for ctx_shell (#370).
+                core::agent_runtime_env::capture();
                 hook_handlers::arm_watchdog(std::time::Duration::from_secs(5));
                 let action = rest.first().map_or("help", std::string::String::as_str);
                 match action {
