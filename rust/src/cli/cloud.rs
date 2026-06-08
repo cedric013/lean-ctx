@@ -606,10 +606,12 @@ pub fn cmd_cloud(args: &[String]) {
                 println!("Get started: lean-ctx login <email>");
             }
         }
+        "pull" => cmd_cloud_pull(),
         "upgrade" | "subscribe" => cloud_upgrade(&args[1..]),
         _ => {
             println!("Usage: lean-ctx cloud <command>");
             println!("  pull-models — Update adaptive compression models");
+            println!("  pull        — Restore your Personal Cloud knowledge onto this machine");
             println!("  status      — Show cloud connection status");
             println!(
                 "  upgrade     — Subscribe to Pro (Personal Cloud) or Team \
@@ -617,6 +619,109 @@ pub fn cmd_cloud(args: &[String]) {
             );
         }
     }
+}
+
+/// `lean-ctx cloud pull` — the read side of the Pro "Personal Cloud". `lean-ctx
+/// sync` pushes your knowledge to the account; this restores it onto the current
+/// machine, so your context follows you across devices. Facts are merged into the
+/// current project's local store with skip-existing semantics, so a local fact is
+/// never clobbered and re-running is idempotent. A Free account hits the 402 gate
+/// and gets the same upgrade hint as `sync`.
+fn cmd_cloud_pull() {
+    if !cloud_client::is_logged_in() {
+        eprintln!("Not logged in. Run: lean-ctx login <email>");
+        std::process::exit(1);
+    }
+
+    let project_root = std::env::current_dir()
+        .map_or_else(|_| ".".to_string(), |p| p.to_string_lossy().to_string());
+
+    println!("Pulling knowledge from LeanCTX Cloud...");
+    let entries = match cloud_client::pull_knowledge() {
+        Ok(e) => e,
+        Err(e) if pro_gate_hit(&e) => {
+            print_pro_upgrade_hint();
+            std::process::exit(1);
+        }
+        Err(e) => {
+            tracing::error!("Pull failed: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if entries.is_empty() {
+        println!(
+            "No cloud knowledge to restore yet. Run `lean-ctx sync` on another machine first."
+        );
+        return;
+    }
+
+    let facts = match parse_pulled_knowledge(&entries) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!("Could not parse pulled knowledge: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let policy = match crate::tools::knowledge_shared::load_policy_or_error() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
+    let mut knowledge = core::knowledge::ProjectKnowledge::load_or_create(&project_root);
+    let result = knowledge.import_facts(
+        facts,
+        core::knowledge::ImportMerge::SkipExisting,
+        "cloud-pull",
+        &policy,
+    );
+
+    match knowledge.save() {
+        Ok(()) => {
+            println!(
+                "  Knowledge: {} restored, {} already present (into {project_root})",
+                result.added, result.skipped
+            );
+            println!("Pull complete.");
+        }
+        Err(e) => {
+            tracing::error!("Restored {} facts but save failed: {e}", result.added);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Map the server's `{category, key, value, updated_by, updated_at}` rows onto the
+/// import schema (`value` + `source`/`timestamp` provenance) and reuse the
+/// battle-tested [`parse_import_data`] importer rather than re-deriving the
+/// `KnowledgeFact` shape here.
+fn parse_pulled_knowledge(
+    entries: &[serde_json::Value],
+) -> Result<Vec<core::knowledge::KnowledgeFact>, String> {
+    let str_field = |e: &serde_json::Value, k: &str| {
+        e.get(k)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let simple: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|e| {
+            serde_json::json!({
+                "category": str_field(e, "category"),
+                "key": str_field(e, "key"),
+                "value": str_field(e, "value"),
+                "source": e.get("updated_by").and_then(serde_json::Value::as_str),
+                "timestamp": e.get("updated_at").and_then(serde_json::Value::as_str),
+            })
+        })
+        .collect();
+    let data = serde_json::to_string(&simple).map_err(|e| e.to_string())?;
+    core::knowledge::parse_import_data(&data)
 }
 
 /// `lean-ctx cloud upgrade [--plan pro|team] [--interval monthly|yearly]` — start a
@@ -818,5 +923,39 @@ mod tests {
         assert!(parse_upgrade_args(&s(&["--interval", "weekly"])).is_err());
         assert!(parse_upgrade_args(&s(&["--plan"])).is_err());
         assert!(parse_upgrade_args(&s(&["--bogus"])).is_err());
+    }
+
+    #[test]
+    fn parse_pulled_knowledge_maps_server_rows() {
+        // The GET /api/sync/knowledge contract: {category, key, value,
+        // updated_by, updated_at}. The pull path must map these onto facts and
+        // carry provenance (updated_by -> source_session).
+        let rows = vec![
+            serde_json::json!({
+                "category": "architecture",
+                "key": "db",
+                "value": "PostgreSQL 16 with pgvector",
+                "updated_by": "me@example.com",
+                "updated_at": "2026-01-02T03:04:05Z"
+            }),
+            serde_json::json!({
+                "category": "decision",
+                "key": "auth",
+                "value": "JWT RS256"
+            }),
+        ];
+        let facts = parse_pulled_knowledge(&rows).expect("rows must parse");
+        assert_eq!(facts.len(), 2);
+        assert_eq!(facts[0].category, "architecture");
+        assert_eq!(facts[0].key, "db");
+        assert_eq!(facts[0].value, "PostgreSQL 16 with pgvector");
+        assert_eq!(facts[0].source_session, "me@example.com");
+        // Rows without updated_by fall back to the importer's default source.
+        assert_eq!(facts[1].value, "JWT RS256");
+    }
+
+    #[test]
+    fn parse_pulled_knowledge_handles_empty() {
+        assert!(parse_pulled_knowledge(&[]).unwrap().is_empty());
     }
 }
