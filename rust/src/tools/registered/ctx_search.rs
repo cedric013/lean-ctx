@@ -27,7 +27,8 @@ impl McpTool for CtxSearchTool {
                         "items": { "type": "string" },
                         "description": "Multiple directories to search (alternative to path)"
                     },
-                    "ext": { "type": "string", "description": "File extension filter" },
+                    "include": { "type": "string", "description": "File filter glob (e.g. *.ts, *.{rs,ts}, src/**/*.tsx)" },
+                    "ext": { "type": "string", "description": "Deprecated alias for `include`: a bare extension like `rs` or `.rs` is treated as `*.rs`. Prefer `include`." },
                     "max_results": { "type": "integer", "description": "Max results (default: 20)" },
                     "ignore_gitignore": { "type": "boolean", "description": "Set true to scan ALL files including .gitignore'd paths (default: false). Requires role policy (e.g. admin)." }
                 },
@@ -44,7 +45,10 @@ impl McpTool for CtxSearchTool {
         let pattern = get_str(args, "pattern")
             .ok_or_else(|| ErrorData::invalid_params("pattern is required", None))?;
         let resolved = crate::server::multi_path::resolve_tool_paths(args, ctx);
-        let ext = get_str(args, "ext");
+        // `include` is the canonical glob filter; `ext` is the deprecated alias
+        // (bare extension → `*.{ext}`). `include` wins when both are supplied.
+        let include =
+            get_str(args, "include").or_else(|| get_str(args, "ext").map(|e| ext_to_include(&e)));
         let max = (get_int(args, "max_results").unwrap_or(20) as usize).min(500);
         let no_gitignore = get_bool(args, "ignore_gitignore").unwrap_or(false);
 
@@ -63,7 +67,7 @@ impl McpTool for CtxSearchTool {
             return search_single(
                 &pattern,
                 &resolved.roots[0],
-                ext.as_deref(),
+                include.as_deref(),
                 max,
                 crp,
                 respect,
@@ -80,14 +84,14 @@ impl McpTool for CtxSearchTool {
         for root in &resolved.roots {
             let pat = pattern.clone();
             let r = root.clone();
-            let e = ext.clone();
+            let inc = include.clone();
 
             let search_result = tokio::task::block_in_place(|| {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     crate::tools::ctx_search::handle(
                         &pat,
                         &r,
-                        e.as_deref(),
+                        inc.as_deref(),
                         per_root_max,
                         crp,
                         respect,
@@ -136,7 +140,7 @@ impl McpTool for CtxSearchTool {
 fn search_single(
     pattern: &str,
     path: &str,
-    ext: Option<&str>,
+    include: Option<&str>,
     max: usize,
     crp: crate::tools::CrpMode,
     respect_gitignore: bool,
@@ -151,7 +155,7 @@ fn search_single(
             crate::tools::ctx_search::handle(
                 &pattern_clone,
                 &path_clone,
-                ext,
+                include,
                 max,
                 crp,
                 respect_gitignore,
@@ -190,4 +194,44 @@ fn search_single(
         path: Some(path.to_string()),
         changed: false,
     })
+}
+
+/// Translate the deprecated `ext` parameter into an `include` glob.
+///
+/// The historical `ext` accepted a bare extension (`rs` or `.rs`) and matched it
+/// exactly; the equivalent glob is `*.{ext}` (the `glob` crate's `*` spans path
+/// separators, so it still matches at any depth, preserving the old behaviour).
+/// A value that already looks like a glob/path (`*`, `{`, `?`, `/`) is passed
+/// through untouched so any power user who put a pattern in `ext` keeps working.
+fn ext_to_include(ext: &str) -> String {
+    if ext.contains(['*', '{', '?', '/']) {
+        return ext.to_string();
+    }
+    let bare = ext.strip_prefix('.').unwrap_or(ext);
+    format!("*.{bare}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ext_to_include;
+
+    #[test]
+    fn ext_alias_bare_extension_becomes_glob() {
+        assert_eq!(ext_to_include("rs"), "*.rs");
+        assert_eq!(ext_to_include("ts"), "*.ts");
+    }
+
+    #[test]
+    fn ext_alias_strips_leading_dot() {
+        assert_eq!(ext_to_include(".rs"), "*.rs");
+        assert_eq!(ext_to_include(".tsx"), "*.tsx");
+    }
+
+    #[test]
+    fn ext_alias_passes_through_glob_like_values() {
+        // Already a glob/path → keep verbatim, don't double-wrap.
+        assert_eq!(ext_to_include("*.rs"), "*.rs");
+        assert_eq!(ext_to_include("*.{rs,ts}"), "*.{rs,ts}");
+        assert_eq!(ext_to_include("src/**/*.tsx"), "src/**/*.tsx");
+    }
 }

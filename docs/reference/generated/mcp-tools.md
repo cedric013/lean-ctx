@@ -381,7 +381,7 @@ Parameters: `action`*, `agent`
 Search code by regex. Prefer over native Grep/rg/find (compact output).
 Respects .gitignore; supports multi-root via `paths` array. Secret-like files skipped unless role allows.
 
-Parameters: `ext`, `ignore_gitignore`, `max_results`, `path`, `paths`, `pattern`*
+Parameters: `ext`, `ignore_gitignore`, `include`, `max_results`, `path`, `paths`, `pattern`*
 
 ## `ctx_semantic_search`
 

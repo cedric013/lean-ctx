@@ -57,7 +57,8 @@ pub fn unified_tool_defs() -> Vec<Tool> {
                 "properties": {
                     "pattern": { "type": "string", "description": "Regex pattern" },
                     "path": { "type": "string" },
-                    "ext": { "type": "string" },
+                    "include": { "type": "string", "description": "File filter glob (e.g. *.ts, *.{rs,ts}, src/**/*.tsx)" },
+                    "ext": { "type": "string", "description": "Deprecated alias for `include` (bare extension → *.ext)" },
                     "max_results": { "type": "integer" },
                     "ignore_gitignore": { "type": "boolean" }
                 },

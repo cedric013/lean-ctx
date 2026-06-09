@@ -40,7 +40,7 @@ shows the smallest tool profile that exposes the tool (`M` minimal, `S` standard
 | `ctx_retrieve` | Fetch uncompressed original from cache (CCR) | `path`*, `query` | P |
 | `ctx_shell` | Run shell commands with pattern compression | `command`*, `raw`, `cwd` | M |
 | `shell` | Alias of `ctx_shell` (same compression) for clients whose model reaches for a native `shell`/`bash` tool — e.g. Codex Desktop / Codex Cloud | `command`*, `raw`, `cwd` | M |
-| `ctx_search` | Regex search across the codebase, token-efficient | `pattern`*, `path`, `ext`, `max_results`, `ignore_gitignore` | M |
+| `ctx_search` | Regex search across the codebase, token-efficient | `pattern`*, `path`, `include` (glob, e.g. `*.{rs,ts}`), `ext` (deprecated alias), `max_results`, `ignore_gitignore` | M |
 | `ctx_glob` | Find files by glob pattern (path match), gitignore-aware, multi-root, deterministically sorted | `pattern`*, `path`, `paths[]`, `max_results`, `ignore_gitignore` | P |
 | `ctx_tree` | Compact directory tree with file counts | `path`, `depth`, `show_hidden` | M |
 | `ctx_semantic_search` | Semantic search (BM25 + embeddings / hybrid) | `query`*, `action` (search\|reindex\|find_related), `mode` (bm25\|dense\|hybrid), `top_k` | S |

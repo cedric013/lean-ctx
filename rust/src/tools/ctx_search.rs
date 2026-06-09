@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use glob::Pattern;
 use ignore::WalkBuilder;
 use regex::RegexBuilder;
 
@@ -34,13 +35,18 @@ fn search_deadline() -> Option<Duration> {
 pub fn handle(
     pattern: &str,
     dir: &str,
-    ext_filter: Option<&str>,
+    include: Option<&str>,
     max_results: usize,
     _crp_mode: CrpMode,
     respect_gitignore: bool,
     allow_secret_paths: bool,
 ) -> (String, usize) {
-    let ext_filter = ext_filter.map(|e| e.strip_prefix('.').unwrap_or(e));
+    // `include` is a glob matched against each file's path *relative to* `dir`
+    // (e.g. `*.ts`, `*.{rs,ts}`, `src/**/*.tsx`). Brace alternation is expanded
+    // here because the `glob` crate has no native support for it. An empty result
+    // (no `include`, or only unparsable globs) means "no filter", so a typo never
+    // silently drops every match.
+    let include_patterns = compile_include(include);
     const MAX_PATTERN_LEN: usize = 1024;
     const MAX_REGEX_SIZE: usize = 1 << 20; // 1 MiB DFA limit
 
@@ -87,7 +93,9 @@ pub fn handle(
     let used_index = if let Some(idx) =
         crate::core::search_index::get_fresh(dir, respect_gitignore, allow_secret_paths)
     {
-        files = idx.candidate_paths(pattern, ext_filter).into_paths();
+        files = idx
+            .candidate_paths(pattern, &include_patterns, root)
+            .into_paths();
         true
     } else {
         false
@@ -123,9 +131,10 @@ pub fn handle(
                 continue;
             }
 
-            if let Some(ext) = ext_filter {
-                let file_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if file_ext != ext {
+            if !include_patterns.is_empty() {
+                let rel = path.strip_prefix(root).unwrap_or(path);
+                let rel_str = rel.to_string_lossy();
+                if !include_patterns.iter().any(|p| p.matches(&rel_str)) {
                     continue;
                 }
             }
@@ -328,9 +337,10 @@ pub fn handle(
     }
 
     if symbol_map::substitution_enabled() {
-        let file_ext = ext_filter.unwrap_or("rs");
+        let exts = extract_extensions(include);
+        let ext_refs: Vec<&str> = exts.iter().map(String::as_str).collect();
         let mut sym = SymbolMap::new();
-        let idents = symbol_map::extract_identifiers(&result, file_ext);
+        let idents = symbol_map::extract_identifiers(&result, &ext_refs);
         for ident in &idents {
             sym.register(ident);
         }
@@ -416,6 +426,88 @@ pub(crate) fn is_generated_file(path: &Path) -> bool {
         || name.ends_with(".css.map")
 }
 
+/// Upper bound on the number of globs a single `include` may expand to, so a
+/// pathological brace pattern (`{a,b}{c,d}{e,f}…`) can never blow up.
+const MAX_INCLUDE_GLOBS: usize = 64;
+
+/// Compile an `include` filter into one or more matchers.
+///
+/// Brace alternation (`*.{rs,ts}`) is expanded to multiple globs (`*.rs`,
+/// `*.ts`) because the `glob` crate matches `{` / `}` literally. A file is
+/// included when it matches *any* of the returned patterns. An empty vec means
+/// "no filter": `include` was `None`, or every expansion failed to parse.
+fn compile_include(include: Option<&str>) -> Vec<Pattern> {
+    let Some(raw) = include else {
+        return Vec::new();
+    };
+    expand_braces(raw)
+        .into_iter()
+        .take(MAX_INCLUDE_GLOBS)
+        .filter_map(|g| Pattern::new(&g).ok())
+        .collect()
+}
+
+/// Expand one or more `{a,b,c}` brace groups into the cartesian set of concrete
+/// globs. Patterns without braces (or with an unbalanced brace) are returned
+/// unchanged, so this is safe to call on any input.
+fn expand_braces(pattern: &str) -> Vec<String> {
+    let Some(open) = pattern.find('{') else {
+        return vec![pattern.to_string()];
+    };
+    let Some(close_rel) = pattern[open..].find('}') else {
+        return vec![pattern.to_string()];
+    };
+    let close = open + close_rel;
+    let prefix = &pattern[..open];
+    let inner = &pattern[open + 1..close];
+    let suffix = &pattern[close + 1..];
+
+    let mut out = Vec::new();
+    for alt in inner.split(',') {
+        let alt = alt.trim();
+        for expanded_suffix in expand_braces(suffix) {
+            out.push(format!("{prefix}{alt}{expanded_suffix}"));
+            if out.len() >= MAX_INCLUDE_GLOBS {
+                return out;
+            }
+        }
+    }
+    out
+}
+
+/// Extract the file extensions referenced by an `include` glob, used by the
+/// symbol-substitution pass (which keyword-filters per language).
+///
+/// Only the final path component is inspected, so dots inside directory
+/// segments never leak in. Handles a single trailing extension (`*.rs` → `rs`)
+/// and brace expansion (`*.{rs,ts}` → `rs`, `ts`); a glob without an extension
+/// (`src/**/*`) yields an empty list. Unknown extensions are returned verbatim —
+/// `symbol_map::is_keyword` simply treats them as "no keywords", so no allowlist
+/// has to be kept in sync here.
+fn extract_extensions(include: Option<&str>) -> Vec<String> {
+    let Some(pattern) = include else {
+        return Vec::new();
+    };
+    let filename = pattern.rsplit('/').next().unwrap_or(pattern);
+    let Some(dot) = filename.rfind('.') else {
+        return Vec::new();
+    };
+    let ext_part = &filename[dot + 1..];
+
+    if let Some(inner) = ext_part.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+        return inner
+            .split(',')
+            .map(|e| e.trim().to_string())
+            .filter(|e| !e.is_empty())
+            .collect();
+    }
+
+    if ext_part.is_empty() {
+        return Vec::new();
+    }
+    vec![ext_part.to_string()]
+}
+
 /// Extract file path from a grep match line, handling Windows drive letters (e.g. "C:").
 fn extract_file_from_match(line: &str) -> &str {
     let start = if line.len() >= 2
@@ -483,7 +575,7 @@ mod tests {
         let (out, _orig) = handle(
             "match",
             dir.path().to_string_lossy().as_ref(),
-            Some("txt"),
+            Some("*.txt"),
             10,
             CrpMode::Off,
             true,
@@ -562,7 +654,7 @@ mod tests {
         let (out, _orig) = handle(
             "longIdentifier",
             dir.path().to_string_lossy().as_ref(),
-            Some("rs"),
+            Some("*.rs"),
             10,
             CrpMode::Off,
             true,
@@ -664,6 +756,80 @@ mod tests {
             search_deadline(),
             Some(Duration::from_secs(10)),
             "default budget is 10s"
+        );
+    }
+
+    #[test]
+    fn extract_extensions_handles_single_brace_and_none() {
+        assert_eq!(extract_extensions(Some("*.rs")), vec!["rs"]);
+        assert_eq!(extract_extensions(Some("src/**/*.tsx")), vec!["tsx"]);
+        assert_eq!(extract_extensions(Some("*.{rs,ts}")), vec!["rs", "ts"]);
+        assert_eq!(
+            extract_extensions(Some("*.{rs, ts , js}")),
+            vec!["rs", "ts", "js"]
+        );
+        assert_eq!(extract_extensions(None), Vec::<String>::new());
+    }
+
+    #[test]
+    fn extract_extensions_ignores_dots_in_directory_segments() {
+        // A dot in a directory name must not be mistaken for the extension.
+        assert_eq!(
+            extract_extensions(Some("config.v2/src/**/*.rs")),
+            vec!["rs"]
+        );
+        assert_eq!(extract_extensions(Some("src/v2.0/*.module.ts")), vec!["ts"]);
+        // No extension on the final component → empty.
+        assert_eq!(extract_extensions(Some("src/**/*")), Vec::<String>::new());
+        assert_eq!(
+            extract_extensions(Some("config.v2/Makefile")),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn include_glob_filters_by_brace_expansion() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "needle\n").unwrap();
+        std::fs::write(dir.path().join("b.ts"), "needle\n").unwrap();
+        std::fs::write(dir.path().join("c.py"), "needle\n").unwrap();
+
+        let (out, _) = handle(
+            "needle",
+            dir.path().to_string_lossy().as_ref(),
+            Some("*.{rs,ts}"),
+            10,
+            CrpMode::Off,
+            true,
+            true,
+        );
+
+        assert!(out.contains("a.rs"), "rs file must match: {out}");
+        assert!(out.contains("b.ts"), "ts file must match: {out}");
+        assert!(!out.contains("c.py"), "py file must be excluded: {out}");
+    }
+
+    #[test]
+    fn include_glob_recursive_path_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/inner")).unwrap();
+        std::fs::write(dir.path().join("src/inner/deep.rs"), "needle\n").unwrap();
+        std::fs::write(dir.path().join("top.rs"), "needle\n").unwrap();
+
+        let (out, _) = handle(
+            "needle",
+            dir.path().to_string_lossy().as_ref(),
+            Some("src/**/*.rs"),
+            10,
+            CrpMode::Off,
+            true,
+            true,
+        );
+
+        assert!(out.contains("deep.rs"), "nested match expected: {out}");
+        assert!(
+            !out.contains("top.rs"),
+            "root file outside src/ must be excluded: {out}"
         );
     }
 }
