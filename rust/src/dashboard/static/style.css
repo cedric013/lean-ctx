@@ -19,6 +19,7 @@
   --mono:'JetBrains Mono',ui-monospace,'SF Mono','Cascadia Mono',monospace;
   --r:9px;--rs:6px;
   --sidebar-w:56px;--sidebar-exp:240px;
+  --support-bar-h:46px;
   --sp-xs:4px;--sp-sm:8px;--sp-md:16px;--sp-lg:24px;--sp-xl:32px;--sp-2xl:48px;
   --fs-xs:10px;--fs-sm:11px;--fs-md:13px;--fs-lg:16px;--fs-xl:22px;--fs-2xl:32px;--fs-hero:clamp(28px,5vw,64px);
   --ease-out:cubic-bezier(.22,1,.36,1);--ease-bounce:cubic-bezier(.34,1.56,.64,1);
@@ -69,10 +70,57 @@ body{
 ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.14)}
 
-.app-layout{display:flex;min-height:100vh}
+.app-layout{display:flex;min-height:100vh;padding-top:var(--support-bar-h,0px)}
+
+/* ── Support banner ───────────────────────────────────────────────────────
+   A fixed bar pinned to the very top. It reserves vertical space via
+   --support-bar-h (consumed by .sidebar `top` and .app-layout `padding-top`),
+   so showing/hiding it cleanly pushes the whole cockpit down or back up.
+   `html.support-bar-off` zeroes the variable and removes the bar. */
+.support-bar{
+  position:fixed;top:0;left:0;right:0;height:var(--support-bar-h);
+  z-index:var(--z-overlay);
+  display:flex;align-items:center;gap:12px;padding:0 12px 0 18px;
+  background:linear-gradient(90deg,var(--accent-dim),rgba(0,0,0,0) 46%),var(--surface);
+  border-bottom:1px solid var(--border);
+  box-shadow:0 6px 18px rgba(0,0,0,0.16);
+  font-size:13px;
+}
+.support-bar-heart{
+  flex:0 0 auto;color:var(--accent);font-size:15px;line-height:1;
+  text-shadow:0 0 10px var(--accent-glow);
+  animation:supportHeart 1.9s var(--ease-out) infinite;
+}
+@keyframes supportHeart{0%,100%{transform:scale(1)}45%{transform:scale(1.22)}}
+.support-bar-msg{
+  display:flex;align-items:baseline;gap:8px;min-width:0;flex:1 1 auto;
+  overflow:hidden;white-space:nowrap;
+}
+.support-bar-msg b{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text-bright);font-weight:600}
+.support-bar-sub{flex:1 1 auto;min-width:0;color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+.support-bar-cta{
+  flex:0 0 auto;font-weight:600;font-size:12px;letter-spacing:.01em;
+  color:var(--accent);background:var(--accent-dim);
+  border:1px solid var(--accent);border-radius:var(--rs);
+  padding:5px 13px;text-decoration:none;
+  transition:transform var(--t-fast) var(--ease-out),background var(--t-fast),color var(--t-fast),box-shadow var(--t-fast);
+}
+.support-bar-cta:hover{
+  background:var(--accent);color:var(--bg);
+  transform:translateY(-1px);box-shadow:var(--shadow-glow-green);
+}
+.support-bar-x{
+  flex:0 0 auto;background:none;border:none;color:var(--muted);
+  font-size:18px;line-height:1;cursor:pointer;padding:4px 8px;border-radius:var(--rs);
+  transition:color var(--t-fast),background var(--t-fast);
+}
+.support-bar-x:hover{color:var(--text-bright);background:var(--surface-2)}
+html.support-bar-off{--support-bar-h:0px}
+html.support-bar-off .support-bar{display:none}
+@media(max-width:640px){.support-bar-sub{display:none}}
 
 .sidebar{
-  position:fixed;top:0;left:0;bottom:0;width:var(--sidebar-w);
+  position:fixed;top:var(--support-bar-h,0px);left:0;bottom:0;width:var(--sidebar-w);
   background:var(--surface);border-right:1px solid var(--border);
   display:flex;flex-direction:column;z-index:200;
   transition:width .25s cubic-bezier(.22,1,.36,1);overflow:hidden;

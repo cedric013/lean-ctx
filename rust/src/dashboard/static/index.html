@@ -166,6 +166,27 @@
 <script type="module" src="/static/components/cockpit-palette.js"></script>
 </head>
 <body class="cockpit-shell-styles">
+<div class="support-bar" id="supportBar" role="region" aria-label="Support lean-ctx">
+  <span class="support-bar-heart" aria-hidden="true">&#9829;</span>
+  <span class="support-bar-msg">
+    <b>lean-ctx is free &amp; independent.</b>
+    <span class="support-bar-sub">Help keep it that way — back development for the price of a coffee.</span>
+  </span>
+  <a class="support-bar-cta" href="https://leanctx.com/support" target="_blank" rel="noopener noreferrer">Become a supporter &rarr;</a>
+  <button type="button" class="support-bar-x" id="supportBarX" aria-label="Dismiss support banner" title="Dismiss">&times;</button>
+</div>
+<script>
+(function(){
+  var x=document.getElementById('supportBarX');
+  if(!x)return;
+  /* Dismiss for the current view only — intentionally NOT persisted, so the
+     support nudge reappears every time the dashboard is opened (a fresh page
+     load), while still letting a reader clear it out of the way right now. */
+  x.addEventListener('click',function(){
+    document.documentElement.classList.add('support-bar-off');
+  });
+})();
+</script>
 <cockpit-palette></cockpit-palette>
 <div class="ascii-global-bg" aria-hidden="true"><pre id="asciiBgPre"></pre></div>
 <script>

@@ -212,6 +212,7 @@ pub(super) fn cmd_gain(rest: &[String]) {
         cmd_stats_raw(rest);
     } else {
         println!("{}", core::stats::format_gain_hero());
+        print_support_hint();
         print_bridge_warning();
         crate::cli::wrapped_publish::maybe_auto_publish(&period);
         print_community_hint();
@@ -265,6 +266,47 @@ fn print_community_hint() {
             .to_string()
     };
     eprintln!("\n  \x1b[2m{body}\x1b[0m");
+}
+
+/// A prominent, friendly nudge to support lean-ctx financially. The engine is
+/// free and never gated — this is the single place the default `gain` view asks
+/// for support, rendered right under the savings hero so the people who benefit
+/// most see the most natural moment to give back.
+fn print_support_hint() {
+    use crate::core::theme;
+    let t = theme::load_theme(&crate::core::config::Config::load().theme);
+    let rst = theme::rst();
+    let bold = theme::bold();
+    let dim = theme::dim();
+    let acc = t.accent.fg();
+    let heart = t.danger.fg();
+    let w = 57;
+    let side = t.box_side();
+    let row = |content: &str| -> String {
+        let padded = theme::pad_right(content, w);
+        format!("  {side}{padded}{side}")
+    };
+
+    println!();
+    println!("  {}", t.box_top(w));
+    println!(
+        "{}",
+        row(&format!(
+            "  {heart}\u{2665}{rst}  {bold}Enjoying lean-ctx? Keep it free & independent.{rst}"
+        ))
+    );
+    println!("{}", row(""));
+    println!(
+        "{}",
+        row(&format!(
+            "  {dim}Back development for the price of a coffee \u{2192}{rst}"
+        ))
+    );
+    println!(
+        "{}",
+        row(&format!("  {acc}{bold}https://leanctx.com/support{rst}"))
+    );
+    println!("  {}", t.box_bottom(w));
 }
 
 /// Resolves the output path for the shareable SVG Wrapped card, or `None` when no
