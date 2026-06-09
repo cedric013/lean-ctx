@@ -1286,6 +1286,12 @@ mod tests {
     #[cfg(feature = "embeddings")]
     #[test]
     fn dead_code_builder_does_not_flag_instantiated_python_class() {
+        // The property-graph DB path is derived from `LEAN_CTX_DATA_DIR`
+        // (`graph_dir`), so a concurrent test that mutates that env var between
+        // our `build` and `open` would point them at different directories and
+        // yield an empty graph. Serialize on the shared lock that every other
+        // data-dir-mutating test already uses.
+        let _env = crate::core::data_dir::test_env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path();
         std::fs::create_dir_all(root.join("models")).unwrap();

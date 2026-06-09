@@ -129,15 +129,18 @@ fn handle_symbol(
     crp_mode: crate::tools::CrpMode,
 ) -> String {
     let Some(spec) = path else {
-        return "path is required for 'symbol' action (format: file.rs::function_name)".to_string();
-    };
-
-    let Some((file_part, symbol_name)) = spec.split_once("::") else {
-        return format!("Invalid symbol spec '{spec}'. Use format: file.rs::function_name");
+        return "path is required for 'symbol' action (format: <file>::<symbol>, or a bare <symbol> name)".to_string();
     };
 
     let Some(open) = graph_provider::open_or_build(root) else {
         return "No graph index found. Run ctx_graph with action='build' first.".to_string();
+    };
+
+    // Bare symbol name (no `::`): resolve against the symbol table so GDScript
+    // (and every other language) symbols are reachable without a file qualifier
+    // (#314).
+    let Some((file_part, symbol_name)) = spec.split_once("::") else {
+        return resolve_bare_symbol(&open.provider, spec, root, cache, crp_mode);
     };
 
     let rel_file = graph_index::graph_relative_key(file_part, root);
@@ -170,7 +173,73 @@ fn handle_symbol(
             .to_string()
     };
 
-    let content = match std::fs::read_to_string(&abs_path) {
+    render_symbol_snippet(&symbol, &abs_path, &rel_file, cache, crp_mode)
+}
+
+/// Resolve a bare symbol name (no `<file>::` qualifier) against the symbol table.
+/// One unambiguous hit renders the snippet; otherwise the candidates are listed
+/// so the caller can disambiguate with `<file>::<symbol>` (#314).
+fn resolve_bare_symbol(
+    provider: &GraphProvider,
+    name: &str,
+    root: &str,
+    cache: &mut crate::core::cache::SessionCache,
+    crp_mode: crate::tools::CrpMode,
+) -> String {
+    let matches = provider.find_symbols(name, None, None);
+    if matches.is_empty() {
+        return format!(
+            "Symbol '{name}' not found. Run ctx_graph action='build' to update the index."
+        );
+    }
+
+    let name_lower = name.to_lowercase();
+    let exact: Vec<&graph_provider::SymbolInfo> = matches
+        .iter()
+        .filter(|s| s.name.to_lowercase() == name_lower)
+        .collect();
+
+    if let [only] = exact.as_slice() {
+        let abs_path = Path::new(root)
+            .join(only.file.trim_start_matches(['/', '\\']))
+            .to_string_lossy()
+            .to_string();
+        return render_symbol_snippet(only, &abs_path, &only.file, cache, crp_mode);
+    }
+
+    // Several identically-named symbols, or only substring hits → list them.
+    let shortlist: Vec<&graph_provider::SymbolInfo> = if exact.is_empty() {
+        matches.iter().collect()
+    } else {
+        exact
+    };
+    let mut lines = vec![format!(
+        "Symbol '{name}' matches {} entries — pick one with `<file>::{name}`:",
+        shortlist.len()
+    )];
+    for s in shortlist.iter().take(15) {
+        lines.push(format!(
+            "  {}::{} ({}, {}:{})",
+            crate::core::protocol::shorten_path(&s.file),
+            s.name,
+            s.kind,
+            s.start_line,
+            s.end_line
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Render a symbol's source snippet with the standard token-savings footer.
+/// Shared by the qualified (`<file>::<symbol>`) and bare-name resolution paths.
+fn render_symbol_snippet(
+    symbol: &graph_provider::SymbolInfo,
+    abs_path: &str,
+    rel_display: &str,
+    cache: &mut crate::core::cache::SessionCache,
+    crp_mode: crate::tools::CrpMode,
+) -> String {
+    let content = match std::fs::read_to_string(abs_path) {
         Ok(c) => c,
         Err(e) => return format!("Cannot read {abs_path}: {e}"),
     };
@@ -180,13 +249,13 @@ fn handle_symbol(
     let end = symbol.end_line.min(lines.len());
 
     if start >= lines.len() {
-        return crate::tools::ctx_read::handle(cache, &abs_path, "full", crp_mode);
+        return crate::tools::ctx_read::handle(cache, abs_path, "full", crp_mode);
     }
 
     let mut result = format!(
         "{}::{} ({}:{}-{})\n",
-        crate::core::protocol::shorten_path(&rel_file),
-        symbol_name,
+        crate::core::protocol::shorten_path(rel_display),
+        symbol.name,
         symbol.kind,
         symbol.start_line,
         symbol.end_line
@@ -222,6 +291,7 @@ fn file_path_to_module_prefixes(
         .or_else(|| rel_path_slash.strip_suffix(".py"))
         .or_else(|| rel_path_slash.strip_suffix(".kt"))
         .or_else(|| rel_path_slash.strip_suffix(".kts"))
+        .or_else(|| rel_path_slash.strip_suffix(".gd"))
         .unwrap_or(&rel_path_slash);
 
     let module_path = without_ext
@@ -262,6 +332,12 @@ fn file_path_to_module_prefixes(
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
+    if ext == "gd" {
+        // GDScript import edges resolve to the target script's project-relative
+        // path (e.g. "actors/Player.gd"), not a Rust-style module path, so the
+        // path itself is the key that `graph impact` must match on (#314).
+        prefixes.push(rel_path_slash.clone());
+    }
     if matches!(ext, "kt" | "kts") {
         let abs_path = Path::new(project_root).join(rel_path.trim_start_matches(['/', '\\']));
         if let Ok(content) = std::fs::read_to_string(abs_path) {
@@ -534,17 +610,48 @@ fn handle_context_query(query: Option<&str>, root: &str) -> String {
         }
     } else {
         result.push(format!("## Search: `{query}`\n"));
+
+        // Symbol names (e.g. GDScript `_ready`, or any function/type) live in the
+        // GraphIndex, not the PropertyGraph node table, so resolve them here — a
+        // bare concept query should return hits instead of "nothing found" (#314).
+        let mut symbols = gp
+            .as_ref()
+            .map(|o| o.provider.find_symbols(query, None, None))
+            .unwrap_or_default();
+        let q_lower = query.to_lowercase();
+        symbols.sort_by(|a, b| {
+            (a.name.to_lowercase() != q_lower)
+                .cmp(&(b.name.to_lowercase() != q_lower))
+                .then_with(|| a.file.cmp(&b.file))
+                .then_with(|| a.start_line.cmp(&b.start_line))
+        });
+        if !symbols.is_empty() {
+            result.push(format!("**Symbols ({}):**", symbols.len()));
+            for s in symbols.iter().take(15) {
+                result.push(format!(
+                    "  - {}::{} ({}, {}:{})",
+                    crate::core::protocol::shorten_path(&s.file),
+                    s.name,
+                    s.kind,
+                    s.start_line,
+                    s.end_line
+                ));
+            }
+        }
+
         let related = gp
             .as_ref()
             .map(|o| o.provider.related(query, 2))
             .unwrap_or_default();
-        if related.is_empty() {
-            result.push("No matching nodes found in graph.".to_string());
-        } else {
+        if !related.is_empty() {
             result.push(format!("**Related files ({}):**", related.len()));
             for f in related.iter().take(15) {
                 result.push(format!("  - {f}"));
             }
+        }
+
+        if symbols.is_empty() && related.is_empty() {
+            result.push("No matching nodes found in graph.".to_string());
         }
     }
 
@@ -595,5 +702,129 @@ mod tests {
         let prefixes = file_path_to_module_prefixes("src/core/mod.rs", "/nonexistent", &gp);
         assert!(prefixes.contains(&"crate::core".to_string()));
         assert!(!prefixes.iter().any(|p| p.contains("mod")));
+    }
+
+    #[test]
+    fn test_file_path_to_module_prefixes_gd_uses_path() {
+        // GDScript import edges store the resolved project-relative path, so the
+        // path itself must be among the prefixes `graph impact` matches on (#314).
+        let gp =
+            GraphProvider::GraphIndex(crate::core::graph_index::ProjectIndex::new("/nonexistent"));
+        let prefixes = file_path_to_module_prefixes("actors/Player.gd", "/nonexistent", &gp);
+        assert!(
+            prefixes.contains(&"actors/Player.gd".to_string()),
+            "got: {prefixes:?}"
+        );
+    }
+
+    #[test]
+    fn test_edge_matches_file_gd_path() {
+        let prefixes = vec!["actors/Base.gd".to_string()];
+        assert!(edge_matches_file("actors/Base.gd", &prefixes));
+        assert!(!edge_matches_file("actors/Enemy.gd", &prefixes));
+    }
+}
+
+/// End-to-end GDScript graph coverage on a real Godot fixture (#314): four `.gd`
+/// scripts with `_ready` definitions and `res://` import edges, exercised through
+/// the public graph actions (context / impact / bare symbol).
+#[cfg(test)]
+mod gdscript_p0_tests {
+    use super::*;
+
+    fn write(root: &std::path::Path, rel: &str, content: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, content).unwrap();
+    }
+
+    /// Minimal Godot project: `Player`/`Enemy` extend `Base`, `main` preloads
+    /// `Player`; every script defines `_ready`. Returns (tempdir guard, root).
+    fn godot_fixture() -> (tempfile::TempDir, String) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let data = tmp.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::env::set_var("LEAN_CTX_DATA_DIR", data.to_string_lossy().to_string());
+
+        let proj = tmp.path().join("game");
+        std::fs::create_dir_all(&proj).unwrap();
+        write(
+            &proj,
+            "project.godot",
+            "[application]\nconfig/name=\"Fixture\"\n",
+        );
+        write(
+            &proj,
+            "actors/Base.gd",
+            "extends Node\n\nfunc _ready():\n\tpass\n",
+        );
+        write(
+            &proj,
+            "actors/Player.gd",
+            "extends \"res://actors/Base.gd\"\n\nfunc _ready():\n\tprint(\"player\")\n",
+        );
+        write(
+            &proj,
+            "actors/Enemy.gd",
+            "extends \"res://actors/Base.gd\"\n\nfunc _ready():\n\tprint(\"enemy\")\n",
+        );
+        write(
+            &proj,
+            "main.gd",
+            "const Player = preload(\"res://actors/Player.gd\")\n\nfunc _ready():\n\tprint(\"main\")\n",
+        );
+
+        (tmp, proj.to_string_lossy().to_string())
+    }
+
+    #[test]
+    fn context_resolves_gdscript_symbol() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let (_tmp, root) = godot_fixture();
+        let _ = handle_build(&root);
+        let out = handle_context_query(Some("_ready"), &root);
+        assert!(
+            out.contains("_ready"),
+            "context should surface _ready symbols: {out}"
+        );
+        assert!(!out.contains("No matching nodes found"), "got: {out}");
+        std::env::remove_var("LEAN_CTX_DATA_DIR");
+    }
+
+    #[test]
+    fn impact_lists_gdscript_dependents() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let (_tmp, root) = godot_fixture();
+        let _ = handle_build(&root);
+        let out = handle_impact(Some("actors/Base.gd"), &root);
+        assert!(
+            out.contains("Player.gd"),
+            "Base.gd dependents should include Player: {out}"
+        );
+        assert!(
+            out.contains("Enemy.gd"),
+            "Base.gd dependents should include Enemy: {out}"
+        );
+        std::env::remove_var("LEAN_CTX_DATA_DIR");
+    }
+
+    #[test]
+    fn bare_symbol_resolves_gdscript() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let (_tmp, root) = godot_fixture();
+        let _ = handle_build(&root);
+        let mut cache = crate::core::cache::SessionCache::new();
+        let out = handle_symbol(
+            Some("_ready"),
+            &root,
+            &mut cache,
+            crate::tools::CrpMode::Off,
+        );
+        // Four `_ready` defs → a disambiguation list (or a snippet), never the
+        // pre-#314 "Invalid symbol spec" / "not found" errors.
+        assert!(out.contains("_ready"), "bare symbol should resolve: {out}");
+        assert!(!out.contains("Invalid symbol spec"), "got: {out}");
+        assert!(!out.to_lowercase().contains("not found"), "got: {out}");
+        std::env::remove_var("LEAN_CTX_DATA_DIR");
     }
 }

@@ -320,7 +320,7 @@ GRAPH (project analysis):
     lean-ctx graph status          Show graph index statistics
     lean-ctx graph related <file>  List files related to a given file
     lean-ctx graph impact <file>   Show files impacted by changes to a file
-    lean-ctx graph symbol <spec>   Inspect a symbol (format: file.rs::fn_name)
+    lean-ctx graph symbol <spec>   Inspect a symbol (format: <file>::<symbol>, or bare <symbol>)
     lean-ctx graph context <query> Query the property graph for a concept
 
 CLOUD:
