@@ -415,3 +415,51 @@ fn resolve_auto_mode_returns_full_for_instruction_files() {
     let mode = resolve_auto_mode("/workspace/.cursorrules", 2000, None);
     assert_eq!(mode, "full", ".cursorrules must always be read in full");
 }
+
+#[test]
+fn raw_mode_returns_exact_file_content() {
+    let _lock = crate::core::data_dir::test_env_lock();
+    let content = "fn main() {\n    println!(\"hello\");\n}\n";
+    let (output, _sent) = render::process_mode(
+        content,
+        "raw",
+        "F1",
+        "main.rs",
+        "rs",
+        100,
+        CrpMode::Off,
+        "/tmp/main.rs",
+        None,
+    );
+    assert_eq!(
+        output, content,
+        "raw mode must return exact file content with zero overhead"
+    );
+    assert!(
+        !output.contains("main.rs"),
+        "raw mode must not contain filename header"
+    );
+    assert!(!output.contains("deps"), "raw mode must not contain deps");
+}
+
+#[test]
+fn raw_mode_no_savings_footer() {
+    let _lock = crate::core::data_dir::test_env_lock();
+    let content = "x = 1\n";
+    let (output, _) = render::process_mode(
+        content,
+        "raw",
+        "F1",
+        "tiny.py",
+        "py",
+        50,
+        CrpMode::Off,
+        "/tmp/tiny.py",
+        None,
+    );
+    assert!(
+        !output.contains('\u{2500}'),
+        "raw mode must not contain savings footer box-drawing chars"
+    );
+    assert_eq!(output, content);
+}

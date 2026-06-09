@@ -77,6 +77,10 @@ pub(crate) fn process_mode(
     let line_count = content.lines().count();
 
     match mode {
+        "raw" => {
+            let sent = count_tokens(content);
+            (content.to_string(), sent)
+        }
         "auto" => {
             let chosen = resolve_auto_mode(file_path, original_tokens, task);
             process_mode(

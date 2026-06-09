@@ -28,7 +28,7 @@ impl McpTool for CtxMultiReadTool {
                     },
                     "mode": {
                         "type": "string",
-                        "description": "Compression mode (default: full). Same modes as ctx_read (auto, full, map, signatures, diff, aggressive, entropy, task, reference, lines:N-M)."
+                        "description": "Compression mode (default: full). Same modes as ctx_read (auto, full, raw, map, signatures, diff, aggressive, entropy, task, reference, lines:N-M). Use 'raw' for zero-overhead output."
                     },
                     "fresh": {
                         "type": "boolean",
