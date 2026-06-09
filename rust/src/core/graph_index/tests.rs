@@ -304,6 +304,44 @@ fn stale_index_detected_by_age() {
 }
 
 #[test]
+fn content_aware_staleness_detects_edits_and_additions() {
+    let _env = crate::core::data_dir::test_env_lock();
+    let td = tempdir().expect("tempdir");
+    std::fs::write(
+        td.path().join("Cargo.toml"),
+        "[package]\nname = \"t\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(td.path().join("a.rs"), "fn a() {}\n").unwrap();
+    let root_s = normalize_project_root(&td.path().to_string_lossy());
+
+    // Build + persist the index, then it must look fresh.
+    let idx = scan(&root_s);
+    assert!(!idx.files.is_empty(), "scan should index a.rs");
+    assert!(
+        !index_looks_stale(&idx, &root_s),
+        "a just-built index must be fresh"
+    );
+
+    // mtime resolution can be coarse; ensure the next writes are strictly newer.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // Edit detection.
+    std::fs::write(td.path().join("a.rs"), "fn a() { let _x = 1; }\n").unwrap();
+    assert!(
+        index_looks_stale(&idx, &root_s),
+        "an edited source file must mark the index stale"
+    );
+
+    // Addition detection.
+    std::fs::write(td.path().join("b.rs"), "fn b() {}\n").unwrap();
+    assert!(
+        index_looks_stale(&idx, &root_s),
+        "a new source file must mark the index stale"
+    );
+}
+
+#[test]
 fn safe_scan_root_rejects_home_downloads() {
     if let Some(home) = dirs::home_dir() {
         let downloads = home.join("Downloads");
@@ -412,6 +450,56 @@ public class OrderRepository { public void Persist() {} }\n";
                     && e.to == "src/App/Services/OrderService.cs")),
         "expected a C# namespace cohesion edge, got {:?}",
         index.edges
+    );
+}
+
+#[test]
+fn csharp_using_resolves_declared_namespace_not_matching_folder() {
+    // The real-world fix: namespaces that do NOT mirror the folder layout.
+    // `Foo.cs` lives in `src/` but declares `namespace Acme.Core`; `Bar.cs` lives
+    // in `lib/` but declares `namespace Acme.Data`. Folder-suffix matching alone
+    // cannot link them — only the *declared* namespace can.
+    const FOO: &str = "namespace Acme.Core;\n\
+using Acme.Data;\n\
+public class Foo { private readonly Bar _b = new Bar(); }\n";
+    const BAR: &str = "namespace Acme.Data;\n\
+public class Bar { }\n";
+
+    let files = [("src/Foo.cs", FOO), ("lib/Bar.cs", BAR)];
+    let mut index = ProjectIndex::new("/proj-x");
+    let mut cache: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (path, content) in files {
+        index
+            .files
+            .insert(path.to_string(), fe(path, content, "cs"));
+        cache.insert(path.to_string(), content.to_string());
+    }
+
+    build_edges_cached(&mut index, &cache);
+
+    assert!(
+        index
+            .edges
+            .iter()
+            .any(|e| e.kind == "import" && e.from == "src/Foo.cs" && e.to == "lib/Bar.cs"),
+        "`using Acme.Data` must resolve via the declared namespace (folder != namespace), got {:?}",
+        index.edges
+    );
+}
+
+#[test]
+fn safe_scan_root_accepts_dotnet_project() {
+    // A `*.csproj` at the root must mark a valid scan root even with many
+    // subdirectories that would otherwise be rejected as a broad directory.
+    let tmp = tempdir().unwrap();
+    std::fs::write(tmp.path().join("MyApp.csproj"), "<Project></Project>\n").unwrap();
+    for i in 0..55 {
+        std::fs::create_dir(tmp.path().join(format!("dir{i}"))).unwrap();
+    }
+    let root = tmp.path().to_string_lossy().to_string();
+    assert!(
+        is_safe_scan_root(&root),
+        "a .csproj should mark a valid .NET scan root"
     );
 }
 

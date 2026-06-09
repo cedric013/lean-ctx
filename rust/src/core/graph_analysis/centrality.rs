@@ -50,7 +50,20 @@ pub fn compute_bridge_nodes(edges: &[EdgeInfo], limit: usize) -> Vec<BridgeNode>
 
     let mut betweenness = vec![0f64; n];
 
-    for s in 0..n {
+    // Exact Brandes is O(V·E). Above a threshold we estimate betweenness from a
+    // deterministic sample of source nodes (Brandes–Pich): cost drops to O(k·E)
+    // and, because the result is normalized to the top node, the *relative*
+    // ranking of bridges is preserved.
+    const EXACT_SOURCE_CAP: usize = 1500;
+    const SAMPLE_SOURCES: usize = 500;
+    let sources: Vec<usize> = if n > EXACT_SOURCE_CAP {
+        let step = (n / SAMPLE_SOURCES).max(1);
+        (0..n).step_by(step).collect()
+    } else {
+        (0..n).collect()
+    };
+
+    for &s in &sources {
         let mut stack: Vec<usize> = Vec::new();
         let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
         let mut sigma = vec![0f64; n];
@@ -156,5 +169,17 @@ mod tests {
         // Triangle: no node is on a unique shortest path.
         let edges = vec![e("a", "b"), e("b", "c"), e("a", "c")];
         assert!(compute_bridge_nodes(&edges, 10).is_empty());
+    }
+
+    #[test]
+    fn large_graph_uses_sampling_and_still_finds_hub() {
+        // > EXACT_SOURCE_CAP nodes forces the sampled estimator; the star center
+        // must still rank as the top bridge.
+        let edges: Vec<EdgeInfo> = (0..2000)
+            .map(|i| e("hub.rs", &format!("leaf{i}.rs")))
+            .collect();
+        let bridges = compute_bridge_nodes(&edges, 10);
+        assert_eq!(bridges[0].path, "hub.rs");
+        assert_eq!(bridges[0].betweenness, 1.0);
     }
 }

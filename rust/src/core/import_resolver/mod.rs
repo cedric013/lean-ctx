@@ -35,19 +35,29 @@ pub struct ResolverContext {
     pub go_module: Option<String>,
     pub dart_package: Option<String>,
     file_set: std::collections::HashSet<String>,
-    /// Directory-path suffix -> representative `.cs` file, for namespace-based
-    /// C# `using` resolution (see `build_csharp_namespace_index`).
+    /// Namespace path (`A/B/C`) -> representative `.cs` file, for C# `using`
+    /// resolution. Keyed by *declared* `namespace` first (authoritative) and by
+    /// folder suffix as a fallback (see `build_csharp_namespace_index`).
     csharp_ns_index: HashMap<String, String>,
 }
 
 impl ResolverContext {
-    pub fn new(project_root: &Path, file_paths: Vec<String>) -> Self {
+    /// `file_contents` is an optional in-memory cache (relative path -> source).
+    /// It is used to read declared C# namespaces without touching disk; pass an
+    /// empty map when contents are not available (a bounded head-read from disk
+    /// is the fallback).
+    pub fn new(
+        project_root: &Path,
+        file_paths: Vec<String>,
+        file_contents: &HashMap<String, String>,
+    ) -> Self {
         let file_set: std::collections::HashSet<String> = file_paths.iter().cloned().collect();
 
         let tsconfig_paths = load_tsconfig_paths(project_root);
         let go_module = load_go_module(project_root);
         let dart_package = load_dart_package(project_root);
-        let csharp_ns_index = build_csharp_namespace_index(&file_paths);
+        let csharp_ns_index =
+            build_csharp_namespace_index(project_root, &file_paths, file_contents);
 
         Self {
             project_root: project_root.to_path_buf(),
@@ -71,12 +81,22 @@ impl ResolverContext {
     }
 }
 
-/// Maps every directory-path suffix of each `.cs` file to a representative file
-/// in that directory. This lets `using A.B.C` resolve by matching the namespace
-/// path as a *folder suffix* (tolerating root prefixes like `src/` or a project
-/// name), instead of the brittle assumption that namespace == top-level layout.
-/// Content-free and deterministic: the lexicographically smallest file wins.
-fn build_csharp_namespace_index(file_paths: &[String]) -> HashMap<String, String> {
+/// Maps C# namespace paths (`A/B/C`) to a representative `.cs` file so that
+/// `using A.B.C` resolves to a real project file. Two sources, in priority order:
+///
+/// 1. **Declared namespaces** (authoritative): the `namespace A.B.C` written in
+///    each file, read from the in-memory content cache (or a bounded head-read
+///    from disk). This is the only correct source when the namespace does *not*
+///    mirror the folder layout (the common .NET case with a RootNamespace).
+/// 2. **Folder suffixes** (fallback): every trailing directory suffix of each
+///    file, for sources whose namespace we could not read.
+///
+/// Deterministic: the lexicographically smallest file wins for a given key.
+fn build_csharp_namespace_index(
+    project_root: &Path,
+    file_paths: &[String],
+    file_contents: &HashMap<String, String>,
+) -> HashMap<String, String> {
     let mut cs_files: Vec<&String> = file_paths
         .iter()
         .filter(|f| {
@@ -92,7 +112,25 @@ fn build_csharp_namespace_index(file_paths: &[String]) -> HashMap<String, String
     cs_files.sort();
 
     let mut map: HashMap<String, String> = HashMap::new();
-    for file in cs_files {
+
+    // 1) Declared namespaces (authoritative). Content from the cache when present,
+    //    otherwise a bounded head-read from disk. Capped to avoid pathological I/O.
+    const MAX_CS_FILES_READ: usize = 5000;
+    for file in cs_files.iter().take(MAX_CS_FILES_READ) {
+        let content: Option<std::borrow::Cow<'_, str>> = match file_contents.get(*file) {
+            Some(c) => Some(std::borrow::Cow::Borrowed(c.as_str())),
+            None => read_file_head(&project_root.join(file.as_str()), 64 * 1024)
+                .map(std::borrow::Cow::Owned),
+        };
+        let Some(content) = content else { continue };
+        for ns in extract_csharp_namespaces(&content) {
+            let key = ns.replace('.', "/");
+            map.entry(key).or_insert_with(|| (*file).clone());
+        }
+    }
+
+    // 2) Folder-suffix fallback (does not overwrite declared-namespace entries).
+    for file in &cs_files {
         let dir = Path::new(file.as_str())
             .parent()
             .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -100,10 +138,40 @@ fn build_csharp_namespace_index(file_paths: &[String]) -> HashMap<String, String
         let segs: Vec<&str> = dir.split('/').filter(|s| !s.is_empty()).collect();
         for start in 0..segs.len() {
             let key = segs[start..].join("/");
-            map.entry(key).or_insert_with(|| file.clone());
+            map.entry(key).or_insert_with(|| (*file).clone());
         }
     }
     map
+}
+
+/// Extract every `namespace A.B.C` declared in a C# source (block or file-scoped).
+fn extract_csharp_namespaces(content: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in content.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("namespace ") else {
+            continue;
+        };
+        let name: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '_')
+            .collect();
+        if !name.is_empty() && !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// Read at most `max_bytes` from the start of a file (namespace declarations are
+/// always near the top), tolerating non-UTF-8 bytes. Returns `None` on error.
+fn read_file_head(path: &Path, max_bytes: usize) -> Option<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; max_bytes];
+    let n = f.read(&mut buf).ok()?;
+    buf.truncate(n);
+    Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
 pub fn resolve_imports(

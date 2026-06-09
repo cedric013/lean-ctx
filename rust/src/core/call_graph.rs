@@ -754,6 +754,126 @@ fn simple_hash(content: &str) -> String {
     format!("{:x}", hasher.finish())
 }
 
+// ---------------------------------------------------------------------------
+// Scope-aware callee resolution (#321)
+//
+// Call edges store callees as bare names, so attributing `Run`/`Get`/`Handle`
+// to a file by name alone links every same-named symbol (false positives).
+// These helpers resolve a callee to its defining file using the caller's
+// lexical scope and refuse to guess when a name stays ambiguous.
+// ---------------------------------------------------------------------------
+
+/// Build a `file -> imported files` adjacency from the project index's import
+/// and reexport edges, used to scope callee resolution to a caller's imports.
+pub fn build_import_adjacency(
+    index: &ProjectIndex,
+) -> HashMap<String, std::collections::HashSet<String>> {
+    let mut adj: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    for e in &index.edges {
+        if e.kind == "import" || e.kind == "reexport" {
+            adj.entry(e.from.clone()).or_default().insert(e.to.clone());
+        }
+    }
+    adj
+}
+
+/// Pick the defining file for a callee from candidate `def_files`, ranked by the
+/// caller's lexical scope (most specific first):
+///   1. the caller's own file,
+///   2. exactly one file the caller imports,
+///   3. exactly one file project-wide.
+///
+/// Returns `None` when the name stays ambiguous (never guesses).
+fn rank_callee_def_file(
+    def_files: &[&str],
+    caller_file: &str,
+    imports: &HashMap<String, std::collections::HashSet<String>>,
+) -> Option<String> {
+    if def_files.is_empty() {
+        return None;
+    }
+    if def_files.contains(&caller_file) {
+        return Some(caller_file.to_string());
+    }
+    if let Some(imported) = imports.get(caller_file) {
+        let mut in_scope = def_files.iter().filter(|f| imported.contains(**f));
+        if let Some(first) = in_scope.next() {
+            if in_scope.next().is_none() {
+                return Some((*first).to_string());
+            }
+        }
+    }
+    if def_files.len() == 1 {
+        return Some(def_files[0].to_string());
+    }
+    None
+}
+
+/// Resolve a single callee name to its defining file in the scope of `caller_file`.
+pub fn resolve_callee_file(
+    callee_name: &str,
+    caller_file: &str,
+    index: &ProjectIndex,
+    imports: &HashMap<String, std::collections::HashSet<String>>,
+) -> Option<String> {
+    let mut def_files: Vec<&str> = index
+        .symbols
+        .values()
+        .filter(|s| s.name == callee_name)
+        .map(|s| s.file.as_str())
+        .collect();
+    def_files.sort_unstable();
+    def_files.dedup();
+    rank_callee_def_file(&def_files, caller_file, imports)
+}
+
+/// Resolve callee names to a single defining file *when scope makes it
+/// unambiguous across all call sites*. Names that resolve to different files
+/// from different scopes are omitted, so callers never attribute a call to the
+/// wrong file. Keyed by callee name to match the call graph's name-keyed nodes.
+pub fn resolve_callee_files(index: &ProjectIndex, edges: &[CallEdge]) -> HashMap<String, String> {
+    use std::collections::HashSet;
+
+    let imports = build_import_adjacency(index);
+    let callee_names: HashSet<&str> = edges.iter().map(|e| e.callee_name.as_str()).collect();
+    if callee_names.is_empty() {
+        return HashMap::new();
+    }
+
+    let mut name_files: HashMap<&str, Vec<&str>> = HashMap::new();
+    for sym in index.symbols.values() {
+        if callee_names.contains(sym.name.as_str()) {
+            name_files
+                .entry(sym.name.as_str())
+                .or_default()
+                .push(sym.file.as_str());
+        }
+    }
+    for files in name_files.values_mut() {
+        files.sort_unstable();
+        files.dedup();
+    }
+
+    let mut resolved: HashMap<&str, HashSet<String>> = HashMap::new();
+    for e in edges {
+        if let Some(defs) = name_files.get(e.callee_name.as_str()) {
+            if let Some(file) = rank_callee_def_file(defs, &e.caller_file, &imports) {
+                resolved
+                    .entry(e.callee_name.as_str())
+                    .or_default()
+                    .insert(file);
+            }
+        }
+    }
+
+    resolved
+        .into_iter()
+        .filter_map(|(name, files)| {
+            (files.len() == 1).then(|| (name.to_string(), files.into_iter().next().unwrap()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,6 +932,95 @@ mod tests {
         });
         let callees = graph.callees_of("main");
         assert_eq!(callees.len(), 2);
+    }
+
+    fn sym(name: &str, file: &str) -> SymbolEntry {
+        SymbolEntry {
+            file: file.to_string(),
+            name: name.to_string(),
+            kind: "function".to_string(),
+            start_line: 1,
+            end_line: 2,
+            is_exported: true,
+        }
+    }
+
+    #[test]
+    fn resolve_callee_file_scopes_same_named_methods() {
+        // `Run` is defined in two files (two classes). Each caller must resolve
+        // to its *own* file, never to both.
+        let mut index = ProjectIndex::new("/p");
+        index.symbols.insert("a::Run".into(), sym("Run", "a.rs"));
+        index.symbols.insert("b::Run".into(), sym("Run", "b.rs"));
+        let imports: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+
+        assert_eq!(
+            resolve_callee_file("Run", "a.rs", &index, &imports).as_deref(),
+            Some("a.rs")
+        );
+        assert_eq!(
+            resolve_callee_file("Run", "b.rs", &index, &imports).as_deref(),
+            Some("b.rs")
+        );
+        // A caller that neither defines nor imports `Run` stays ambiguous.
+        assert_eq!(resolve_callee_file("Run", "c.rs", &index, &imports), None);
+    }
+
+    #[test]
+    fn resolve_callee_file_prefers_imported_definition() {
+        let mut index = ProjectIndex::new("/p");
+        index
+            .symbols
+            .insert("lib::Run".into(), sym("Run", "lib.rs"));
+        index
+            .symbols
+            .insert("other::Run".into(), sym("Run", "other.rs"));
+        let mut imports: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+        imports.insert(
+            "main.rs".to_string(),
+            std::collections::HashSet::from(["lib.rs".to_string()]),
+        );
+        // `main.rs` imports only `lib.rs`, so `Run` resolves there despite the
+        // global ambiguity with `other.rs`.
+        assert_eq!(
+            resolve_callee_file("Run", "main.rs", &index, &imports).as_deref(),
+            Some("lib.rs")
+        );
+    }
+
+    #[test]
+    fn resolve_callee_files_drops_cross_scope_ambiguity() {
+        let mut index = ProjectIndex::new("/p");
+        index.symbols.insert("a::Run".into(), sym("Run", "a.rs"));
+        index.symbols.insert("b::Run".into(), sym("Run", "b.rs"));
+        index
+            .symbols
+            .insert("u::Unique".into(), sym("Unique", "u.rs"));
+        let edges = vec![
+            CallEdge {
+                caller_file: "a.rs".into(),
+                caller_symbol: "fa".into(),
+                caller_line: 1,
+                callee_name: "Run".into(),
+            },
+            CallEdge {
+                caller_file: "b.rs".into(),
+                caller_symbol: "fb".into(),
+                caller_line: 1,
+                callee_name: "Run".into(),
+            },
+            CallEdge {
+                caller_file: "x.rs".into(),
+                caller_symbol: "fx".into(),
+                caller_line: 1,
+                callee_name: "Unique".into(),
+            },
+        ];
+        let map = resolve_callee_files(&index, &edges);
+        // `Run` resolves to a.rs from a and b.rs from b → two files → omitted.
+        assert!(!map.contains_key("Run"));
+        // `Unique` is globally unique → resolved.
+        assert_eq!(map.get("Unique").map(String::as_str), Some("u.rs"));
     }
 
     #[test]

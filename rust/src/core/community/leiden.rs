@@ -8,10 +8,21 @@ use std::collections::HashMap;
 
 use super::graph::AdjGraph;
 
+/// Outer Leiden iterations (local-moving + refinement). The loop also exits
+/// early as soon as a local-moving pass moves no node, so on typical graphs it
+/// converges in far fewer rounds; this is only the hard upper bound.
 const MAX_ITERATIONS: usize = 20;
+/// Hard cap on the inner local-moving sweeps within a single iteration. Each
+/// sweep is O(V + E); the cap guarantees the whole partition stays bounded
+/// (O(MAX_ITERATIONS · MAX_LOCAL_PASSES · (V + E))) even on very large graphs.
+const MAX_LOCAL_PASSES: usize = 50;
 const GAMMA: f64 = 1.0;
 
 /// Partition a graph into communities. Returns one community id per node index.
+///
+/// Complexity is bounded (see `MAX_ITERATIONS` / `MAX_LOCAL_PASSES`) and the
+/// algorithm converges early, so it scales to large graphs without an explicit
+/// node cap; callers that need a hard node limit should pre-filter the graph.
 pub(super) fn partition(graph: &AdjGraph) -> Vec<usize> {
     let n = graph.node_count();
     let mut assignment: Vec<usize> = (0..n).collect();
@@ -42,8 +53,10 @@ fn local_moving(graph: &AdjGraph, assignment: &mut [usize], m2: f64) -> bool {
 
     let mut changed = false;
     let mut improved = true;
+    let mut passes = 0usize;
 
-    while improved {
+    while improved && passes < MAX_LOCAL_PASSES {
+        passes += 1;
         improved = false;
         for i in 0..n {
             let current = assignment[i];

@@ -29,7 +29,23 @@ fn architecture() -> (&'static str, &'static str, String) {
     };
     let gp = &open.provider;
 
-    let community = crate::core::community::detect_communities_for_provider(gp, &root);
+    // Memoize the (expensive) report keyed by a cheap graph fingerprint, so
+    // repeated dashboard loads don't re-run community detection, betweenness,
+    // cycle search and surprising-connection scans on an unchanged graph.
+    let fingerprint = super::analysis_cache::fingerprint(gp);
+    let cache_key = format!("architecture:{root}");
+    let json = super::analysis_cache::cached_or_compute(&cache_key, &fingerprint, || {
+        compute_report(gp, &root, &project)
+    });
+    ("200 OK", "application/json", json)
+}
+
+fn compute_report(
+    gp: &crate::core::graph_provider::GraphProvider,
+    root: &str,
+    project: &str,
+) -> String {
+    let community = crate::core::community::detect_communities_for_provider(gp, root);
     let community_map = community.assignment_min_size(2);
     let all_edges = gp.edges();
     let file_count = gp.file_count();
@@ -73,7 +89,7 @@ fn architecture() -> (&'static str, &'static str, String) {
     comms.sort_by_key(|c| std::cmp::Reverse(c.files.len()));
 
     let md = render_markdown(
-        &project,
+        project,
         file_count,
         &all_edges,
         &edge_stats,
@@ -96,7 +112,7 @@ fn architecture() -> (&'static str, &'static str, String) {
         "community_count": community_count,
         "markdown": md,
     });
-    ("200 OK", "application/json", val.to_string())
+    val.to_string()
 }
 
 #[allow(clippy::too_many_arguments)]

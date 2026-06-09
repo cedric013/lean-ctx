@@ -1,4 +1,5 @@
 mod analysis;
+mod analysis_cache;
 mod architecture;
 mod callgraph;
 mod deps;

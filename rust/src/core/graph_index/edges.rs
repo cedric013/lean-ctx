@@ -29,7 +29,8 @@ fn build_edges_with_cache(index: &mut ProjectIndex, content_cache: &HashMap<Stri
     let mut file_paths: Vec<String> = index.files.keys().cloned().collect();
     file_paths.sort();
 
-    let resolver_ctx = import_resolver::ResolverContext::new(root_path, file_paths.clone());
+    let resolver_ctx =
+        import_resolver::ResolverContext::new(root_path, file_paths.clone(), content_cache);
 
     const MAX_FILE_SIZE_FOR_EDGES: u64 = 2 * 1024 * 1024;
 

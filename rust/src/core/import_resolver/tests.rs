@@ -10,7 +10,11 @@ fn make_ctx(files: &[&str]) -> ResolverContext {
         go_module: None,
         dart_package: None,
         file_set: file_paths.iter().cloned().collect(),
-        csharp_ns_index: build_csharp_namespace_index(&file_paths),
+        csharp_ns_index: build_csharp_namespace_index(
+            &PathBuf::from("/project"),
+            &file_paths,
+            &HashMap::new(),
+        ),
     }
 }
 

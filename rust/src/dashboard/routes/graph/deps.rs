@@ -183,6 +183,8 @@ fn graph() -> (&'static str, &'static str, String) {
             0.0
         },
         "graph_support": graph_support,
+        "language_matrix":
+            crate::core::language_capabilities::language_capability_matrix(gp.file_paths()),
         "community_count": community_count,
         "god_nodes": god_nodes,
         "import_cycles": import_cycles,

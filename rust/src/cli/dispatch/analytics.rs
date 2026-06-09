@@ -1060,13 +1060,26 @@ pub(super) fn cmd_graph(rest: &[String]) {
     let sub = rest.first().map_or("build", std::string::String::as_str);
     match sub {
         "build" => {
-            let root = rest.get(1).cloned().or_else(|| {
-                std::env::current_dir()
-                    .ok()
-                    .map(|p| p.to_string_lossy().to_string())
-            });
-            let root = root.unwrap_or_else(|| ".".to_string());
-            let index = core::graph_index::load_or_build(&root);
+            // `--force`/`-f` purges the cache for a from-scratch rebuild. A plain
+            // `graph build` always rescans (incremental, hash-reused) so it reflects
+            // the current source — `load_or_build` can otherwise return a cached
+            // index until the staleness TTL elapses.
+            let force = rest.iter().any(|a| a == "--force" || a == "-f");
+            let root = rest
+                .iter()
+                .skip(1)
+                .find(|a| !a.starts_with('-'))
+                .cloned()
+                .or_else(|| {
+                    std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().to_string())
+                })
+                .unwrap_or_else(|| ".".to_string());
+            if force {
+                core::graph_index::purge_index(&root);
+            }
+            let index = core::graph_index::scan(&root);
             println!(
                 "Graph built: {} files, {} edges",
                 index.files.len(),

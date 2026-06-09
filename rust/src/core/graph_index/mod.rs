@@ -138,7 +138,7 @@ fn is_safe_scan_root(path: &str) -> bool {
         "go.work",
     ];
 
-    if !breadth_markers.iter().any(|m| p.join(m).exists()) {
+    if !breadth_markers.iter().any(|m| p.join(m).exists()) && !dir_has_dotnet_project(p) {
         // Multi-repo workspace parent: >=2 children with project markers is always safe
         if crate::core::pathutil::has_multi_repo_children(p) {
             return true;
@@ -159,6 +159,25 @@ fn is_safe_scan_root(path: &str) -> bool {
     }
 
     true
+}
+
+/// True if the directory contains a .NET project/solution file (`*.csproj`,
+/// `*.sln`, `*.fsproj`, `*.vbproj`). Filenames vary, so we match by extension —
+/// these are strong project-root markers even when there is no `.git`.
+fn dir_has_dotnet_project(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|rd| {
+        rd.filter_map(Result::ok).any(|e| {
+            e.path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| {
+                    matches!(
+                        x.to_ascii_lowercase().as_str(),
+                        "csproj" | "sln" | "fsproj" | "vbproj"
+                    )
+                })
+        })
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -511,7 +530,84 @@ fn index_looks_stale(index: &ProjectIndex, root_abs: &str) -> bool {
         }
     }
 
+    // Content-aware staleness: rescan if any indexable source file was modified
+    // after the index was persisted (covers edits and new files). Stat-only walk,
+    // capped and early-exiting, so it stays cheap relative to the index load.
+    if source_changed_since_index(root_abs) {
+        tracing::info!("[graph_index: source changed since last scan — marking stale]");
+        return true;
+    }
+
     false
+}
+
+/// Modified time of the persisted index artifact, if one exists.
+fn index_file_mtime(root_abs: &str) -> Option<std::time::SystemTime> {
+    let dir = ProjectIndex::index_dir(root_abs)?;
+    for name in ["index.json.zst", "index.json"] {
+        if let Ok(meta) = std::fs::metadata(dir.join(name)) {
+            if let Ok(modified) = meta.modified() {
+                return Some(modified);
+            }
+        }
+    }
+    None
+}
+
+/// Bounded, stat-only walk: returns true if any indexable source file has an
+/// mtime newer than the persisted index. Early-exits on the first newer file and
+/// caps traversal so it can never run away on a huge tree. Used only as the final
+/// staleness check, after the cheaper TTL/contamination/existence checks.
+fn source_changed_since_index(root_abs: &str) -> bool {
+    let Some(index_mtime) = index_file_mtime(root_abs) else {
+        // No persisted index yet — the existence/TTL checks above already decided.
+        return false;
+    };
+    let walker = ignore::WalkBuilder::new(root_abs)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .max_depth(Some(20))
+        .filter_entry(crate::core::cloud_files::keep_entry)
+        .build();
+    const MAX_VISIT: usize = 50_000;
+    let mut visited = 0usize;
+    for entry in walker.filter_map(std::result::Result::ok) {
+        visited += 1;
+        if visited > MAX_VISIT {
+            break;
+        }
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let ext = entry
+            .path()
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        if !is_indexable_ext(ext) {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata() {
+            if let Ok(modified) = meta.modified() {
+                if modified > index_mtime {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Delete the persisted graph-index artifacts for a project so the next scan
+/// rebuilds from scratch. Backs `graph build --force`.
+pub fn purge_index(project_root: &str) {
+    if let Some(dir) = ProjectIndex::index_dir(project_root) {
+        for name in ["index.json.zst", "index.json", "call_graph.json.zst"] {
+            let _ = std::fs::remove_file(dir.join(name));
+        }
+    }
 }
 
 pub fn scan(project_root: &str) -> ProjectIndex {

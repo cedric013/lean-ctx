@@ -762,8 +762,16 @@ fn handle_build(root: &str, fmt: OutputFormat) -> String {
 
     let (file_paths, file_contents) = walk_supported_sources(root_path);
 
-    let resolver_ctx =
-        crate::core::import_resolver::ResolverContext::new(root_path, file_paths.clone());
+    let cs_contents: std::collections::HashMap<String, String> = file_contents
+        .iter()
+        .filter(|(_, _, e)| e.eq_ignore_ascii_case("cs"))
+        .map(|(p, c, _)| (p.clone(), c.clone()))
+        .collect();
+    let resolver_ctx = crate::core::import_resolver::ResolverContext::new(
+        root_path,
+        file_paths.clone(),
+        &cs_contents,
+    );
 
     let mut total_nodes = 0usize;
     let mut total_edges = 0usize;
@@ -905,8 +913,16 @@ fn handle_update(root: &str, fmt: OutputFormat) -> String {
 
     let changed_count = changed.len();
     let (file_paths, file_contents) = walk_supported_sources(root_path);
-    let resolver_ctx =
-        crate::core::import_resolver::ResolverContext::new(root_path, file_paths.clone());
+    let cs_contents: std::collections::HashMap<String, String> = file_contents
+        .iter()
+        .filter(|(_, _, e)| e.eq_ignore_ascii_case("cs"))
+        .map(|(p, c, _)| (p.clone(), c.clone()))
+        .collect();
+    let resolver_ctx = crate::core::import_resolver::ResolverContext::new(
+        root_path,
+        file_paths.clone(),
+        &cs_contents,
+    );
 
     #[cfg(feature = "embeddings")]
     let per_file: Vec<(

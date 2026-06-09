@@ -321,6 +321,7 @@ class CockpitGraph extends HTMLElement {
           ? '<p class="hs" style="color:var(--muted);margin-top:12px;font-size:12px">' +
             'Graph-indexed languages: ' + supported + '</p>'
           : '') +
+        this._capabilityLegendHtml(esc, this._graphData ? this._graphData.language_matrix : null) +
         '</div>';
     }
 
@@ -333,7 +334,9 @@ class CockpitGraph extends HTMLElement {
       '<pre style="background:var(--surface-2);padding:12px 20px;border-radius:8px;display:inline-block;font-size:13px;color:var(--green)">' +
       'lean-ctx index build</pre>' +
       '<p class="hs" style="color:var(--muted);margin-top:12px;font-size:12px">' +
-      'This scans your project and builds the dependency graph. Re-run after major changes.</p></div>';
+      'This scans your project and builds the dependency graph. Re-run after major changes.</p>' +
+      this._capabilityLegendHtml(esc, this._graphData ? this._graphData.language_matrix : null) +
+      '</div>';
   }
 
   /* ============ Call-graph empty / unsupported-language state ============ */
@@ -366,6 +369,7 @@ class CockpitGraph extends HTMLElement {
           ? '<p class="hs" style="color:var(--muted);margin-top:12px;font-size:12px">' +
             'Call graph is available for: ' + supported + '</p>'
           : '') +
+        this._capabilityLegendHtml(esc, this._callGraphData ? this._callGraphData.language_matrix : null) +
         '</div>';
     }
 
@@ -378,7 +382,44 @@ class CockpitGraph extends HTMLElement {
       '<pre style="background:var(--surface-2);padding:12px 20px;border-radius:8px;display:inline-block;font-size:13px;color:var(--green)">' +
       'lean-ctx index build</pre>' +
       '<p class="hs" style="color:var(--muted);margin-top:12px;font-size:12px">' +
-      'This analyzes function calls across your project. Re-run after significant code changes.</p></div>';
+      'This analyzes function calls across your project. Re-run after significant code changes.</p>' +
+      this._capabilityLegendHtml(esc, this._callGraphData ? this._callGraphData.language_matrix : null) +
+      '</div>';
+  }
+
+  /* ============ Per-language capability legend ============ */
+
+  // Renders an honest matrix of what each detected language supports (symbol
+  // extraction, import edges, call graph), so an empty tab explains *why* rather
+  // than implying an index rebuild will help. Returns '' when no matrix is present.
+  _capabilityLegendHtml(esc, matrix) {
+    if (!Array.isArray(matrix) || matrix.length === 0) return '';
+    var yn = function (b) {
+      return b
+        ? '<span style="color:var(--green)">\u2713</span>'
+        : '<span style="color:var(--muted)">\u2014</span>';
+    };
+    var rows = matrix
+      .map(function (r) {
+        return '<tr>' +
+          '<td style="text-align:left;padding:2px 12px">' + esc(String(r.language)) + '</td>' +
+          '<td style="padding:2px 12px">' + esc(String(r.files)) + '</td>' +
+          '<td style="padding:2px 12px">' + yn(r.symbols) + '</td>' +
+          '<td style="padding:2px 12px">' + yn(r.imports) + '</td>' +
+          '<td style="padding:2px 12px">' + yn(r.call_graph) + '</td>' +
+          '</tr>';
+      })
+      .join('');
+    return '<div style="margin-top:20px;display:inline-block">' +
+      '<div class="hs" style="color:var(--muted);font-size:12px;margin-bottom:6px">Per-language capabilities</div>' +
+      '<table style="border-collapse:collapse;font-size:12px;color:var(--muted);margin:0 auto">' +
+      '<thead><tr>' +
+      '<th style="text-align:left;padding:2px 12px">Language</th>' +
+      '<th style="padding:2px 12px">Files</th>' +
+      '<th style="padding:2px 12px">Symbols</th>' +
+      '<th style="padding:2px 12px">Imports</th>' +
+      '<th style="padding:2px 12px">Call graph</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>';
   }
 
   /* ============ Dependencies D3 ============ */
