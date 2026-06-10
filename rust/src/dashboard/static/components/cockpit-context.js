@@ -227,8 +227,15 @@ class CockpitContext extends HTMLElement {
     const rulesTok = (radar?.rules?.total_tokens) || 0;
     const filesTok = entries.reduce((s, e) => s + (e.sent_tokens || 0), 0);
 
+    // Utilization precedence: exact proxy counts > backend pressure (ledger-
+    // based, ignores transcript noise) > local sum. The raw transcript can
+    // exceed the window (the IDE summarizes old messages), which would pin a
+    // naive estimate at 100% while the triage line below says "Healthy".
     const estTotal = proxyActive && pb ? (pb.total_input_tokens || 0) : (rulesTok + filesTok + chatTok);
-    const util = Math.min(1, estTotal / win);
+    const backendUtil = typeof pressure?.utilization === 'number' ? pressure.utilization : null;
+    const util = proxyActive && pb
+      ? Math.min(1, estTotal / win)
+      : (backendUtil ?? Math.min(1, estTotal / win));
     const pctUsed = Math.round(util * 100);
     const col = gaugeColor(util);
 

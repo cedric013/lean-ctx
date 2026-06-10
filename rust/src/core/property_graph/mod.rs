@@ -11,6 +11,7 @@ mod meta;
 mod node;
 mod queries;
 mod schema;
+pub mod snapshot;
 
 pub use edge::{Edge, EdgeKind};
 pub use file_catalog::FileCatalogEntry;

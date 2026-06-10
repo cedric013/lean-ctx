@@ -158,6 +158,9 @@ pub(in crate::cli::dispatch) fn cmd_graph(rest: &[String]) {
                 )
             );
         }
+        // Team graph — Context-as-Code (GL#451): a committable, diffable,
+        // mergeable snapshot of the property graph.
+        "snapshot" | "import" | "check" => cmd_graph_snapshot(sub, &rest[1..]),
         _ => {
             eprintln!(
                 "Usage:\n  \
@@ -171,10 +174,121 @@ pub(in crate::cli::dispatch) fn cmd_graph(rest: &[String]) {
                  lean-ctx graph explain <file> [--json]\n  \
                  lean-ctx graph diff [since-ref] [--json]\n  \
                  lean-ctx graph status\n  \
-                 lean-ctx graph export-html --out <path> [--root <path>] [--max-nodes <n>]"
+                 lean-ctx graph export-html --out <path> [--root <path>] [--max-nodes <n>]\n  \
+                 lean-ctx graph snapshot [--out <path>]      (export committable team snapshot)\n  \
+                 lean-ctx graph import <path>                (merge a teammate's snapshot)\n  \
+                 lean-ctx graph check [path]                 (drift vs snapshot; exit 1 on drift)"
             );
             std::process::exit(1);
         }
+    }
+}
+
+/// Default snapshot location inside the repo: committable Context-as-Code.
+fn default_snapshot_path(root: &str) -> std::path::PathBuf {
+    std::path::Path::new(root)
+        .join(".lean-ctx")
+        .join("graph.snapshot")
+}
+
+fn cmd_graph_snapshot(sub: &str, args: &[String]) {
+    let root = std::env::current_dir()
+        .map_or_else(|_| ".".to_string(), |p| p.to_string_lossy().to_string());
+
+    let graph = match core::property_graph::CodeGraph::open(&root) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("graph open failed: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    match sub {
+        "snapshot" => {
+            let out_path = args
+                .iter()
+                .enumerate()
+                .find_map(|(i, a)| {
+                    a.strip_prefix("--out=")
+                        .map(String::from)
+                        .or_else(|| (a == "--out").then(|| args.get(i + 1).cloned()).flatten())
+                })
+                .map_or_else(|| default_snapshot_path(&root), std::path::PathBuf::from);
+
+            let content = match core::property_graph::snapshot::export_snapshot(&graph) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("snapshot export failed: {e}");
+                    std::process::exit(1);
+                }
+            };
+            if let Some(parent) = out_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = crate::config_io::write_atomic_with_backup(&out_path, &content) {
+                eprintln!("snapshot write failed: {e}");
+                std::process::exit(1);
+            }
+            let lines = content.lines().count().saturating_sub(1);
+            println!(
+                "Graph snapshot written: {} ({lines} entries) — commit it to share with your team",
+                out_path.display()
+            );
+        }
+        "import" => {
+            let Some(path) = args.iter().find(|a| !a.starts_with('-')) else {
+                eprintln!("Usage: lean-ctx graph import <path>");
+                std::process::exit(1);
+            };
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("cannot read {path}: {e}");
+                    std::process::exit(1);
+                }
+            };
+            match core::property_graph::snapshot::import_snapshot(&graph, &content) {
+                Ok(stats) => println!(
+                    "Graph snapshot merged: {} nodes, {} edges ({} edges skipped — endpoints unknown locally)",
+                    stats.nodes, stats.edges, stats.skipped_edges
+                ),
+                Err(e) => {
+                    eprintln!("import failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        "check" => {
+            let path = args
+                .iter()
+                .find(|a| !a.starts_with('-'))
+                .map_or_else(|| default_snapshot_path(&root), std::path::PathBuf::from);
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("cannot read {}: {e}", path.display());
+                    std::process::exit(1);
+                }
+            };
+            match core::property_graph::snapshot::check_snapshot(&graph, &content) {
+                Ok(report) => {
+                    if report.in_sync() {
+                        println!("Graph in sync with snapshot ({} entries)", report.common);
+                    } else {
+                        println!(
+                            "Graph drift: {} only local, {} only in snapshot ({} common) — run 'lean-ctx graph snapshot' to refresh",
+                            report.only_local, report.only_snapshot, report.common
+                        );
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("check failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        _ => unreachable!("guarded by caller"),
     }
 }
 
