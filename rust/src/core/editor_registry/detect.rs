@@ -504,7 +504,7 @@ pub fn detect_vscode_path() -> PathBuf {
     #[cfg(target_os = "linux")]
     {
         if let Some(home) = dirs::home_dir() {
-            let paths = vec![
+            let paths = [
                 home.join(".config/Code/User/settings.json"),
                 home.join(".config/Code - Insiders/User/settings.json"),
                 home.join(".vscode-server/data/User/settings.json"),

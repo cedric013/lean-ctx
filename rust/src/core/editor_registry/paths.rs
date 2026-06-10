@@ -120,16 +120,19 @@ pub fn roo_mcp_path() -> PathBuf {
 }
 
 /// Resolves the correct VS Code-family base directory on Linux.
-/// Checks VSCodium, Code - OSS, and Code (in that order) — returns the first
-/// existing path, falling back to the standard `Code` path for fresh installs.
-/// Dev containers use `.vscode-server/data` instead of `.config`, so we check both.
+/// Checks VSCodium, Code - OSS, Code, Code - Insiders, then the dev-container
+/// server dir (in that order) — returns the first existing path, falling back
+/// to the standard `Code` path for fresh installs. Most-specific first: a
+/// VSCodium user with a leftover `~/.config/Code` (one accidental Code launch
+/// is enough) must keep resolving to VSCodium. Dev containers use
+/// `.vscode-server/data` instead of `.config`, so we check both.
 #[cfg(target_os = "linux")]
 fn resolve_vscode_global_storage(home: &Path, suffix: &str) -> PathBuf {
     const CANDIDATES: &[&str] = &[
+        ".config/VSCodium",
+        ".config/Code - OSS",
         ".config/Code",
         ".config/Code - Insiders",
-        ".config/Code - OSS",
-        ".config/VSCodium",
         ".vscode-server/data",
     ];
     for base in CANDIDATES {
