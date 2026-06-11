@@ -254,7 +254,7 @@ pub fn record_edit_outcome(path: &str, last_mode: &str, success: bool) {
             let scent_path = norm.clone();
             std::thread::spawn(move || {
                 crate::core::scent_field::deposit(
-                    crate::core::agent_identity::current_agent_id(),
+                    crate::core::scent_field::scent_agent_id(),
                     crate::core::scent_field::ScentKind::Stuck,
                     &scent_path,
                     1.0,

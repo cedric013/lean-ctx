@@ -200,7 +200,7 @@ pub fn handle(
                 return "Error: message (the claim target, e.g. a file path or task label) is required for claim".to_string();
             };
             let agent = current_agent_id.map_or_else(
-                || crate::core::agent_identity::current_agent_id().to_string(),
+                || crate::core::scent_field::scent_agent_id().to_string(),
                 str::to_string,
             );
             let normalized = crate::core::pathutil::normalize_tool_path(target);
@@ -216,7 +216,7 @@ pub fn handle(
                 return "Error: message (the claim target) is required for release".to_string();
             };
             let agent = current_agent_id.map_or_else(
-                || crate::core::agent_identity::current_agent_id().to_string(),
+                || crate::core::scent_field::scent_agent_id().to_string(),
                 str::to_string,
             );
             let normalized = crate::core::pathutil::normalize_tool_path(target);

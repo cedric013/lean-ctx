@@ -35,6 +35,7 @@ Every CLI command lean-ctx exposes, grouped by purpose. Source of truth:
 | `deps [path]` | Show project dependencies |
 | `gain` | Token-savings dashboard; `--live`, `--graph`, `--daily`, `--json`, `--wrapped`, `--svg`, `--share`, `--copy`, `--open`, `--publish`, `--leaderboard`, `--unpublish`, `--cost`, `--tasks`, `--agents`, `--heatmap` |
 | `token-report` (`report-tokens`) | Token + memory report; `--json` |
+| `learning` | Adaptive-learning state: `status`, `export [file]`, `import <file\|->` — share learned thresholds + LITM calibration with your team (secret-free, idempotent merge) |
 | `discover` | Find uncompressed commands in shell history; `--card` (shareable "before" SVG) |
 | `ghost` | Ghost-token report (hidden waste); `--json` |
 | `cheatsheet` (`cheat`) | Workflow cheat sheet |

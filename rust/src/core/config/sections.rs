@@ -601,4 +601,11 @@ pub struct EmbeddingConfig {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dimensions: Option<usize>,
+    /// Allow downloading the embedding model on first semantic need (#551).
+    /// `None` (unset) means **allowed** — the soft default that activates the
+    /// semantic features without manual setup. Set `false` for air-gapped
+    /// machines. The `LEAN_CTX_EMBEDDINGS_AUTO_DOWNLOAD` env var, when set,
+    /// overrides this in either direction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_download: Option<bool>,
 }

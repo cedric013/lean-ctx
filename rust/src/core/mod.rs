@@ -347,6 +347,7 @@ pub mod homeostasis;
 pub mod agent_registry;
 pub mod compliance;
 pub mod edit_quality;
+pub mod efficacy;
 pub mod evidence_bundle;
 pub mod graph_cache;
 pub mod ide_permissions;
@@ -368,6 +369,7 @@ pub mod knowledge_vault;
 pub mod language_capabilities;
 #[cfg(target_os = "macos")]
 pub mod launchd;
+pub mod learning_sync;
 pub mod limits;
 pub mod llm_enhance;
 pub mod llm_feedback;

@@ -6,12 +6,14 @@ mod billing;
 mod finops;
 mod gain;
 mod graph;
+mod learning;
 mod savings;
 
 pub(in crate::cli::dispatch) use billing::cmd_billing;
 pub(in crate::cli::dispatch) use finops::cmd_finops;
 pub(in crate::cli::dispatch) use gain::cmd_gain;
 pub(in crate::cli::dispatch) use graph::{cmd_compact, cmd_graph, cmd_smells};
+pub(in crate::cli::dispatch) use learning::cmd_learning;
 pub(in crate::cli::dispatch) use savings::cmd_savings;
 
 use crate::core;

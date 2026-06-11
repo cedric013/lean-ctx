@@ -5,6 +5,7 @@ mod context;
 mod graph;
 pub mod helpers;
 mod knowledge;
+mod learning;
 mod memory;
 mod risk;
 mod roi;
@@ -150,6 +151,7 @@ pub fn route_response(
         .or_else(|| risk::handle(path, query_str, method, body))
         .or_else(|| roi::handle(path, query_str, method, body))
         .or_else(|| knowledge::handle(path, query_str, method, body))
+        .or_else(|| learning::handle(path, query_str, method, body))
         .or_else(|| memory::handle(path, query_str, method, body))
         .or_else(|| graph::handle(path, query_str, method, body))
         .or_else(|| agents::handle(path, query_str, method, body))

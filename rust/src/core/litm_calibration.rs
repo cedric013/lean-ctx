@@ -110,6 +110,19 @@ impl LitmCalibration {
         }
     }
 
+    /// Team-merge (#550): element-wise maximum per counter. Cumulative
+    /// counters only ever grow, so `max` is idempotent on re-import and never
+    /// double-counts; divergent machines converge to the strongest evidence.
+    pub fn merge_from(&mut self, other: &Self) {
+        for (profile, theirs) in &other.per_profile {
+            let ours = self.per_profile.entry(profile.clone()).or_default();
+            ours.begin_hits = ours.begin_hits.max(theirs.begin_hits);
+            ours.begin_misses = ours.begin_misses.max(theirs.begin_misses);
+            ours.end_hits = ours.end_hits.max(theirs.end_hits);
+            ours.end_misses = ours.end_misses.max(theirs.end_misses);
+        }
+    }
+
     pub fn record(&mut self, profile: &str, pos: Position, hit: bool) {
         let stats = self.per_profile.entry(profile.to_string()).or_default();
         match (pos, hit) {
@@ -136,6 +149,19 @@ impl LitmCalibration {
         // Re-center: equal hit rates map to the default layout, not to 0.5.
         let share = DEFAULT_BEGIN_SHARE + (raw - 0.5) * 2.0 * (1.0 - DEFAULT_BEGIN_SHARE);
         share.clamp(SHARE_CLAMP.0, SHARE_CLAMP.1)
+    }
+
+    /// Aggregate raw counters across profiles (#549 efficacy snapshots):
+    /// `(begin_hits, begin_misses, end_hits, end_misses)`.
+    pub fn totals(&self) -> (u32, u32, u32, u32) {
+        self.per_profile.values().fold((0, 0, 0, 0), |acc, s| {
+            (
+                acc.0 + s.begin_hits,
+                acc.1 + s.begin_misses,
+                acc.2 + s.end_hits,
+                acc.3 + s.end_misses,
+            )
+        })
     }
 
     pub fn report_lines(&self) -> Vec<String> {
@@ -199,6 +225,36 @@ pub fn flush() {
 /// Process-global: report lines for ctx_metrics.
 pub fn report() -> Vec<String> {
     with_buffer(|c| c.report_lines())
+}
+
+/// Process-global aggregate counters (#549).
+pub fn totals() -> (u32, u32, u32, u32) {
+    with_buffer(|c| c.totals())
+}
+
+/// Process-global: machine-readable snapshot for the dashboard (#548):
+/// `(profile, stats, calibrated begin_share)`, sorted by profile.
+pub fn snapshot() -> Vec<(String, PlacementStats, f64)> {
+    with_buffer(|c| {
+        let mut v: Vec<_> = c
+            .per_profile
+            .iter()
+            .map(|(p, s)| (p.clone(), s.clone(), c.begin_share(p)))
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    })
+}
+
+/// Process-global: clone of the full calibration state for export (#550).
+pub fn export_state() -> LitmCalibration {
+    with_buffer(|c| c.clone())
+}
+
+/// Process-global: merge a foreign calibration in and persist (#550).
+pub fn merge_state(other: &LitmCalibration) {
+    with_buffer(|c| c.merge_from(other));
+    flush();
 }
 
 /// Loose match between a recall query and a manifest key: lowercase

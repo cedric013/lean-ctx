@@ -139,7 +139,7 @@ impl BounceTracker {
                     let scent_path = norm_path.to_string();
                     std::thread::spawn(move || {
                         crate::core::scent_field::deposit(
-                            crate::core::agent_identity::current_agent_id(),
+                            crate::core::scent_field::scent_agent_id(),
                             crate::core::scent_field::ScentKind::Stuck,
                             &scent_path,
                             0.5,

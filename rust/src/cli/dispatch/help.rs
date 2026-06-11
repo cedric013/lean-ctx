@@ -140,6 +140,7 @@ COMMANDS:
     gain --unpublish[=<id>]        Remove a published permalink (most recent if no id)
     config set gain.auto_publish true  Auto-(re)publish your recap on each `gain` (opt-in, throttled, off by default)
     savings [summary|verify|export|sign|verify-batch] Verified savings ledger (local, signed)
+    learning [status|export|import]  Adaptive-learning state: inspect, share with team, merge
          token-report [--json]          Token + memory report (project + session + CEP)
     pack --pr                      PR Context Pack (changed files, impact, tests, artifacts)
     index <status|build|build-full|watch>  Codebase index utilities

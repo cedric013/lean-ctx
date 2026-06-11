@@ -111,6 +111,34 @@ impl ThresholdLearner {
         }
     }
 
+    /// Team-merge (#550): sample-weighted average of deltas, never a blind
+    /// overwrite. `samples = max(...)` (not the sum) and weighted-mean deltas
+    /// make re-importing the same bundle a no-op (idempotent roundtrip) and
+    /// prevent double counting. Clamps stay authoritative.
+    pub fn merge_from(&mut self, other: &Self) {
+        for (ext, theirs) in &other.per_ext {
+            match self.per_ext.get_mut(ext) {
+                None => {
+                    let mut d = theirs.clone();
+                    d.delta_entropy = d.delta_entropy.clamp(-CLAMP, CLAMP);
+                    self.per_ext.insert(ext.clone(), d);
+                }
+                Some(ours) => {
+                    let total = u64::from(ours.samples) + u64::from(theirs.samples);
+                    if theirs.samples == 0 || total == 0 {
+                        continue;
+                    }
+                    let weighted = (ours.delta_entropy * f64::from(ours.samples)
+                        + theirs.delta_entropy * f64::from(theirs.samples))
+                        / total as f64;
+                    ours.delta_entropy = weighted.clamp(-CLAMP, CLAMP);
+                    ours.samples = ours.samples.max(theirs.samples);
+                    ours.last_decay_day = ours.last_decay_day.max(theirs.last_decay_day);
+                }
+            }
+        }
+    }
+
     /// Apply one quality signal for `ext` at `now` (unix seconds).
     pub fn record(&mut self, ext: &str, signal: QualitySignal, now: u64) {
         let ext = normalize_ext(ext);
@@ -226,6 +254,31 @@ pub fn flush() {
 /// Process-global: report lines for ctx_metrics.
 pub fn report() -> Vec<String> {
     with_buffer(|l| l.report_lines())
+}
+
+/// Process-global: machine-readable snapshot for the dashboard (#548),
+/// sorted by extension.
+pub fn snapshot() -> Vec<(String, LearnedDelta)> {
+    with_buffer(|l| {
+        let mut v: Vec<_> = l
+            .per_ext
+            .iter()
+            .map(|(k, d)| (k.clone(), d.clone()))
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    })
+}
+
+/// Process-global: clone of the full learner state for export (#550).
+pub fn export_state() -> ThresholdLearner {
+    with_buffer(|l| l.clone())
+}
+
+/// Process-global: merge a foreign learner state in and persist (#550).
+pub fn merge_state(other: &ThresholdLearner) {
+    with_buffer(|l| l.merge_from(other));
+    flush();
 }
 
 #[cfg(test)]

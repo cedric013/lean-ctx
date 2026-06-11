@@ -774,6 +774,15 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             "Declared embedding width for hf: custom models (fallback only — the real width is probed from the ONNX graph at load time). Built-in models ignore this key.",
         ),
     );
+    embedding.insert(
+        "auto_download".into(),
+        key_with_env(
+            "bool",
+            serde_json::json!(null),
+            "Download the embedding model in the background on first semantic need (default: allowed). Set false for air-gapped machines; semantic features then stay off until a model is provided manually.",
+            "LEAN_CTX_EMBEDDINGS_AUTO_DOWNLOAD",
+        ),
+    );
     sections.insert(
         "embedding".into(),
         SectionSchema {

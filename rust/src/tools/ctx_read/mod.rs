@@ -365,7 +365,7 @@ fn handle_with_options_resolved(
     // surface an active foreign claim as a one-line hint (~10 tokens) so
     // parallel agents stop duplicating work.
     {
-        let self_agent = crate::core::agent_identity::current_agent_id();
+        let self_agent = crate::core::scent_field::scent_agent_id();
         let scent_path = crate::core::pathutil::normalize_tool_path(path);
         std::thread::spawn(move || {
             crate::core::scent_field::deposit(

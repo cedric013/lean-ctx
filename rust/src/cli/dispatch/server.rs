@@ -117,6 +117,7 @@ pub(super) fn run_mcp_server() -> Result<()> {
         core::feedback::FeedbackStore::flush();
         core::threshold_learning::flush();
         core::litm_calibration::flush();
+        core::efficacy::capture();
 
         Ok(())
     })

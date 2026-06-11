@@ -31,6 +31,7 @@ Each journey document answers three questions for every feature:
 | 12 | [Troubleshooting Playbook](12-troubleshooting.md) | something's not working | symptom → diagnosis → fix; `status`, `doctor`, `doctor integrations`, `sessions doctor`, `report-issue` |
 | 13 | [Security & Governance](13-security-and-governance.md) | putting lean-ctx in front of real code | PathJail, `shell_allowlist`, `secret_detection`, sandbox, `harden`, role policies |
 | 14 | [Performance Tuning](14-performance-tuning.md) | huge repo / constrained machine | `memory_profile`, `bm25_max_cache_mb`, `graph_index_max_files`, `LEAN_CTX_MAX_*`, `slow-log` |
+| 18 | [Adaptive Learning](18-adaptive-learning.md) | understanding how lean-ctx tunes itself | learned thresholds, LITM calibration, scent field, playbook, `learning export/import`, efficacy |
 
 ## Cross-cutting references
 

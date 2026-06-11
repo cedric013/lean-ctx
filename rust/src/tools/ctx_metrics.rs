@@ -132,6 +132,36 @@ pub fn handle(cache: &SessionCache, tool_calls: &[ToolCallRecord], crp_mode: Crp
         out.extend(litm_cal);
     }
 
+    // Learning efficacy (#549): proof the learning loops work — bounce-rate
+    // trend, placement-hit movement, prevented duplicate work, playbook
+    // survival. Capturing here keeps the daily snapshot ring fresh without
+    // any timer.
+    crate::core::efficacy::capture();
+    let efficacy = crate::core::efficacy::report();
+    if !efficacy.is_empty() {
+        out.push(String::new());
+        if crp_mode.is_tdd() {
+            out.push("§learning-efficacy".to_string());
+        } else {
+            out.push("Learning Efficacy (is the adaptation working?):".to_string());
+        }
+        out.extend(efficacy);
+    }
+
+    // Embedding engine status (#551): semantic features are self-activating;
+    // surface where the engine currently stands so "why no semantics?" is
+    // never a mystery.
+    out.push(String::new());
+    out.push(format!(
+        "{} {}",
+        if crp_mode.is_tdd() {
+            "§embeddings"
+        } else {
+            "Embedding engine:"
+        },
+        crate::tools::ctx_knowledge::embeddings::engine_status_line()
+    ));
+
     if !tool_calls.is_empty() {
         out.push(String::new());
 

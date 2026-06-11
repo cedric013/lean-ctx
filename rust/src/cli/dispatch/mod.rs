@@ -102,6 +102,10 @@ pub fn run() {
                 cmd_savings(&rest);
                 return;
             }
+            "learning" => {
+                cmd_learning(&rest);
+                return;
+            }
             "conformance" | "selftest" => {
                 cmd_conformance(&rest);
                 return;

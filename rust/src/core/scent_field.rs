@@ -82,6 +82,10 @@ impl Scent {
 pub struct ScentField {
     pub scents: Vec<Scent>,
     pub schema_version: u32,
+    /// Lifetime count of rejected claims (#549): every rejection is a piece
+    /// of duplicate work the field prevented — the efficacy currency of #540.
+    #[serde(default)]
+    pub claims_rejected: u64,
 }
 
 fn field_path() -> Result<PathBuf, String> {
@@ -94,6 +98,25 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+/// Scent-field identity (#547). `agent_identity::current_agent_id` falls back
+/// to a shared `"local"` for every unconfigured process, which would make
+/// claims between two parallel MCP servers on the same machine invisible to
+/// each other (`foreign_claim` filters on `agent_id != self`). For scents we
+/// disambiguate with the PID; ledger/heatmap attribution keeps using the
+/// stable shared identity and is intentionally NOT changed.
+#[must_use]
+pub fn scent_agent_id() -> &'static str {
+    static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        let base = crate::core::agent_identity::current_agent_id();
+        if base == "local" {
+            format!("local-{}", std::process::id())
+        } else {
+            base.to_string()
+        }
+    })
 }
 
 impl ScentField {
@@ -249,6 +272,7 @@ pub fn deposit(agent_id: &str, kind: ScentKind, target: &str, intensity: f64) {
 pub fn claim(agent_id: &str, target: &str) -> Result<(), String> {
     with_field(|field, now| {
         if let Some((holder, age)) = field.foreign_claim(target, agent_id, now) {
+            field.claims_rejected += 1;
             return Err(format!(
                 "already claimed by {holder} ({}m ago, still active)",
                 age / 60
@@ -257,6 +281,32 @@ pub fn claim(agent_id: &str, target: &str) -> Result<(), String> {
         field.deposit(agent_id, ScentKind::Claimed, target, 2.0, now);
         Ok(())
     })?
+}
+
+/// Lifetime rejected-claim counter (#549): duplicate work prevented.
+pub fn claims_rejected_total() -> u64 {
+    field_path().map_or(0, |p| ScentField::load_unlocked(&p).claims_rejected)
+}
+
+/// Read-only view of currently effective scents for the dashboard (#548):
+/// `(scent, effective_intensity_now)`, strongest first. Lock-free read —
+/// a slightly stale view is fine for display.
+pub fn active_scents() -> Vec<(Scent, f64)> {
+    let Ok(path) = field_path() else {
+        return Vec::new();
+    };
+    let field = ScentField::load_unlocked(&path);
+    let now = now_secs();
+    let mut v: Vec<(Scent, f64)> = field
+        .scents
+        .into_iter()
+        .filter_map(|s| {
+            let eff = s.effective_intensity(now);
+            (eff >= GC_THRESHOLD).then_some((s, eff))
+        })
+        .collect();
+    v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    v
 }
 
 /// Release a claim (and any Hot scent) on `target` held by `agent_id`.
@@ -361,5 +411,24 @@ mod tests {
     fn empty_field_renders_empty() {
         let f = ScentField::default();
         assert!(f.render_sync(NOW).is_empty());
+    }
+
+    #[test]
+    fn scent_identity_disambiguates_unconfigured_processes() {
+        let id = scent_agent_id();
+        let base = crate::core::agent_identity::current_agent_id();
+        if base == "local" {
+            // #547: two parallel unconfigured processes must not collide.
+            assert_eq!(id, format!("local-{}", std::process::id()));
+        } else {
+            // Explicitly configured identity is kept verbatim.
+            assert_eq!(id, base);
+        }
+        // Claims between distinct PIDs are mutually foreign.
+        let mut f = ScentField::default();
+        f.deposit("local-1111", ScentKind::Claimed, "src/x.rs", 2.0, NOW);
+        assert!(f
+            .foreign_claim("src/x.rs", "local-2222", NOW + 30)
+            .is_some());
     }
 }
