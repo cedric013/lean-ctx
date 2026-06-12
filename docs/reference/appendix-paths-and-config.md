@@ -74,6 +74,8 @@ var always wins.
 | `LEAN_CTX_MEMORY_PROFILE` | `low\|balanced\|performance` | `performance` |
 | `LEAN_CTX_PROXY_PORT` | Proxy port | `4444` |
 | `LEAN_CTX_NO_UPDATE_CHECK=1` | Disable update check | unset |
+| `LEAN_CTX_ALLOW_PATH` | Extra PathJail roots (path list; see §5) | unset |
+| `LEAN_CTX_EXTRA_ROOTS` | Multi-root workspace roots (path list; see §5) | unset |
 
 ### Provider tokens (for `ctx_provider`)
 
@@ -141,3 +143,41 @@ Every edit to an existing file goes through `config_io::write_atomic`, which
 writes a `*.lean-ctx.bak` backup first. Rules injection only rewrites content
 between `<!-- lean-ctx -->` markers — your own content is preserved.
 `lean-ctx uninstall` reverses all of the above.
+
+---
+
+## 5. Filesystem boundary — `path_jail`, `allow_paths`, `extra_roots` (GH #392)
+
+All tool file access (`ctx_read`, `ctx_edit`, `ctx_tree`, …) is jailed under the
+current `project_root` (**PathJail**). Three knobs widen or remove that boundary —
+they overlap, so here is exactly what each one does:
+
+| Knob | Effect | Use when |
+|------|--------|----------|
+| `allow_paths = ["…"]` (root key) | **Adds** directories to PathJail's whitelist. Tools may read/edit under them, but `ctx_tree`/`ctx_search` do **not** scan them. | One extra directory needs to be readable/editable (e.g. a shared skills folder). |
+| `extra_roots = ["…"]` (root key) | Same whitelist effect as `allow_paths` **plus** multi-root scanning: `ctx_tree`, `ctx_search`, overview treat them as additional project roots. | Multi-repo workspaces. |
+| `path_jail = false` (root key) | **Disables PathJail entirely** — every absolute path is allowed. | Sandboxed environments (bwrap, containers, VMs) where the OS is the boundary. |
+
+Env equivalents (path-list syntax, `:` on Unix / `;` on Windows):
+`LEAN_CTX_ALLOW_PATH` (= `allow_paths`), `LEAN_CTX_EXTRA_ROOTS` (= `extra_roots`).
+
+Notes that save debugging time:
+
+- **`~`, `$VAR` and `${VAR}` are expanded** in `allow_paths` / `extra_roots` /
+  the env vars (since v3.8.1). On older versions `"$HOME/code"` was matched
+  literally and silently never applied.
+- `allow_paths = ["/"]` technically whitelists everything; prefer the explicit
+  `path_jail = false` — `lean-ctx doctor` flags the `"/"` pattern.
+- Config changes are picked up on the next tool call (mtime-based reload); no
+  MCP server restart needed. If a change appears to do nothing, run
+  `lean-ctx doctor`: it reports config parse errors (a broken `config.toml`
+  silently falls back to defaults) and dead `allow_paths` entries (unset
+  `$VAR`, missing directory), plus the effective jail state.
+- **Compile-time off-switch:** building with the `no-jail` cargo feature
+  removes the jail entirely (for trusted single-user builds).
+- **Removed:** the `LEAN_CTX_NO_JAIL=1` env var (≤ 3.7.3). It was replaced by
+  the `path_jail = false` config key and the `no-jail` compile feature; setting
+  the old env var has no effect on current versions.
+- Home-level IDE config dirs (`~/.cursor`, `~/.claude`, …) are excluded from
+  the jail's whitelist by default; opt in with `allow_ide_config_dirs = true`
+  (they expose other projects' sessions and credentials).
