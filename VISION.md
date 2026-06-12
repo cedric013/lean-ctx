@@ -1,6 +1,8 @@
 # LeanCTX Vision
 
 > **Control what your AI can see.**
+>
+> Stack-level vision (LeanCTX · CTXPKG · ctxpkg.com · CTXFabric): [`ECOSYSTEM.md`](ECOSYSTEM.md)
 
 ## The Cognitive Context Layer
 
