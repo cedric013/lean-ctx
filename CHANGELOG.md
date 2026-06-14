@@ -3,7 +3,32 @@
 All notable changes to lean-ctx are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [3.8.5] — 2026-06-14
+
+### Added
+- **JetBrains / IntelliJ IDE plugin (#413)** — a native plugin (community
+  contribution by @dasTholo) that drives lean-ctx from inside JetBrains IDEs:
+  PSI-backed navigation, a refactoring engine (rename / move / inline / safe
+  delete), symbolic body edits and an in-IDE tool window. The Rust engine gains a
+  matching `ctx_refactor` surface and an LSP layer (`lsp::backend`,
+  `jetbrains_backend`, `edit_apply`, `port_discovery`) that talks to the IDE over
+  a **localhost-only, token-authenticated** HTTP channel and **re-validates every
+  plugin-reported path against the project PathJail** (BLAKE3 TOCTOU guard, atomic
+  writes). It also works **headless** (tree-sitter range edits without a running
+  IDE). Kotlin / Kotlin-Script (`.kt` / `.kts`) are now recognised for indexing.
+- **First-class Lua / Luau graph indexing (#360)** — symbols, `require` edges and
+  the call graph are now extracted for Lua and Luau sources.
+- **`lean-ctx dashboard --auth-token` (#377)** — a fixed dashboard auth token via
+  flag or env (env takes precedence) for reverse-proxy deployments, with
+  token-aware connection reuse.
+- **`lean-ctx doctor --fix` splits a legacy/mixed install into the XDG dirs
+  (#408)**: moves data/state/cache out of the config dir on demand. The migration
+  is all-or-nothing, idempotent/resumable (existing files are never clobbered) and
+  crash-safe (atomic `rename` with a copy+remove fallback across filesystems).
+  Read-only `lean-ctx doctor` reports a pending split. New per-category overrides
+  `LEAN_CTX_CONFIG_DIR`, `LEAN_CTX_STATE_DIR`, `LEAN_CTX_CACHE_DIR`.
+- **Multilingual intent routing (#591)** — intent detection now handles
+  non-English queries.
 
 ### Changed
 - **XDG Base Directory compliance (#408)** — lean-ctx now separates its files
@@ -20,14 +45,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Existing legacy (`~/.lean-ctx`) and mixed (`$XDG_CONFIG_HOME/lean-ctx`) installs
   keep working unchanged in single-dir mode; an explicit `LEAN_CTX_DATA_DIR` still
   forces one directory and is never auto-split.
+- **pi-lean-ctx bridge tool parity (#409)** — `ctx_search`, `ctx_tree` and
+  `ctx_multi_read` are now exposed through the Pi bridge, guarded by a Node CI gate.
 
-### Added
-- **`lean-ctx doctor --fix` splits a legacy/mixed install into the XDG dirs
-  (#408)**: moves data/state/cache out of the config dir on demand. The migration
-  is all-or-nothing, idempotent/resumable (existing files are never clobbered) and
-  crash-safe (atomic `rename` with a copy+remove fallback across filesystems).
-  Read-only `lean-ctx doctor` reports a pending split. New per-category overrides
-  `LEAN_CTX_CONFIG_DIR`, `LEAN_CTX_STATE_DIR`, `LEAN_CTX_CACHE_DIR`.
+### Fixed
+- **Embedding index clobbered by parallel `remember` (#412)** — embedding-index
+  writes are now serialized under the per-project lock, fixing degraded recall
+  when multiple `remember` calls raced.
+- **`auto_update_mcp = false` ignored during setup/onboard/init (#281)** — the
+  setting is now honored across all three paths.
+- **Session `extra_roots` not honored in path resolution (#403)** — extra roots
+  are propagated at init and respected by the resolver.
+- **Verbatim reads compressed on the CLI path (#404)** — verbatim reads are now
+  exempt from terse compression on the CLI.
+- **`Config::load` served stale config (#406, #407)** — the load cache is now
+  invalidated by content hash so live edits apply immediately.
+- **pi-lean-ctx MCP bridge did not shut down cleanly (#405)**.
+
+### Security
+- **Captured agent API keys now stored in the state dir at `0o600` (#408)** — keys
+  such as `GEMINI_API_KEY` no longer sit alongside config files.
+- **esbuild forced to ≥0.28.1 in the cookbook (#595)** — closes
+  GHSA-gv7w-rqvm-qjhr (dev-scope: missing binary integrity verification) by
+  deduping the whole cookbook tree onto a patched esbuild.
+
+### Internal
+- **`make preflight` CI-parity gate** — a local fmt / clippy / doc / doc-drift /
+  Windows-cross-compile / test gate wired into a pre-push hook, so the
+  deterministic CI jobs can no longer go red only after the full CI matrix.
 
 ## [3.8.4] — 2026-06-13
 
