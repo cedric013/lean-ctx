@@ -39,6 +39,21 @@ pub fn resolve_tool_path(
     shell_cwd: Option<&str>,
     raw: &str,
 ) -> Result<String, String> {
+    resolve_tool_path_with_roots(project_root, shell_cwd, raw, &[])
+}
+
+/// Like [`resolve_tool_path`], but also permits paths under any of
+/// `extra_roots` (session-scoped trusted roots from `session.extra_roots`).
+///
+/// An empty `extra_roots` is identical to [`resolve_tool_path`]; this is how
+/// sync tool handlers honor MCP `roots/list` / config `extra_roots` for an
+/// explicit path without widening the global jail (#403).
+pub fn resolve_tool_path_with_roots(
+    project_root: Option<&str>,
+    shell_cwd: Option<&str>,
+    raw: &str,
+    extra_roots: &[String],
+) -> Result<String, String> {
     let normalized = crate::core::pathutil::normalize_tool_path(raw);
     if normalized.is_empty() || normalized == "." {
         return Ok(normalized);
@@ -65,7 +80,8 @@ pub fn resolve_tool_path(
     };
 
     let jail_root_path = Path::new(&jail_root);
-    let jailed = crate::core::pathjail::jail_path(&resolved, jail_root_path)?;
+    let jailed =
+        crate::core::pathjail::jail_path_with_roots(&resolved, jail_root_path, extra_roots)?;
     crate::core::io_boundary::check_secret_path_for_tool("resolve_path", &jailed)?;
 
     Ok(crate::core::pathutil::normalize_tool_path(
@@ -160,6 +176,34 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    // #403: session-scoped extra_roots must thread through to the jail so an
+    // explicit path under a worktree resolves where the bare resolver rejects
+    // it. Asserts only the Ok case (robust against parallel env mutation): with
+    // the jail on, success here is only possible because extra_roots were honored.
+    #[cfg(not(feature = "no-jail"))]
+    #[test]
+    fn extra_roots_thread_through_resolve_tool_path() {
+        let base = std::env::temp_dir().join(format!("lc_pr_extra_{}", std::process::id()));
+        let root = base.join("root");
+        let worktree = base.join("worktree");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+        let file = worktree.join("a.txt");
+        fs::write(&file, "x").unwrap();
+
+        let root_s = root.to_string_lossy().to_string();
+        let file_abs = file.to_string_lossy().to_string();
+        let extra = vec![worktree.to_string_lossy().to_string()];
+
+        let out = resolve_tool_path_with_roots(Some(&root_s), None, &file_abs, &extra);
+        assert!(
+            out.is_ok(),
+            "extra_roots must thread through the resolver: {out:?}"
+        );
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

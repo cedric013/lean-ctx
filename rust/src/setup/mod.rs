@@ -371,10 +371,11 @@ pub fn run_setup() {
     };
 
     if contribute {
-        let config_dir = crate::core::data_dir::lean_ctx_data_dir()
-            .unwrap_or_else(|_| home.join(".config/lean-ctx"));
-        let _ = std::fs::create_dir_all(&config_dir);
-        let config_path = config_dir.join("config.toml");
+        let config_path = crate::core::config::Config::path()
+            .unwrap_or_else(|| home.join(".config/lean-ctx").join("config.toml"));
+        if let Some(dir) = config_path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
         let mut config_content = std::fs::read_to_string(&config_path).unwrap_or_default();
         if !config_content.contains("[cloud]") {
             if !config_content.is_empty() && !config_content.ends_with('\n') {
@@ -457,9 +458,8 @@ pub fn run_setup() {
             } else {
                 let root_path = std::path::Path::new(root_trimmed);
                 if root_path.exists() && root_path.is_dir() {
-                    let config_path = crate::core::data_dir::lean_ctx_data_dir()
-                        .unwrap_or_else(|_| home.join(".config/lean-ctx"))
-                        .join("config.toml");
+                    let config_path = crate::core::config::Config::path()
+                        .unwrap_or_else(|| home.join(".config/lean-ctx").join("config.toml"));
                     let mut content = std::fs::read_to_string(&config_path).unwrap_or_default();
                     if content.contains("project_root") {
                         if let Ok(re) = regex::Regex::new(r#"(?m)^project_root\s*=\s*"[^"]*""#) {
@@ -737,7 +737,10 @@ pub fn run_setup_with_options(opts: SetupOptions) -> Result<SetupReport, String>
                 shell_step.items.push(SetupItem {
                     name: "env_sh".to_string(),
                     status: "created".to_string(),
-                    path: Some("~/.lean-ctx/env.sh".to_string()),
+                    path: Some(crate::core::paths::config_dir().map_or_else(
+                        |_| "~/.config/lean-ctx/env.sh".to_string(),
+                        |d| d.join("env.sh").to_string_lossy().to_string(),
+                    )),
                     note: Some("Docker/CI helper (BASH_ENV / CLAUDE_ENV_FILE)".to_string()),
                 });
             } else {
@@ -1006,9 +1009,15 @@ pub fn run_setup_with_options(opts: SetupOptions) -> Result<SetupReport, String>
         }
         let mode = recommend_hook_mode(&target.agent_key);
         crate::hooks::install_agent_hook_with_mode(&target.agent_key, true, mode);
-        let mcp_note = match configure_agent_mcp(&target.agent_key) {
-            Ok(()) => "; MCP config updated".to_string(),
-            Err(e) => format!("; MCP config skipped: {e}"),
+        // #281: honor `[setup] auto_update_mcp = false` — register MCP only when
+        // enabled; hooks above always install.
+        let mcp_note = if setup_cfg.should_update_mcp() {
+            match configure_agent_mcp(&target.agent_key) {
+                Ok(()) => "; MCP config updated".to_string(),
+                Err(e) => format!("; MCP config skipped: {e}"),
+            }
+        } else {
+            "; MCP registration skipped (auto_update_mcp=false)".to_string()
         };
         hooks_step.items.push(SetupItem {
             name: format!("{} hooks", target.name),

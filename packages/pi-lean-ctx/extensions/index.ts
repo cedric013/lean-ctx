@@ -356,8 +356,15 @@ export default async function (pi: ExtensionAPI) {
   // below register through this wrapper instead of pi.registerTool directly.
   const skippedExtensionTools: string[] = [];
   const disabledExtensionTools: string[] = [];
+  // The exact set of tool names this extension owns locally (CLI-first
+  // replacements). Handed to the embedded bridge so it skips precisely these
+  // MCP namesakes and can never suppress a tool without a local replacement —
+  // the root cause of #409. Recorded for every name we manage, so the set
+  // tracks the registrations automatically instead of a hand-maintained list.
+  const localToolNames = new Set<string>();
   const registerTool = ((def: { name?: unknown }): void => {
     const name = typeof def.name === "string" ? def.name : String(def.name);
+    localToolNames.add(name);
     if (PI_CONFIG.disabledTools.has(name.toLowerCase())) {
       disabledExtensionTools.push(name);
       return;
@@ -741,10 +748,15 @@ export default async function (pi: ExtensionAPI) {
     ? new McpBridge(resolveBinary(), PI_CONFIG.forwardedEnv, {
         disabledTools: PI_CONFIG.disabledTools,
         toolPrefix: PI_CONFIG.toolPrefix,
+        localTools: localToolNames,
       })
     : null;
 
   if (mcpBridge) {
+    pi.on("session_shutdown", async () => {
+      await mcpBridge?.shutdown();
+    });
+
     try {
       await mcpBridge.start(pi);
     } catch (err) {

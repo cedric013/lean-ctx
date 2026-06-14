@@ -167,9 +167,9 @@ pub(crate) fn handle_embeddings_reset(project_root: &str) -> String {
 pub(crate) fn handle_embeddings_reindex(project_root: &str) -> String {
     #[cfg(feature = "embeddings")]
     {
-        let Some(knowledge) = ProjectKnowledge::load(project_root) else {
+        if ProjectKnowledge::load(project_root).is_none() {
             return "No knowledge stored for this project yet.".to_string();
-        };
+        }
         let policy = match load_policy_or_error() {
             Ok(p) => p,
             Err(e) => return e,
@@ -180,41 +180,51 @@ pub(crate) fn handle_embeddings_reindex(project_root: &str) -> String {
                     .to_string();
         };
 
-        let mut idx =
-            crate::core::knowledge_embedding::KnowledgeEmbeddingIndex::new(&knowledge.project_hash);
+        // Rebuild + save under the per-project lock, reloading knowledge inside
+        // it so a `remember` committed mid-reindex is included rather than
+        // clobbered by a stale-snapshot rebuild (issue #412). The model is
+        // fetched above, outside the lock, so its load never blocks writers.
+        ProjectKnowledge::with_project_lock(project_root, || {
+            let knowledge = ProjectKnowledge::load_or_create(project_root);
+            let mut idx = crate::core::knowledge_embedding::KnowledgeEmbeddingIndex::new(
+                &knowledge.project_hash,
+            );
 
-        let mut facts: Vec<&crate::core::knowledge::KnowledgeFact> =
-            knowledge.facts.iter().filter(|f| f.is_current()).collect();
-        facts.sort_by(|a, b| {
-            b.confidence
-                .partial_cmp(&a.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.last_confirmed.cmp(&a.last_confirmed))
-                .then_with(|| a.category.cmp(&b.category))
-                .then_with(|| a.key.cmp(&b.key))
-        });
+            let mut facts: Vec<&crate::core::knowledge::KnowledgeFact> =
+                knowledge.facts.iter().filter(|f| f.is_current()).collect();
+            facts.sort_by(|a, b| {
+                b.confidence
+                    .partial_cmp(&a.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| b.last_confirmed.cmp(&a.last_confirmed))
+                    .then_with(|| a.category.cmp(&b.category))
+                    .then_with(|| a.key.cmp(&b.key))
+            });
 
-        let max = policy.embeddings.max_facts;
-        let mut embedded = 0usize;
-        for f in facts.into_iter().take(max) {
-            if crate::core::knowledge_embedding::embed_and_store(
-                &mut idx,
-                engine,
-                &f.category,
-                &f.key,
-                &f.value,
-            )
-            .is_ok()
-            {
-                embedded += 1;
+            let max = policy.embeddings.max_facts;
+            let mut embedded = 0usize;
+            for f in facts.into_iter().take(max) {
+                if crate::core::knowledge_embedding::embed_and_store(
+                    &mut idx,
+                    engine,
+                    &f.category,
+                    &f.key,
+                    &f.value,
+                )
+                .is_ok()
+                {
+                    embedded += 1;
+                }
             }
-        }
 
-        crate::core::knowledge_embedding::compact_against_knowledge(&mut idx, &knowledge, &policy);
-        match idx.save() {
-            Ok(()) => format!("Embeddings reindex ok (embedded {embedded} facts)."),
-            Err(e) => format!("Embeddings reindex failed: {e}"),
-        }
+            crate::core::knowledge_embedding::compact_against_knowledge(
+                &mut idx, &knowledge, &policy,
+            );
+            match idx.save() {
+                Ok(()) => format!("Embeddings reindex ok (embedded {embedded} facts)."),
+                Err(e) => format!("Embeddings reindex failed: {e}"),
+            }
+        })
     }
     #[cfg(not(feature = "embeddings"))]
     {

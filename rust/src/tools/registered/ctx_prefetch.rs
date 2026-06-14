@@ -22,7 +22,7 @@ impl McpTool for CtxPrefetchTool {
                 "type": "object",
                 "properties": {
                     "root": { "type": "string", "description": "Project root (default: .)" },
-                    "task": { "type": "string", "description": "Optional task for relevance scoring" },
+                    "task": { "type": "string", "description": "Optional task (short English preferred) for relevance scoring" },
                     "changed_files": { "type": "array", "items": { "type": "string" }, "description": "Optional changed files (paths) to compute blast radius" },
                     "budget_tokens": { "type": "integer", "description": "Soft budget hint for mode selection (default: 3000)" },
                     "max_files": { "type": "integer", "description": "Max files to prefetch (default: 10)" }

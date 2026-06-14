@@ -99,19 +99,17 @@ impl ProjectKnowledge {
         Ok(())
     }
 
-    /// Runs a read-modify-write cycle under both an in-process mutex and a
-    /// cross-process file lock, then saves atomically. The knowledge is
-    /// (re)loaded *inside* the locks so the closure always operates on the
-    /// latest on-disk state; this is what prevents lost updates when several
-    /// `remember` calls run in parallel — whether as threads in one process
-    /// (parallel MCP calls) or as separate processes (parallel CLI invocations,
-    /// CLI + daemon + MCP server) — see issue #326. Returns the persisted
-    /// knowledge plus the closure's return value so the caller can build a
-    /// response from the committed state.
-    pub fn mutate_locked<T>(
-        project_root: &str,
-        f: impl FnOnce(&mut Self) -> T,
-    ) -> Result<(Self, T), String> {
+    /// Runs `f` while holding this project's locks — the in-process per-hash
+    /// mutex *and* the cross-process advisory file lock — without loading or
+    /// saving the knowledge JSON itself. [`mutate_locked`](Self::mutate_locked)
+    /// is built on this, and side-car stores that must stay consistent with the
+    /// facts (today: the embedding index) call it directly so their
+    /// read-modify-write is serialized against parallel
+    /// `remember`/`remove`/`reindex`. That side-car write used to run lock-free,
+    /// so concurrent callers clobbered each other's embeddings and pruned
+    /// just-stored vectors, degrading semantic recall (issue #412, a #326
+    /// follow-up).
+    pub(crate) fn with_project_lock<T>(project_root: &str, f: impl FnOnce() -> T) -> T {
         let hash = hash_project_root(project_root);
         let lock = knowledge_lock(&hash);
         let _guard = lock
@@ -120,7 +118,7 @@ impl ProjectKnowledge {
 
         // Cross-process lock: create the dir up front so the lock file has a
         // home, then block until any other process releases it. Held for the
-        // whole read-modify-write via `_file_lock`'s lifetime.
+        // whole critical section via `_file_lock`'s lifetime.
         let _file_lock = match knowledge_dir(&hash) {
             Ok(dir) => {
                 let _ = std::fs::create_dir_all(&dir);
@@ -129,10 +127,27 @@ impl ProjectKnowledge {
             Err(_) => None,
         };
 
-        let mut knowledge = Self::load_or_create(project_root);
-        let out = f(&mut knowledge);
-        knowledge.save()?;
-        Ok((knowledge, out))
+        f()
+    }
+
+    /// Runs a read-modify-write cycle under `with_project_lock`, then saves
+    /// atomically. The knowledge is (re)loaded *inside* the lock so
+    /// the closure always operates on the latest on-disk state; this is what
+    /// prevents lost updates when several `remember` calls run in parallel —
+    /// whether as threads in one process (parallel MCP calls) or as separate
+    /// processes (parallel CLI invocations, CLI + daemon + MCP server) — see
+    /// issue #326. Returns the persisted knowledge plus the closure's return
+    /// value so the caller can build a response from the committed state.
+    pub fn mutate_locked<T>(
+        project_root: &str,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> Result<(Self, T), String> {
+        Self::with_project_lock(project_root, || {
+            let mut knowledge = Self::load_or_create(project_root);
+            let out = f(&mut knowledge);
+            knowledge.save()?;
+            Ok((knowledge, out))
+        })
     }
 
     pub fn load(project_root: &str) -> Option<Self> {

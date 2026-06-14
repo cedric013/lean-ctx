@@ -232,13 +232,22 @@ pub fn cmd_read(args: &[String]) {
             super::common::cli_track_read(path, "entropy", original_tokens, sent);
         }
         _ => {
+            // `full`, `lines:` and any unrecognized mode land here. These are
+            // verbatim reads — the prose terse pipeline would mangle source
+            // (dictionary substitutions, line-drop dedup) and break a `full`
+            // read's "complete content" contract, so it must never run here
+            // (#404). Intentionally-lossy modes (map/signatures/aggressive/
+            // entropy) have their own arms above.
             let mut output = format!("{short} [{line_count}L]\n{content}");
-            let config = crate::core::config::Config::load();
-            let level = crate::core::config::CompressionLevel::effective(&config);
-            if level.is_active() {
-                let terse_result = crate::core::terse::pipeline::compress(&output, &level, None);
-                if terse_result.quality_passed && terse_result.savings_pct >= 3.0 {
-                    output = terse_result.output;
+            if !crate::core::terse::is_verbatim_read("ctx_read", Some(mode)) {
+                let config = crate::core::config::Config::load();
+                let level = crate::core::config::CompressionLevel::effective(&config);
+                if level.is_active() {
+                    let terse_result =
+                        crate::core::terse::pipeline::compress(&output, &level, None);
+                    if terse_result.quality_passed && terse_result.savings_pct >= 3.0 {
+                        output = terse_result.output;
+                    }
                 }
             }
             println!("{output}");

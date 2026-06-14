@@ -83,10 +83,11 @@ pub(crate) fn resolve_path_sync(
     session: &crate::core::session::SessionState,
     raw: &str,
 ) -> Result<String, String> {
-    crate::core::path_resolve::resolve_tool_path(
+    crate::core::path_resolve::resolve_tool_path_with_roots(
         session.project_root.as_deref(),
         session.shell_cwd.as_deref(),
         raw,
+        &session.extra_roots,
     )
 }
 

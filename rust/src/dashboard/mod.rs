@@ -63,7 +63,12 @@ fn match_font_asset(path: &str) -> Option<&'static [u8]> {
 pub mod base_path;
 pub mod routes;
 
-pub async fn start(port: Option<u16>, host: Option<String>, base_path: Option<String>) {
+pub async fn start(
+    port: Option<u16>,
+    host: Option<String>,
+    base_path: Option<String>,
+    auth_token: Option<String>,
+) {
     let port = port.unwrap_or_else(|| {
         std::env::var("LEAN_CTX_PORT")
             .ok()
@@ -89,10 +94,23 @@ pub async fn start(port: Option<u16>, host: Option<String>, base_path: Option<St
     let addr = format!("{host}:{port}");
     let is_local = host == "127.0.0.1" || host == "localhost" || host == "::1";
 
+    // Resolve any *requested* fixed token (flag > LEAN_CTX_HTTP_TOKEN) up-front;
+    // `None` means "generate a random one". Done before the already-running check
+    // so we can warn when the requested token won't match a live instance (#377).
+    let (requested_token, token_src) = resolve_requested_token(auth_token.as_deref());
+
     // Avoid accidental multiple dashboard instances (common source of "it hangs").
     // Only safe to auto-detect for local dashboards without auth.
     if is_local && dashboard_responding(&host, port) {
         println!("\n  lean-ctx dashboard already running → http://{host}:{port}{base_path}");
+        if let Some(req) = requested_token.as_deref() {
+            if load_saved_token().as_deref() != Some(req) {
+                eprintln!(
+                    "  \x1b[33m⚠\x1b[0m The running instance uses a different token — your {token_src} \
+                     will be rejected. Stop it (Ctrl+C) and restart to apply the new token."
+                );
+            }
+        }
         println!("  Tip: use Ctrl+C in the existing terminal to stop it.\n");
         if let Some(t) = load_saved_token() {
             open_browser(&format!("http://localhost:{port}{base_path}/?token={t}"));
@@ -104,7 +122,7 @@ pub async fn start(port: Option<u16>, host: Option<String>, base_path: Option<St
 
     // Always enable auth (even on loopback) to prevent cross-origin reads of /api/*
     // from a malicious website (CORS is not a reliable boundary for localhost services).
-    let (t, token_from_env) = resolve_dashboard_token();
+    let t = requested_token.unwrap_or_else(generate_token);
     let token = Some(Arc::new(t));
 
     // Bind BEFORE persisting the token: two racing `lean-ctx dashboard` starts
@@ -132,10 +150,10 @@ pub async fn start(port: Option<u16>, host: Option<String>, base_path: Option<St
         } else {
             t.to_string()
         };
-        let src = if token_from_env {
-            " (from LEAN_CTX_HTTP_TOKEN)"
+        let src = if token_src.is_empty() {
+            String::new()
         } else {
-            ""
+            format!(" (from {token_src})")
         };
         if is_local {
             println!("  Auth: enabled (local){src}");
@@ -208,15 +226,22 @@ const SCRAPE_TOKEN_ENV: &str = "LEAN_CTX_SCRAPE_TOKEN";
 /// restarts and redeploys (nginx can inject a fixed `Authorization: Bearer …`).
 /// When unset or empty, a fresh random token is generated (no behavior change).
 ///
-/// Returns the token and whether it originated from the env var.
-fn resolve_dashboard_token() -> (String, bool) {
+/// Resolve a *requested* fixed token with precedence `--auth-token` flag >
+/// `LEAN_CTX_HTTP_TOKEN` (#377). The flag wins so it survives container/service
+/// environments that strip or fail to inherit the env var. Returns the trimmed,
+/// non-empty token and a human label of its source; `None` means "no fixed token
+/// requested → caller generates a random one".
+fn resolve_requested_token(flag: Option<&str>) -> (Option<String>, &'static str) {
+    if let Some(t) = flag.map(str::trim).filter(|s| !s.is_empty()) {
+        return (Some(t.to_string()), "--auth-token");
+    }
     if let Ok(raw) = std::env::var(HTTP_TOKEN_ENV) {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
-            return (trimmed.to_string(), true);
+            return (Some(trimmed.to_string()), HTTP_TOKEN_ENV);
         }
     }
-    (generate_token(), false)
+    (None, "")
 }
 
 fn generate_token() -> String {
@@ -235,7 +260,7 @@ fn generate_token() -> String {
 }
 
 fn save_token(token: &str) {
-    if let Ok(dir) = crate::core::data_dir::lean_ctx_data_dir() {
+    if let Ok(dir) = crate::core::paths::state_dir() {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("dashboard.token");
         #[cfg(unix)]
@@ -261,7 +286,7 @@ fn save_token(token: &str) {
 }
 
 fn load_saved_token() -> Option<String> {
-    let dir = crate::core::data_dir::lean_ctx_data_dir().ok()?;
+    let dir = crate::core::paths::state_dir().ok()?;
     let path = dir.join("dashboard.token");
     std::fs::read_to_string(path)
         .ok()
@@ -871,42 +896,85 @@ mod tests {
     fn resolve_token_uses_env_var_verbatim() {
         let _g = ENV_LOCK.lock().expect("env lock");
         std::env::set_var(HTTP_TOKEN_ENV, "lctx_mystatic");
-        let (token, from_env) = resolve_dashboard_token();
+        let (token, src) = resolve_requested_token(None);
         std::env::remove_var(HTTP_TOKEN_ENV);
-        assert!(from_env, "token should be reported as env-sourced");
-        assert_eq!(token, "lctx_mystatic");
+        assert_eq!(
+            src, HTTP_TOKEN_ENV,
+            "token should be reported as env-sourced"
+        );
+        assert_eq!(token.as_deref(), Some("lctx_mystatic"));
     }
 
     #[test]
     fn resolve_token_trims_env_var() {
         let _g = ENV_LOCK.lock().expect("env lock");
         std::env::set_var(HTTP_TOKEN_ENV, "  lctx_padded  ");
-        let (token, from_env) = resolve_dashboard_token();
+        let (token, src) = resolve_requested_token(None);
         std::env::remove_var(HTTP_TOKEN_ENV);
-        assert!(from_env);
-        assert_eq!(token, "lctx_padded");
+        assert_eq!(src, HTTP_TOKEN_ENV);
+        assert_eq!(token.as_deref(), Some("lctx_padded"));
     }
 
     #[test]
     fn resolve_token_falls_back_to_random_when_unset() {
         let _g = ENV_LOCK.lock().expect("env lock");
         std::env::remove_var(HTTP_TOKEN_ENV);
-        let (token, from_env) = resolve_dashboard_token();
-        assert!(!from_env, "unset env should yield a generated token");
+        let (token, src) = resolve_requested_token(None);
+        assert!(token.is_none(), "unset env requests no fixed token");
+        assert!(src.is_empty());
+        // The production fallback in `start()` generates a random token.
+        let generated = token.unwrap_or_else(generate_token);
         assert!(
-            token.starts_with("lctx_"),
-            "generated token prefix, got {token}"
+            generated.starts_with("lctx_"),
+            "generated token prefix, got {generated}"
         );
-        assert!(token.len() > 12, "generated token should be 32-byte hex");
+        assert!(
+            generated.len() > 12,
+            "generated token should be 32-byte hex"
+        );
     }
 
     #[test]
     fn resolve_token_ignores_empty_env() {
         let _g = ENV_LOCK.lock().expect("env lock");
         std::env::set_var(HTTP_TOKEN_ENV, "   ");
-        let (token, from_env) = resolve_dashboard_token();
+        let (token, src) = resolve_requested_token(None);
         std::env::remove_var(HTTP_TOKEN_ENV);
-        assert!(!from_env, "whitespace-only env should fall back to random");
-        assert!(token.starts_with("lctx_"));
+        assert!(
+            token.is_none(),
+            "whitespace-only env requests no fixed token"
+        );
+        assert!(src.is_empty());
+    }
+
+    #[test]
+    fn resolve_token_flag_overrides_env() {
+        // #377: --auth-token must win over LEAN_CTX_HTTP_TOKEN so it survives
+        // environments that strip/fail to inherit the env var.
+        let _g = ENV_LOCK.lock().expect("env lock");
+        std::env::set_var(HTTP_TOKEN_ENV, "lctx_fromenv");
+        let (token, src) = resolve_requested_token(Some("lctx_fromflag"));
+        std::env::remove_var(HTTP_TOKEN_ENV);
+        assert_eq!(src, "--auth-token");
+        assert_eq!(token.as_deref(), Some("lctx_fromflag"));
+    }
+
+    #[test]
+    fn resolve_token_uses_flag_when_env_unset() {
+        let _g = ENV_LOCK.lock().expect("env lock");
+        std::env::remove_var(HTTP_TOKEN_ENV);
+        let (token, src) = resolve_requested_token(Some("  lctx_flag_padded  "));
+        assert_eq!(src, "--auth-token");
+        assert_eq!(token.as_deref(), Some("lctx_flag_padded"));
+    }
+
+    #[test]
+    fn resolve_token_empty_flag_falls_back_to_env() {
+        let _g = ENV_LOCK.lock().expect("env lock");
+        std::env::set_var(HTTP_TOKEN_ENV, "lctx_fromenv");
+        let (token, src) = resolve_requested_token(Some("   "));
+        std::env::remove_var(HTTP_TOKEN_ENV);
+        assert_eq!(src, HTTP_TOKEN_ENV);
+        assert_eq!(token.as_deref(), Some("lctx_fromenv"));
     }
 }

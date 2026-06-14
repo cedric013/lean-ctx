@@ -165,6 +165,19 @@ pub fn run() {
         });
     }
 
+    // XDG layout (GH #408): a legacy/mixed single-dir install mixes config with
+    // data/state/cache, which blocks a read-only config sandbox. Informational
+    // (not scored) — `doctor --fix` splits it into the four typed XDG dirs.
+    if let Some((src, n)) = crate::core::xdg_migrate::pending() {
+        print_check(&Outcome {
+            ok: false,
+            line: format!(
+                "{BOLD}XDG layout{RST}  {YELLOW}{n} item(s) in single dir{RST}  {DIM}{}{RST}  {DIM}(run: lean-ctx doctor --fix to split into config/data/state/cache){RST}",
+                src.display()
+            ),
+        });
+    }
+
     // 5) config.toml (missing is OK)
     let config_path = lean_dir.as_ref().map(|d| d.join("config.toml"));
     let config_outcome = match &config_path {

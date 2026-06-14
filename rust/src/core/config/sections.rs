@@ -66,6 +66,14 @@ impl SetupConfig {
         }
     }
 
+    /// Returns whether `setup`/`onboard`/`init` may (re)register the lean-ctx
+    /// MCP server in editor configs. Honors `auto_update_mcp` (#281) so locked-
+    /// down environments can keep MCP out of agent settings while still getting
+    /// hooks, rules and skills.
+    pub fn should_update_mcp(&self) -> bool {
+        self.auto_update_mcp
+    }
+
     /// Check if lean-ctx rules markers exist in any known agent config location.
     fn rules_already_present() -> bool {
         let Some(home) = dirs::home_dir() else {

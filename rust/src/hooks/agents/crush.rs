@@ -10,13 +10,10 @@ pub(crate) fn install_crush_hook() {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    let data_dir = crate::core::data_dir::lean_ctx_data_dir()
-        .map(|d| d.to_string_lossy().to_string())
-        .unwrap_or_default();
     let desired = serde_json::json!({
         "type": "stdio",
         "command": binary,
-        "env": { "LEAN_CTX_DATA_DIR": data_dir }
+        "env": super::super::mcp_server_env_json()
     });
 
     if config_path.exists() {

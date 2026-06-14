@@ -213,8 +213,10 @@ impl LeanCtxServer {
                 let ledger = self.ledger.read().await;
                 Some(ledger.pressure())
             };
+            let extra_roots = self.session.read().await.extra_roots.clone();
             let ctx = crate::server::tool_trait::ToolContext {
                 project_root,
+                extra_roots,
                 minimal,
                 resolved_paths,
                 crp_mode,

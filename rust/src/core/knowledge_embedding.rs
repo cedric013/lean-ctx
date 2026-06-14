@@ -147,11 +147,12 @@ impl KnowledgeEmbeddingIndex {
     pub fn save(&self) -> Result<(), String> {
         let path = Self::index_path(&self.project_hash)
             .ok_or_else(|| "Cannot determine data directory".to_string())?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("{e}"))?;
-        }
         let json = serde_json::to_string(self).map_err(|e| format!("{e}"))?;
-        std::fs::write(path, json).map_err(|e| format!("{e}"))
+        // Atomic write (temp + rename) so a concurrent, lock-free reader in
+        // `recall` (which loads the index without taking the per-project lock)
+        // never observes a half-written file — it sees either the old or the new
+        // complete index, never trailing garbage (issue #412).
+        crate::config_io::write_atomic(&path, &json)
     }
 }
 
@@ -451,6 +452,70 @@ mod tests {
 
         reset("projhash").expect("reset");
         assert!(KnowledgeEmbeddingIndex::load("projhash").is_none());
+
+        std::env::remove_var("LEAN_CTX_DATA_DIR");
+    }
+
+    #[test]
+    fn concurrent_remember_keeps_all_embeddings() {
+        // #412: the embedding-index read-modify-write must be serialized under
+        // the per-project lock and compacted against fresh on-disk knowledge.
+        // The old lock-free + stale-snapshot path let parallel writers clobber
+        // each other's vectors and prune just-stored ones. This mirrors
+        // `handle_remember`'s locked path (raw vectors, so no embedding engine
+        // is needed) and asserts every concurrently-stored embedding survives.
+        let _lock = crate::core::data_dir::test_env_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var(
+            "LEAN_CTX_DATA_DIR",
+            tmp.path().to_string_lossy().to_string(),
+        );
+
+        let project = tmp.path().join("proj");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        let project_root = project.to_string_lossy().to_string();
+
+        const N: usize = 16;
+        let mut handles = Vec::with_capacity(N);
+        for i in 0..N {
+            let root = project_root.clone();
+            handles.push(std::thread::spawn(move || {
+                let policy = MemoryPolicy::default();
+                let cat = "arch";
+                let key = format!("k{i}");
+                // 1) Commit the fact under the lock (as handle_remember does).
+                let (knowledge, ()) = ProjectKnowledge::mutate_locked(&root, |kn| {
+                    kn.remember(cat, &key, "v", "s", 0.9, &policy);
+                })
+                .expect("commit fact");
+                // 2) Embedding side-car under the SAME lock + fresh-knowledge
+                //    compaction — exactly the fixed handle_remember path.
+                ProjectKnowledge::with_project_lock(&root, || {
+                    let mut idx = KnowledgeEmbeddingIndex::load(&knowledge.project_hash)
+                        .unwrap_or_else(|| KnowledgeEmbeddingIndex::new(&knowledge.project_hash));
+                    idx.upsert(cat, &key, &[1.0, 0.0, 0.0]);
+                    let fresh = ProjectKnowledge::load(&root);
+                    let kref = fresh.as_ref().unwrap_or(&knowledge);
+                    compact_against_knowledge(&mut idx, kref, &policy);
+                    idx.save().expect("save index");
+                });
+            }));
+        }
+        for h in handles {
+            h.join().expect("thread join");
+        }
+
+        let knowledge = ProjectKnowledge::load(&project_root).expect("knowledge persisted");
+        let current = knowledge.facts.iter().filter(|f| f.is_current()).count();
+        assert_eq!(current, N, "all {N} facts must be committed");
+
+        let idx = KnowledgeEmbeddingIndex::load(&knowledge.project_hash).expect("index persisted");
+        assert_eq!(
+            idx.entries.len(),
+            N,
+            "every concurrently-stored embedding must survive (got {})",
+            idx.entries.len()
+        );
 
         std::env::remove_var("LEAN_CTX_DATA_DIR");
     }

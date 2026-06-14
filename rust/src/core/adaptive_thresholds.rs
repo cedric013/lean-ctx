@@ -319,29 +319,93 @@ pub fn adaptive_thresholds(path: &str, content: &str) -> CompressionThresholds {
         let arm = bandit.select_arm();
         base.bpe_entropy = base.bpe_entropy * 0.5 + arm.entropy_threshold * 0.5;
         base.jaccard = base.jaccard * 0.5 + arm.jaccard_threshold * 0.5;
-        LAST_BANDIT_ARM
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .replace((project_root, bandit_key, arm.name.clone()));
+        record_selected_arm(path, project_root, bandit_key, arm.name.clone());
     }
 
     base
 }
 
-pub fn report_bandit_outcome(success: bool) {
-    let data = LAST_BANDIT_ARM
+/// The bandit arm selected for a file's most recent threshold-driven read, kept
+/// so a *deferred* real outcome (bounce, edit-fail) can penalize the arm that
+/// actually produced the compression — instead of a hardcoded success (#593).
+#[derive(Clone)]
+struct SelectedArm {
+    project_root: String,
+    bandit_key: String,
+    arm_name: String,
+}
+
+/// Bounded far above the bounce (5) and edit-force (10) detection windows, so
+/// evicting the oldest entry can never drop an arm a still-pending signal needs.
+const ARM_REGISTRY_CAP: usize = 64;
+
+static SELECTED_ARMS: std::sync::Mutex<Option<SelectedArmRegistry>> = std::sync::Mutex::new(None);
+
+#[derive(Default)]
+struct SelectedArmRegistry {
+    /// Insertion order of distinct paths, for O(1) oldest-first eviction.
+    order: std::collections::VecDeque<String>,
+    by_path: std::collections::HashMap<String, SelectedArm>,
+}
+
+fn record_selected_arm(path: &str, project_root: String, bandit_key: String, arm_name: String) {
+    let norm = crate::core::pathutil::normalize_tool_path(path);
+    let mut guard = SELECTED_ARMS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take();
-    if let Some((project_root, bandit_key, arm_name)) = data {
-        let mut store = super::bandit::BanditStore::load(&project_root);
-        store.get_or_create(&bandit_key).update(&arm_name, success);
-        let _ = store.save(&project_root);
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let reg = guard.get_or_insert_with(SelectedArmRegistry::default);
+    let arm = SelectedArm {
+        project_root,
+        bandit_key,
+        arm_name,
+    };
+    if reg.by_path.insert(norm.clone(), arm).is_none() {
+        reg.order.push_back(norm);
+        while reg.order.len() > ARM_REGISTRY_CAP {
+            if let Some(old) = reg.order.pop_front() {
+                reg.by_path.remove(&old);
+            }
+        }
     }
 }
 
-static LAST_BANDIT_ARM: std::sync::Mutex<Option<(String, String, String)>> =
-    std::sync::Mutex::new(None);
+/// Record a real downstream quality signal (#538/#593). It always feeds the
+/// online threshold learner; `Bounce`/`EditFail` additionally penalize the
+/// bandit arm that produced this file's compression, replacing the old
+/// savings-only / hardcoded reward. `CleanCompressed`/`WastedFull` stay
+/// learner-only — the positive bandit signal comes from realized savings
+/// (`report_bandit_outcome_for_path` in entropy mode), so we avoid a bandit
+/// disk write on every compressed read.
+pub fn record_quality_signal(path: &str, signal: crate::core::threshold_learning::QualitySignal) {
+    use crate::core::threshold_learning::QualitySignal;
+    crate::core::threshold_learning::record_signal(path, signal);
+    match signal {
+        QualitySignal::Bounce | QualitySignal::EditFail => {
+            report_bandit_outcome_for_path(path, false);
+        }
+        QualitySignal::CleanCompressed | QualitySignal::WastedFull => {}
+    }
+}
+
+/// Reward (`success=true`) or penalize (`false`) the bandit arm recorded for
+/// `path`. No-op when no arm was registered (e.g. the file was never read in a
+/// threshold-driven mode), so attribution is never guessed.
+pub fn report_bandit_outcome_for_path(path: &str, success: bool) {
+    let norm = crate::core::pathutil::normalize_tool_path(path);
+    let selected = {
+        let guard = SELECTED_ARMS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.as_ref().and_then(|r| r.by_path.get(&norm).cloned())
+    };
+    if let Some(sel) = selected {
+        let mut store = super::bandit::BanditStore::load(&sel.project_root);
+        store
+            .get_or_create(&sel.bandit_key)
+            .update(&sel.arm_name, success);
+        let _ = store.save(&sel.project_root);
+    }
+}
 
 fn token_bucket_label(content: &str) -> &'static str {
     let len = content.len();
@@ -399,5 +463,92 @@ mod tests {
             k_rep < k_div,
             "repetitive content should have lower Kolmogorov proxy: {k_rep} vs {k_div}"
         );
+    }
+
+    use crate::core::threshold_learning::QualitySignal;
+
+    fn arm_mean(project_root: &str, key: &str, arm: &str) -> f64 {
+        let mut store = crate::core::bandit::BanditStore::load(project_root);
+        store
+            .get_or_create(key)
+            .arms
+            .iter()
+            .find(|a| a.name == arm)
+            .map_or(0.5, crate::core::bandit::BanditArm::mean)
+    }
+
+    #[test]
+    fn real_failure_signal_penalizes_selected_arm() {
+        let _data = crate::core::data_dir::isolated_data_dir();
+        let root = "/fix1/penalize";
+        record_selected_arm(
+            "src/foo.rs",
+            root.into(),
+            "rs_md".into(),
+            "aggressive".into(),
+        );
+
+        let before = arm_mean(root, "rs_md", "aggressive");
+        for _ in 0..15 {
+            record_quality_signal("src/foo.rs", QualitySignal::Bounce);
+        }
+        record_quality_signal("src/foo.rs", QualitySignal::EditFail);
+        let after = arm_mean(root, "rs_md", "aggressive");
+
+        assert!(
+            after < before,
+            "bounce/edit-fail must lower the selected arm mean: {before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn clean_and_wasted_signals_leave_bandit_untouched() {
+        let _data = crate::core::data_dir::isolated_data_dir();
+        let root = "/fix1/untouched";
+        record_selected_arm("a.rs", root.into(), "rs_sm".into(), "balanced".into());
+
+        let before = arm_mean(root, "rs_sm", "balanced");
+        record_quality_signal("a.rs", QualitySignal::CleanCompressed);
+        record_quality_signal("a.rs", QualitySignal::WastedFull);
+        let after = arm_mean(root, "rs_sm", "balanced");
+
+        assert!(
+            (before - after).abs() < f64::EPSILON,
+            "clean/wasted are learner-only: bandit mean must not move ({before} -> {after})"
+        );
+    }
+
+    #[test]
+    fn outcome_without_registered_arm_does_not_register_path() {
+        let _data = crate::core::data_dir::isolated_data_dir();
+        // Attribution must never be guessed for a path we never selected an arm for.
+        report_bandit_outcome_for_path("fix1/never-seen-xyz.rs", false);
+        let norm = crate::core::pathutil::normalize_tool_path("fix1/never-seen-xyz.rs");
+        let guard = SELECTED_ARMS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let registered = guard
+            .as_ref()
+            .is_some_and(|r| r.by_path.contains_key(&norm));
+        assert!(!registered, "no-op report must not create a registry entry");
+    }
+
+    #[test]
+    fn registry_evicts_oldest_beyond_cap() {
+        let _data = crate::core::data_dir::isolated_data_dir();
+        for i in 0..(ARM_REGISTRY_CAP + 5) {
+            record_selected_arm(
+                &format!("evict/f{i}.rs"),
+                "/fix1/evict".into(),
+                "rs_md".into(),
+                "balanced".into(),
+            );
+        }
+        let guard = SELECTED_ARMS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let reg = guard.as_ref().expect("registry initialized");
+        assert!(reg.order.len() <= ARM_REGISTRY_CAP);
+        assert_eq!(reg.order.len(), reg.by_path.len());
     }
 }

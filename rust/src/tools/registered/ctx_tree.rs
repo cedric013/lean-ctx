@@ -38,7 +38,8 @@ impl McpTool for CtxTreeTool {
         args: &Map<String, Value>,
         ctx: &ToolContext,
     ) -> Result<ToolOutput, ErrorData> {
-        let resolved = crate::server::multi_path::resolve_tool_paths(args, ctx);
+        let resolved = crate::server::multi_path::resolve_tool_paths(args, ctx)
+            .map_err(|e| ErrorData::invalid_params(format!("ERROR: {e}"), None))?;
         let depth = (get_int(args, "depth").unwrap_or(3) as usize).min(10);
         let show_hidden = get_bool(args, "show_hidden").unwrap_or(false);
         let respect_gitignore = get_bool(args, "respect_gitignore").unwrap_or(true);

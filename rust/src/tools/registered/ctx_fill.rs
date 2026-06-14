@@ -32,7 +32,7 @@ impl McpTool for CtxFillTool {
                     },
                     "task": {
                         "type": "string",
-                        "description": "Optional task for POP intent-driven pruning"
+                        "description": "Optional task (short English preferred) for intent-driven pruning"
                     }
                 },
                 "required": ["paths", "budget"]

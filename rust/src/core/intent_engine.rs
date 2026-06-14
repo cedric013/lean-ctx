@@ -1,3 +1,5 @@
+use super::intent_lang;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TaskType {
     Generate,
@@ -238,32 +240,31 @@ const PHRASE_RULES: &[(&[&str], TaskType, f64)] = &[
 pub fn classify(query: &str) -> TaskClassification {
     let q = query.to_lowercase();
     let words: Vec<&str> = q.split_whitespace().collect();
+    let lang = intent_lang::detect_query_lang(&words);
 
     let mut best_type = TaskType::Explore;
     let mut best_score = 0.0_f64;
 
-    for &(phrases, task_type, base_confidence) in PHRASE_RULES {
-        let mut match_count = 0usize;
-        for phrase in phrases {
-            if phrase.contains(' ') {
-                if q.contains(phrase) {
-                    match_count += 2;
-                }
-            } else if words.contains(phrase) {
-                match_count += 1;
-            }
-        }
-        if match_count > 0 {
-            let score = base_confidence * (match_count as f64).min(2.0) / 2.0;
-            if score > best_score {
-                best_score = score;
-                best_type = task_type;
-            }
-        }
-    }
+    apply_rules(
+        &q,
+        &words,
+        PHRASE_RULES,
+        |word, phrase| word == phrase,
+        &mut best_type,
+        &mut best_score,
+    );
+    // Multilingual stems (de/fr/es) match morphology-tolerant via prefix.
+    apply_rules(
+        &q,
+        &words,
+        intent_lang::STEM_RULES,
+        |word, stem| word.starts_with(stem),
+        &mut best_type,
+        &mut best_score,
+    );
 
-    let targets = extract_targets(query);
-    let keywords = extract_keywords(&q);
+    let targets = extract_targets(query, lang);
+    let keywords = extract_keywords(&q, lang);
 
     if best_score < 0.1 {
         best_type = TaskType::Explore;
@@ -278,7 +279,38 @@ pub fn classify(query: &str) -> TaskClassification {
     }
 }
 
-fn extract_targets(query: &str) -> Vec<String> {
+/// Shared scoring loop for PHRASE_RULES (exact word match) and
+/// STEM_RULES (prefix match). Multi-word entries match the whole query.
+fn apply_rules(
+    q: &str,
+    words: &[&str],
+    rules: &[(&[&str], TaskType, f64)],
+    token_match: fn(&str, &str) -> bool,
+    best_type: &mut TaskType,
+    best_score: &mut f64,
+) {
+    for &(phrases, task_type, base_confidence) in rules {
+        let mut match_count = 0usize;
+        for phrase in phrases {
+            if phrase.contains(' ') {
+                if q.contains(phrase) {
+                    match_count += 2;
+                }
+            } else if words.iter().any(|w| token_match(w, phrase)) {
+                match_count += 1;
+            }
+        }
+        if match_count > 0 {
+            let score = base_confidence * (match_count as f64).min(2.0) / 2.0;
+            if score > *best_score {
+                *best_score = score;
+                *best_type = task_type;
+            }
+        }
+    }
+}
+
+fn extract_targets(query: &str, lang: intent_lang::QueryLang) -> Vec<String> {
     let mut targets = Vec::new();
 
     for word in query.split_whitespace() {
@@ -308,6 +340,7 @@ fn extract_targets(query: &str) -> Vec<String> {
         if w.chars().any(char::is_uppercase)
             && w.len() > 2
             && !is_stop_word(w)
+            && !intent_lang::is_stop_word_for(lang, &w.to_lowercase())
             && !targets.contains(&w.to_string())
         {
             targets.push(w.to_string());
@@ -364,7 +397,7 @@ fn is_stop_word(w: &str) -> bool {
     )
 }
 
-fn extract_keywords(query: &str) -> Vec<String> {
+fn extract_keywords(query: &str, lang: intent_lang::QueryLang) -> Vec<String> {
     query
         .split_whitespace()
         .filter(|w| w.len() > 3)
@@ -374,6 +407,7 @@ fn extract_keywords(query: &str) -> Vec<String> {
                 .to_lowercase()
         })
         .filter(|w| !w.is_empty())
+        .filter(|w| !intent_lang::is_stop_word_for(lang, w))
         .take(8)
         .collect()
 }
@@ -580,6 +614,17 @@ impl StructuredIntent {
     pub fn from_query_with_session(query: &str, touched_files: &[String]) -> Self {
         let mut intent = Self::from_query(query);
 
+        // Text signals too weak (unknown wording or language)? Behavioral
+        // signals from the session outrank a blind Explore fallback (#591).
+        if intent.confidence < 0.5 && !touched_files.is_empty() {
+            let behavioral = Self::from_file_patterns(touched_files);
+            if behavioral.confidence > intent.confidence {
+                intent.task_type = behavioral.task_type;
+                intent.confidence = behavioral.confidence;
+                intent.scope = behavioral.scope;
+            }
+        }
+
         if intent.language_hint.is_none() && !touched_files.is_empty() {
             intent.language_hint = detect_language_from_files(touched_files);
         }
@@ -692,7 +737,11 @@ fn detect_urgency(query: &str) -> f64 {
         "blocker",
         "breaking",
     ];
-    let hits = urgent_words.iter().filter(|w| q.contains(*w)).count();
+    let hits = urgent_words.iter().filter(|w| q.contains(*w)).count()
+        + intent_lang::URGENT_WORDS_I18N
+            .iter()
+            .filter(|w| q.contains(*w))
+            .count();
     (hits as f64 * 0.4).min(1.0)
 }
 
@@ -984,5 +1033,125 @@ mod tests {
         };
         let route = route_intent("something vague", &c);
         assert_eq!(route.model_tier, ModelTier::Standard);
+    }
+
+    /// #591 acceptance: de/fr/es sentences per TaskType, ≥90% hit rate.
+    #[test]
+    fn classify_multilingual_table() {
+        let table: &[(&str, TaskType)] = &[
+            // German
+            ("behebe den fehler in auth.rs", TaskType::FixBug),
+            (
+                "erstelle eine neue funktion für das datums-parsing",
+                TaskType::Generate,
+            ),
+            ("räum die funktion auf", TaskType::Refactor),
+            (
+                "refaktorisiere das modul in kleinere teile",
+                TaskType::Refactor,
+            ),
+            (
+                "erkläre wie der session cache funktioniert",
+                TaskType::Explore,
+            ),
+            ("schreibe tests für den parser", TaskType::Test),
+            (
+                "prüfe ob die validierung korrekt funktioniert",
+                TaskType::Test,
+            ),
+            ("debugge warum der server abstürzt", TaskType::Debug),
+            (
+                "konfiguriere die umgebungsvariablen für den daemon",
+                TaskType::Config,
+            ),
+            ("veröffentliche die neue version", TaskType::Deploy),
+            ("überprüfe die änderungen vor dem merge", TaskType::Review),
+            // French
+            ("corrige le bug dans le parseur", TaskType::FixBug),
+            ("ajoute une fonction de validation", TaskType::Generate),
+            ("explique comment fonctionne le cache", TaskType::Explore),
+            ("nettoie ce module pour le simplifier", TaskType::Refactor),
+            ("vérifie que les tests passent", TaskType::Test),
+            ("déploie la nouvelle version", TaskType::Deploy),
+            ("pourquoi le serveur plante-t-il", TaskType::Explore),
+            // Spanish
+            ("corrige el error en el módulo de auth", TaskType::FixBug),
+            ("crea una función para parsear fechas", TaskType::Generate),
+            ("explica cómo funciona la caché", TaskType::Explore),
+            ("agrega soporte para webhooks", TaskType::Generate),
+            (
+                "muestra dónde se define la configuración",
+                TaskType::Explore,
+            ),
+            ("revisa este pull request", TaskType::Review),
+            ("despliega la nueva versión", TaskType::Deploy),
+            ("escribe pruebas para el parser", TaskType::Test),
+        ];
+
+        let misses: Vec<String> = table
+            .iter()
+            .filter_map(|(query, expected)| {
+                let got = classify(query).task_type;
+                (got != *expected).then(|| format!("'{query}': want {expected:?}, got {got:?}"))
+            })
+            .collect();
+
+        let hit_rate = (table.len() - misses.len()) as f64 / table.len() as f64;
+        assert!(
+            hit_rate >= 0.9,
+            "multilingual hit rate {:.0}% < 90%:\n{}",
+            hit_rate * 100.0,
+            misses.join("\n")
+        );
+    }
+
+    /// #591 acceptance: German filler words must not pollute keywords.
+    #[test]
+    fn keywords_filter_german_fillers() {
+        let r = classify("bitte kannst du diese funktion aufräumen, ich möchte sauberen code");
+        for filler in ["bitte", "kannst", "möchte", "diese"] {
+            assert!(
+                !r.keywords.iter().any(|k| k == filler),
+                "filler '{filler}' leaked into keywords: {:?}",
+                r.keywords
+            );
+        }
+        assert!(r.keywords.iter().any(|k| k == "funktion"));
+        assert_eq!(r.task_type, TaskType::Refactor);
+    }
+
+    #[test]
+    fn targets_filter_capitalized_german_fillers() {
+        let r = classify("Bitte behebe den Fehler in der Konfiguration");
+        assert!(!r.targets.iter().any(|t| t == "Bitte"), "{:?}", r.targets);
+        assert_eq!(r.task_type, TaskType::FixBug);
+    }
+
+    #[test]
+    fn urgency_detects_german_markers() {
+        let intent = StructuredIntent::from_query("dringend: behebe den absturz sofort");
+        assert!(intent.urgency > 0.5);
+        assert_eq!(intent.task_type, TaskType::FixBug);
+        assert!(intent.format_header().contains("URGENT"));
+    }
+
+    /// #591: with weak text confidence, session file patterns outrank the
+    /// blind Explore fallback.
+    #[test]
+    fn behavioral_signals_beat_low_confidence_text() {
+        let touched = vec![
+            "tests/foo_test.rs".to_string(),
+            "tests/bar_test.rs".to_string(),
+        ];
+        let intent = StructuredIntent::from_query_with_session("xyz qqq bbb", &touched);
+        assert_eq!(intent.task_type, TaskType::Test);
+        assert!((intent.confidence - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn german_refactor_gets_diff_output() {
+        let intent = StructuredIntent::from_query("räum die funktion auf");
+        assert_eq!(intent.task_type, TaskType::Refactor);
+        assert_eq!(intent.task_type.output_format(), OutputFormat::DiffOnly);
     }
 }

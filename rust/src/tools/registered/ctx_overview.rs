@@ -21,7 +21,7 @@ impl McpTool for CtxOverviewTool {
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "Task description for relevance scoring"
+                        "description": "Task description (short English preferred) for relevance scoring"
                     },
                     "path": {
                         "type": "string",

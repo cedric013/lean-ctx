@@ -229,69 +229,61 @@ fn post_knowledge_edit(body: &str) -> (&'static str, &'static str, String) {
         .unwrap_or_default();
     let _ =
         crate::core::knowledge::ProjectKnowledge::migrate_legacy_empty_root(&project_root, &policy);
-    let mut knowledge = crate::core::knowledge::ProjectKnowledge::load_or_create(&project_root);
-
-    let current_idxs: Vec<usize> = knowledge
-        .facts
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| f.is_current())
-        .map(|(i, _)| i)
-        .collect();
-    let Some(&real_idx) = current_idxs.get(req.fact_index) else {
-        return (
-            "400 Bad Request",
-            "application/json",
-            json_err("fact_index out of range"),
-        );
-    };
-
-    match req.action.as_str() {
-        "archive" => {
-            use chrono::Utc;
-            knowledge.facts[real_idx].valid_until = Some(Utc::now());
-            knowledge.facts[real_idx].valid_from = knowledge.facts[real_idx]
-                .valid_from
-                .or(Some(knowledge.facts[real_idx].created_at));
-        }
-        "delete" => {
-            knowledge.facts.swap_remove(real_idx);
-        }
-        "update_confidence" => {
-            let Some(ref raw) = req.value else {
-                return (
-                    "400 Bad Request",
-                    "application/json",
-                    json_err("value required for update_confidence"),
-                );
+    // Read-modify-write under the cross-process lock (#326/#594): the dashboard
+    // shares the knowledge store with the daemon and MCP server.
+    let result =
+        crate::core::knowledge::ProjectKnowledge::mutate_locked(&project_root, |knowledge| {
+            let current_idxs: Vec<usize> = knowledge
+                .facts
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.is_current())
+                .map(|(i, _)| i)
+                .collect();
+            let Some(&real_idx) = current_idxs.get(req.fact_index) else {
+                return Err(("400 Bad Request", json_err("fact_index out of range")));
             };
-            let Ok(c) = raw.parse::<f32>() else {
-                return (
-                    "400 Bad Request",
-                    "application/json",
-                    json_err("value must be a float"),
-                );
-            };
-            knowledge.facts[real_idx].confidence = c.clamp(0.0, 1.0);
-        }
-        _ => {
-            return (
-                "400 Bad Request",
-                "application/json",
-                json_err("unknown action"),
-            );
-        }
-    }
 
-    knowledge.updated_at = chrono::Utc::now();
-    if let Err(e) = knowledge.save() {
-        return (
+            match req.action.as_str() {
+                "archive" => {
+                    knowledge.facts[real_idx].valid_until = Some(chrono::Utc::now());
+                    knowledge.facts[real_idx].valid_from = knowledge.facts[real_idx]
+                        .valid_from
+                        .or(Some(knowledge.facts[real_idx].created_at));
+                }
+                "delete" => {
+                    knowledge.facts.swap_remove(real_idx);
+                }
+                "update_confidence" => {
+                    let Some(ref raw) = req.value else {
+                        return Err((
+                            "400 Bad Request",
+                            json_err("value required for update_confidence"),
+                        ));
+                    };
+                    let Ok(c) = raw.parse::<f32>() else {
+                        return Err(("400 Bad Request", json_err("value must be a float")));
+                    };
+                    knowledge.facts[real_idx].confidence = c.clamp(0.0, 1.0);
+                }
+                _ => {
+                    return Err(("400 Bad Request", json_err("unknown action")));
+                }
+            }
+
+            knowledge.updated_at = chrono::Utc::now();
+            Ok(())
+        });
+
+    match result {
+        Ok((_, Ok(()))) => ("200 OK", "application/json", json_ok()),
+        Ok((_, Err((status, body)))) => (status, "application/json", body),
+        Err(e) => (
             "500 Internal Server Error",
             "application/json",
             json_err(&e),
-        );
+        ),
     }
-    ("200 OK", "application/json", json_ok())
 }
 
 #[derive(Deserialize)]

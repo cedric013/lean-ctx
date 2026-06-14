@@ -157,21 +157,36 @@ fn handle_feedback(
         return "Error: feedback value must be up|down (+1|-1)".to_string();
     }
 
-    let mut knowledge = ProjectKnowledge::load_or_create(project_root);
-    let Some(f) = knowledge
-        .facts
-        .iter_mut()
-        .find(|f| f.is_current() && f.category == cat && f.key == k)
-    else {
-        return format!("No current fact found: [{cat}] {k}");
-    };
+    // Read-modify-write under the cross-process lock (#326/#594) so concurrent
+    // CLI/daemon/MCP feedback never clobbers each other.
+    let outcome = ProjectKnowledge::mutate_locked(project_root, |knowledge| {
+        let Some(f) = knowledge
+            .facts
+            .iter_mut()
+            .find(|f| f.is_current() && f.category == cat && f.key == k)
+        else {
+            return Err(format!("No current fact found: [{cat}] {k}"));
+        };
 
-    if is_up {
-        f.feedback_up = f.feedback_up.saturating_add(1);
-    } else {
-        f.feedback_down = f.feedback_down.saturating_add(1);
-    }
-    f.last_feedback = Some(Utc::now());
+        if is_up {
+            f.feedback_up = f.feedback_up.saturating_add(1);
+        } else {
+            f.feedback_down = f.feedback_down.saturating_add(1);
+        }
+        f.last_feedback = Some(Utc::now());
+        Ok((
+            f.quality_score(),
+            f.feedback_up,
+            f.feedback_down,
+            f.confidence,
+        ))
+    });
+
+    let (quality, up, down, conf) = match outcome {
+        Ok((_, Ok(vals))) => vals,
+        Ok((_, Err(msg))) => return msg,
+        Err(e) => return format!("Feedback recorded but save failed: {e}"),
+    };
 
     crate::core::events::emit(crate::core::events::EventKind::KnowledgeUpdate {
         category: cat.to_string(),
@@ -184,19 +199,9 @@ fn handle_feedback(
         .to_string(),
     });
 
-    let quality = f.quality_score();
-    let up = f.feedback_up;
-    let down = f.feedback_down;
-    let conf = f.confidence;
-
-    match knowledge.save() {
-        Ok(()) => format!(
-            "Feedback recorded ({dir}) for [{cat}] {k} (up={up}, down={down}, quality={quality:.2}, confidence={conf:.2}, session={session_id})"
-        ),
-        Err(e) => format!(
-            "Feedback recorded ({dir}) but save failed: {e} (up={up}, down={down}, quality={quality:.2})"
-        ),
-    }
+    format!(
+        "Feedback recorded ({dir}) for [{cat}] {k} (up={up}, down={down}, quality={quality:.2}, confidence={conf:.2}, session={session_id})"
+    )
 }
 
 fn handle_judge(
@@ -235,59 +240,62 @@ fn handle_judge(
         return format!("Error: verdict must be supersedes|compatible|unrelated, got '{verdict}'");
     }
 
-    let mut knowledge = ProjectKnowledge::load_or_create(project_root);
-
-    let source_exists = {
-        let parts: Vec<&str> = source.splitn(2, '/').collect();
-        parts.len() == 2
-            && knowledge
-                .facts
-                .iter()
-                .any(|f| f.category == parts[0] && f.key == parts[1] && f.is_current())
-    };
-    if !source_exists {
-        return format!("Error: no current fact found for '{source}'");
-    }
-
-    let target_parts: Vec<&str> = target.splitn(2, '/').collect();
-    if target_parts.len() != 2 {
-        return format!("Error: invalid target format '{target}'");
-    }
-    let (tcat, tkey) = (target_parts[0], target_parts[1]);
-
-    let target_exists = knowledge
-        .facts
-        .iter()
-        .any(|f| f.category == tcat && f.key == tkey && f.is_current());
-    if !target_exists {
-        return format!("Error: no current fact found for '{target}'");
-    }
-
-    if verdict == "supersedes" {
-        let now = Utc::now();
-        if let Some(tf) = knowledge
-            .facts
-            .iter_mut()
-            .find(|f| f.category == tcat && f.key == tkey && f.is_current())
-        {
-            tf.valid_until = Some(now);
-            tf.valid_from = tf.valid_from.or(Some(tf.created_at));
+    // Read-modify-write under the cross-process lock (#326/#594).
+    let result = ProjectKnowledge::mutate_locked(project_root, |knowledge| {
+        let source_exists = {
+            let parts: Vec<&str> = source.splitn(2, '/').collect();
+            parts.len() == 2
+                && knowledge
+                    .facts
+                    .iter()
+                    .any(|f| f.category == parts[0] && f.key == parts[1] && f.is_current())
+        };
+        if !source_exists {
+            return Err(format!("Error: no current fact found for '{source}'"));
         }
+
+        let target_parts: Vec<&str> = target.splitn(2, '/').collect();
+        if target_parts.len() != 2 {
+            return Err(format!("Error: invalid target format '{target}'"));
+        }
+        let (tcat, tkey) = (target_parts[0], target_parts[1]);
+
+        let target_exists = knowledge
+            .facts
+            .iter()
+            .any(|f| f.category == tcat && f.key == tkey && f.is_current());
+        if !target_exists {
+            return Err(format!("Error: no current fact found for '{target}'"));
+        }
+
+        if verdict == "supersedes" {
+            let now = Utc::now();
+            if let Some(tf) = knowledge
+                .facts
+                .iter_mut()
+                .find(|f| f.category == tcat && f.key == tkey && f.is_current())
+            {
+                tf.valid_until = Some(now);
+                tf.valid_from = tf.valid_from.or(Some(tf.created_at));
+            }
+        }
+
+        knowledge
+            .judged_pairs
+            .push(crate::core::knowledge::JudgedPair {
+                key_a: source.clone(),
+                key_b: target.clone(),
+                verdict: verdict.clone(),
+                judged_at: Utc::now(),
+            });
+        Ok(())
+    });
+
+    match result {
+        Ok((_, Ok(()))) => {}
+        Ok((_, Err(msg))) => return msg,
+        Err(e) => return format!("Error: judge save failed: {e}"),
     }
-
-    knowledge
-        .judged_pairs
-        .push(crate::core::knowledge::JudgedPair {
-            key_a: source.clone(),
-            key_b: target.clone(),
-            verdict: verdict.clone(),
-            judged_at: Utc::now(),
-        });
-
-    let save_msg = match knowledge.save() {
-        Ok(()) => String::new(),
-        Err(e) => format!(" (save warning: {e})"),
-    };
 
     let action_desc = match verdict.as_str() {
         "supersedes" => format!("{source} supersedes {target} (target archived)"),
@@ -296,7 +304,7 @@ fn handle_judge(
         _ => unreachable!(),
     };
 
-    format!("Judged: {action_desc}{save_msg}")
+    format!("Judged: {action_desc}")
 }
 
 fn handle_pattern(
@@ -323,11 +331,12 @@ fn handle_pattern(
             return format!("Error: invalid memory policy: {e}\nFix: edit {path}");
         }
     };
-    let mut knowledge = ProjectKnowledge::load_or_create(project_root);
-    knowledge.add_pattern(pt, desc, exs, session_id, &policy);
-    match knowledge.save() {
-        Ok(()) => format!("Pattern [{pt}] added: {desc}"),
-        Err(e) => format!("Pattern added but save failed: {e}"),
+    // Read-modify-write under the cross-process lock (#326/#594).
+    match ProjectKnowledge::mutate_locked(project_root, |knowledge| {
+        knowledge.add_pattern(pt, desc, exs, session_id, &policy);
+    }) {
+        Ok(_) => format!("Pattern [{pt}] added: {desc}"),
+        Err(e) => format!("Pattern add failed: {e}"),
     }
 }
 
@@ -551,30 +560,48 @@ fn handle_remove(project_root: &str, category: Option<&str>, key: Option<&str>) 
             return format!("Error: invalid memory policy: {e}\nFix: edit {path}");
         }
     };
-    let mut knowledge = ProjectKnowledge::load_or_create(project_root);
-    if knowledge.remove_fact(cat, k) {
-        let _ = knowledge.run_memory_lifecycle(&policy);
+    // Read-modify-write under the cross-process lock (#326/#594). The embedding
+    // index is a separate store, so it is synced afterwards from the committed
+    // knowledge — mirroring handle_remember.
+    let (knowledge, removed) = match ProjectKnowledge::mutate_locked(project_root, |knowledge| {
+        if knowledge.remove_fact(cat, k) {
+            let _ = knowledge.run_memory_lifecycle(&policy);
+            true
+        } else {
+            false
+        }
+    }) {
+        Ok(pair) => pair,
+        Err(e) => return format!("Removed but save failed: {e}"),
+    };
 
-        #[cfg(feature = "embeddings")]
-        {
+    if !removed {
+        return format!("No fact found: [{cat}] {k}");
+    }
+
+    #[cfg(feature = "embeddings")]
+    {
+        // Serialize the embedding side-car under the same per-project lock as
+        // the fact removal and compact against fresh on-disk knowledge, so a
+        // concurrent `remember` cannot clobber it (issue #412).
+        ProjectKnowledge::with_project_lock(project_root, || {
             if let Some(mut idx) = crate::core::knowledge_embedding::KnowledgeEmbeddingIndex::load(
                 &knowledge.project_hash,
             ) {
                 idx.remove(cat, k);
+                let fresh = ProjectKnowledge::load(project_root);
+                let kref = fresh.as_ref().unwrap_or(&knowledge);
                 crate::core::knowledge_embedding::compact_against_knowledge(
-                    &mut idx, &knowledge, &policy,
+                    &mut idx, kref, &policy,
                 );
                 let _ = idx.save();
             }
-        }
-
-        match knowledge.save() {
-            Ok(()) => format!("Removed [{cat}] {k}"),
-            Err(e) => format!("Removed but save failed: {e}"),
-        }
-    } else {
-        format!("No fact found: [{cat}] {k}")
+        });
     }
+    #[cfg(not(feature = "embeddings"))]
+    let _ = &knowledge;
+
+    format!("Removed [{cat}] {k}")
 }
 
 fn handle_export(project_root: &str) -> String {
@@ -627,68 +654,72 @@ fn handle_consolidate(project_root: &str) -> String {
         }
     };
 
-    let mut knowledge = ProjectKnowledge::load_or_create(project_root);
-    let mut consolidated = 0u32;
+    // Read-modify-write under the cross-process lock (#326/#594) so a parallel
+    // remember/consolidate cannot drop facts via a lost update.
+    let result = ProjectKnowledge::mutate_locked(project_root, |knowledge| {
+        let mut consolidated = 0u32;
 
-    for finding in &session.findings {
-        let key_text = if let Some(ref file) = finding.file {
-            if let Some(line) = finding.line {
-                format!("{file}:{line}")
+        for finding in &session.findings {
+            let key_text = if let Some(ref file) = finding.file {
+                if let Some(line) = finding.line {
+                    format!("{file}:{line}")
+                } else {
+                    file.clone()
+                }
             } else {
-                file.clone()
-            }
-        } else {
-            format!("finding-{consolidated}")
-        };
+                format!("finding-{consolidated}")
+            };
 
-        knowledge.remember(
-            "finding",
-            &key_text,
-            &finding.summary,
-            &session.id,
-            0.7,
-            &policy,
+            knowledge.remember(
+                "finding",
+                &key_text,
+                &finding.summary,
+                &session.id,
+                0.7,
+                &policy,
+            );
+            consolidated += 1;
+        }
+
+        for decision in &session.decisions {
+            let key_text = decision
+                .summary
+                .chars()
+                .take(50)
+                .collect::<String>()
+                .replace(' ', "-")
+                .to_lowercase();
+
+            knowledge.remember(
+                "decision",
+                &key_text,
+                &decision.summary,
+                &session.id,
+                0.85,
+                &policy,
+            );
+            consolidated += 1;
+        }
+
+        let task_desc = session
+            .task
+            .as_ref()
+            .map_or_else(|| "(no task)".into(), |t| t.description.clone());
+
+        let summary = format!(
+            "Session {}: {} — {} findings, {} decisions consolidated",
+            session.id,
+            task_desc,
+            session.findings.len(),
+            session.decisions.len()
         );
-        consolidated += 1;
-    }
+        knowledge.consolidate(&summary, vec![session.id.clone()], &policy);
+        let _ = knowledge.run_memory_lifecycle(&policy);
+        consolidated
+    });
 
-    for decision in &session.decisions {
-        let key_text = decision
-            .summary
-            .chars()
-            .take(50)
-            .collect::<String>()
-            .replace(' ', "-")
-            .to_lowercase();
-
-        knowledge.remember(
-            "decision",
-            &key_text,
-            &decision.summary,
-            &session.id,
-            0.85,
-            &policy,
-        );
-        consolidated += 1;
-    }
-
-    let task_desc = session
-        .task
-        .as_ref()
-        .map_or_else(|| "(no task)".into(), |t| t.description.clone());
-
-    let summary = format!(
-        "Session {}: {} — {} findings, {} decisions consolidated",
-        session.id,
-        task_desc,
-        session.findings.len(),
-        session.decisions.len()
-    );
-    knowledge.consolidate(&summary, vec![session.id.clone()], &policy);
-    let _ = knowledge.run_memory_lifecycle(&policy);
-
-    match knowledge.save() {
-        Ok(()) => format!(
+    match result {
+        Ok((knowledge, consolidated)) => format!(
             "Consolidated {consolidated} items from session {} into project knowledge.\n\
              Facts: {}, Patterns: {}, History: {}",
             session.id,

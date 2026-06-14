@@ -377,7 +377,7 @@ fn cmd_team_slo_report(args: &[String]) {
 pub(super) fn cmd_dashboard(rest: &[String]) {
     if rest.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "Usage: lean-ctx dashboard [--port=N] [--host=H] [--base-path=PREFIX] [--project=PATH] [--export]"
+            "Usage: lean-ctx dashboard [--port=N] [--host=H] [--base-path=PREFIX] [--auth-token=TOKEN] [--project=PATH] [--export]"
         );
         println!("Examples:");
         println!("  lean-ctx dashboard");
@@ -386,10 +386,13 @@ pub(super) fn cmd_dashboard(rest: &[String]) {
         println!(
             "  lean-ctx dashboard --base-path=/dashboard   Mount behind a reverse proxy subpath"
         );
+        println!(
+            "  lean-ctx dashboard --auth-token=<token>     Pin the Bearer token (alias --token; overrides LEAN_CTX_HTTP_TOKEN)"
+        );
         println!("  lean-ctx dashboard --export        Export HTML report (replaces visualize)");
         println!("Environment:");
         println!(
-            "  LEAN_CTX_HTTP_TOKEN=<token>   Pin the dashboard Bearer token (stable across restarts — ideal behind a reverse proxy). Unset → a random token is generated each start."
+            "  LEAN_CTX_HTTP_TOKEN=<token>   Pin the dashboard Bearer token (stable across restarts — ideal behind a reverse proxy). Overridden by --auth-token. Unset → a random token is generated each start."
         );
         println!(
             "  LEAN_CTX_SCRAPE_TOKEN=<token> Read-only token accepted ONLY for GET /metrics — hand this to Prometheus/Datadog agents instead of the dashboard token (docs/integrations/datadog.md)."
@@ -436,8 +439,18 @@ pub(super) fn cmd_dashboard(rest: &[String]) {
                 .or_else(|| p.strip_prefix("--prefix="))
         })
         .map(String::from);
+    // `--auth-token` / `--token`: pin the dashboard Bearer token from the CLI.
+    // Takes precedence over LEAN_CTX_HTTP_TOKEN so it survives container/service
+    // environments that strip or fail to inherit the env var (#377).
+    let auth_token = rest
+        .iter()
+        .find_map(|p| {
+            p.strip_prefix("--auth-token=")
+                .or_else(|| p.strip_prefix("--token="))
+        })
+        .map(String::from);
     super::spawn_proxy_if_needed();
-    super::run_async(dashboard::start(port, host, base_path));
+    super::run_async(dashboard::start(port, host, base_path, auth_token));
 }
 
 pub(super) fn cmd_watch(rest: &[String]) {

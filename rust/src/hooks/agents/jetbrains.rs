@@ -11,11 +11,7 @@ pub(crate) fn install_jetbrains_hook() {
     let entry = serde_json::json!({
         "command": binary,
         "args": [],
-        "env": {
-            "LEAN_CTX_DATA_DIR": crate::core::data_dir::lean_ctx_data_dir()
-                .map(|d| d.to_string_lossy().to_string())
-                .unwrap_or_default()
-        }
+        "env": super::super::mcp_server_env_json()
     });
 
     if config_path.exists() {

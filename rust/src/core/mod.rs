@@ -359,6 +359,7 @@ pub mod ingestion;
 pub mod instruction_compiler;
 pub mod integrity;
 pub mod intent_engine;
+pub(crate) mod intent_lang;
 pub mod intent_protocol;
 pub mod intent_router;
 pub mod io_boundary;
@@ -386,6 +387,7 @@ pub mod owasp_alignment;
 pub mod path_locks;
 pub mod path_mode_memory;
 pub mod path_resolve;
+pub mod paths;
 pub mod pathutil;
 pub mod persona;
 pub mod pipeline;
@@ -450,6 +452,7 @@ pub mod workspace_config;
 pub mod wrapped;
 pub mod wrapped_share;
 pub mod wrapped_svg;
+pub mod xdg_migrate;
 
 // ---------------------------------------------------------------------------
 // Feature-gated modules

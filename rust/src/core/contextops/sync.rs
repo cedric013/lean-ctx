@@ -80,7 +80,12 @@ mod tests {
     // than "nothing is ever synced", because agents such as Codex/Pi are detected
     // via `$PATH` (`which`), so what gets injected on the first pass is host-
     // dependent — but re-running must always be a clean no-op.
+    // Serialized against every other test that reads or writes the global
+    // `CLAUDE_CONFIG_DIR` (e.g. doctor `claude_instructions_check`): this test
+    // sets it process-wide via `scope_claude_into`, so a concurrent reader
+    // would otherwise resolve Claude's state dir to *this* sandbox (#401 CI).
     #[test]
+    #[serial_test::serial(claude_config_dir)]
     fn sync_all_is_idempotent_and_error_free() {
         let home = TempHome::new("all");
         let _claude = scope_claude_into(&home.path);
@@ -106,6 +111,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(claude_config_dir)]
     fn sync_agent_unknown_is_a_noop() {
         let home = TempHome::new("agent");
         let _claude = scope_claude_into(&home.path);

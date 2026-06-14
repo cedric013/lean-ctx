@@ -11,14 +11,11 @@ pub(crate) fn install_opencode_hook_with_mode(mode: HookMode) {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    let data_dir = crate::core::data_dir::lean_ctx_data_dir()
-        .map(|d| d.to_string_lossy().to_string())
-        .unwrap_or_default();
     let desired = serde_json::json!({
         "type": "local",
         "command": [&binary],
         "enabled": true,
-        "environment": { "LEAN_CTX_DATA_DIR": data_dir }
+        "environment": super::super::mcp_server_env_json()
     });
 
     // #313: `shadow_mode` (default off) selects the OpenCode integration, and the

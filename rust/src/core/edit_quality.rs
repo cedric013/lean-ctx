@@ -245,8 +245,9 @@ pub fn record_edit_outcome(path: &str, last_mode: &str, success: bool) {
             let norm = crate::core::pathutil::normalize_tool_path(path);
             store.set_pending_escalation(&norm, now);
             // Quality signal (#538): edit failures after compressed reads are
-            // the strongest "compressed too much" evidence we have.
-            crate::core::threshold_learning::record_signal(
+            // the strongest "compressed too much" evidence we have — they also
+            // penalize the bandit arm that produced the read (#593).
+            crate::core::adaptive_thresholds::record_quality_signal(
                 path,
                 crate::core::threshold_learning::QualitySignal::EditFail,
             );

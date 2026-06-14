@@ -123,6 +123,10 @@ pub trait McpTool: Send + Sync {
 /// cache/session access.
 pub struct ToolContext {
     pub project_root: String,
+    /// Session-scoped trusted roots (MCP `roots/list`, config `extra_roots`),
+    /// snapshotted from the session so sync handlers can honor them without an
+    /// async lock. Empty = single-root jail behaviour (#403).
+    pub extra_roots: Vec<String>,
     pub minimal: bool,
     /// Pre-resolved paths keyed by argument name (e.g. "path" -> "/abs/dir").
     pub resolved_paths: std::collections::HashMap<String, String>,
@@ -201,10 +205,16 @@ impl ToolContext {
         self.path_errors.get(key).map(String::as_str)
     }
 
-    /// Sync path resolution using `project_root`. Thin wrapper over
-    /// [`crate::core::path_resolve::resolve_tool_path`] for sync tool handlers.
+    /// Sync path resolution using `project_root` + session `extra_roots`. Thin
+    /// wrapper over [`crate::core::path_resolve::resolve_tool_path_with_roots`]
+    /// for sync tool handlers.
     pub fn resolve_path_sync(&self, path: &str) -> Result<String, String> {
-        crate::core::path_resolve::resolve_tool_path(Some(&self.project_root), None, path)
+        crate::core::path_resolve::resolve_tool_path_with_roots(
+            Some(&self.project_root),
+            None,
+            path,
+            &self.extra_roots,
+        )
     }
 }
 

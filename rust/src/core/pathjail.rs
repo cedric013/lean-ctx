@@ -151,13 +151,30 @@ fn canonicalize_existing_ancestor(path: &Path) -> Option<(PathBuf, Vec<std::ffi:
 }
 
 pub fn jail_path(candidate: &Path, jail_root: &Path) -> Result<PathBuf, String> {
+    jail_path_with_roots(candidate, jail_root, &[])
+}
+
+/// Like [`jail_path`], but also accepts paths under any of `extra_roots`.
+///
+/// `extra_roots` are session-scoped trusted roots (MCP `roots/list` and config
+/// `extra_roots`, surfaced via `session.extra_roots`) — e.g. sibling git
+/// worktrees the agent legitimately spans. They widen the allow-list for *this
+/// call only*, so an explicit `path` under a worktree resolves instead of
+/// failing with "path escapes project root", without loosening the global jail
+/// (#403). `path_jail = false` still bypasses entirely and an empty slice is
+/// byte-for-byte identical to the old single-root behaviour.
+pub fn jail_path_with_roots(
+    candidate: &Path,
+    jail_root: &Path,
+    extra_roots: &[String],
+) -> Result<PathBuf, String> {
     if candidate.to_string_lossy().as_bytes().contains(&0) {
         return Err("path contains null byte".to_string());
     }
 
     #[cfg(feature = "no-jail")]
     {
-        let _ = jail_root;
+        let _ = (jail_root, extra_roots);
         return Ok(canonicalize_or_self(candidate));
     }
 
@@ -182,7 +199,14 @@ pub fn jail_path(candidate: &Path, jail_root: &Path) -> Result<PathBuf, String> 
             resolved.as_path()
         };
 
-        let allow = allow_paths_from_env_and_config();
+        let mut allow = allow_paths_from_env_and_config();
+        // Session-scoped roots widen the allow-list for this call only.
+        allow.extend(
+            extra_roots
+                .iter()
+                .filter(|r| !r.is_empty())
+                .map(|r| canonicalize_or_self(Path::new(r))),
+        );
 
         let (base, remainder) = canonicalize_existing_ancestor(candidate).ok_or_else(|| {
             format!(
@@ -278,6 +302,9 @@ mod tests {
     #[cfg(not(feature = "no-jail"))]
     #[test]
     fn rejects_path_outside_root() {
+        // Hermetic config (empty data dir => jail on) so a parallel test that
+        // flips `path_jail` cannot leak into this enforcement check.
+        let _iso = crate::core::data_dir::isolated_data_dir();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("root");
         let other = tmp.path().join("other");
@@ -291,6 +318,44 @@ mod tests {
 
         let bad = jail_path(&other.join("b.txt"), &root);
         assert!(bad.is_err());
+    }
+
+    /// #406 regression: a long-lived process (the MCP server) must honor
+    /// `path_jail = false` written to config after startup. The config cache is
+    /// now keyed on content, so even an edit that preserves the file mtime takes
+    /// effect — a path outside the jail root is accepted once the flag flips.
+    /// (With the former mtime-only cache the stale `None` kept the jail on.)
+    #[cfg(not(feature = "no-jail"))]
+    #[test]
+    fn honors_path_jail_false_after_mtime_preserving_edit() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        let cfg_path = crate::core::config::Config::path().unwrap();
+        if let Some(parent) = cfg_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("project");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let secret = outside.join("secret.txt");
+        std::fs::write(&secret, "x").unwrap();
+
+        // Warm the config cache with the jail on (no path_jail key).
+        std::fs::write(&cfg_path, "# jail on\n").unwrap();
+        let mtime0 = std::fs::metadata(&cfg_path).unwrap().modified().unwrap();
+        assert_eq!(crate::core::config::Config::load().path_jail, None);
+
+        // Flip path_jail=false but restore the original mtime, so any mtime-only
+        // cache would keep serving the stale jail-on value.
+        std::fs::write(&cfg_path, "path_jail = false\n").unwrap();
+        filetime::set_file_mtime(&cfg_path, filetime::FileTime::from_system_time(mtime0)).unwrap();
+
+        assert!(
+            jail_path(&secret, &root).is_ok(),
+            "path_jail=false must take effect without a fresh process (#406)"
+        );
     }
 
     #[test]
@@ -310,6 +375,7 @@ mod tests {
     fn relative_candidate_resolves_against_root_not_cwd() {
         // Regression: in the daemon (CWD != project) a relative graph path like
         // `sub/file.rs` must resolve under the jail root, not the process CWD.
+        let _iso = crate::core::data_dir::isolated_data_dir();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("project");
         std::fs::create_dir_all(root.join("sub")).unwrap();
@@ -382,6 +448,7 @@ mod tests {
     #[cfg(not(feature = "no-jail"))]
     #[test]
     fn error_message_contains_escape_info() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("root");
         let other = tmp.path().join("other");
@@ -475,6 +542,7 @@ mod tests {
     fn rejects_symlink_escape_on_unix() {
         use std::os::unix::fs::symlink;
 
+        let _iso = crate::core::data_dir::isolated_data_dir();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("root");
         let other = tmp.path().join("other");
@@ -502,5 +570,50 @@ mod tests {
             result.unwrap_err().contains("null byte"),
             "error must mention null byte"
         );
+    }
+
+    /// #403 Bug 1: an explicit path under a session-scoped `extra_root` (e.g. a
+    /// sibling git worktree from MCP `roots/list`) must resolve, while the same
+    /// path is rejected without it — and a path under *no* root is rejected even
+    /// when extra roots are present. Holds both env locks so neither a parallel
+    /// `path_jail` flip nor a `LEAN_CTX_ALLOW_PATH` mutation can leak in.
+    #[cfg(not(feature = "no-jail"))]
+    #[test]
+    fn extra_roots_permit_paths_outside_jail() {
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        let _alp = ALLOW_PATH_ENV_LOCK.lock().unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("project");
+        let worktree = tmp.path().join("worktree");
+        let elsewhere = tmp.path().join("elsewhere");
+        for d in [&root, &worktree, &elsewhere] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let in_worktree = worktree.join("a.txt");
+        std::fs::write(&in_worktree, "x").unwrap();
+        let outside = elsewhere.join("b.txt");
+        std::fs::write(&outside, "y").unwrap();
+
+        // Parity: with no extra roots, the worktree path escapes the jail.
+        assert!(jail_path(&in_worktree, &root).is_err());
+        assert!(jail_path_with_roots(&in_worktree, &root, &[]).is_err());
+
+        // The session-scoped extra root permits it — via the slice alone, with
+        // nothing in env/config.
+        let extra = vec![worktree.to_string_lossy().to_string()];
+        assert!(
+            jail_path_with_roots(&in_worktree, &root, &extra).is_ok(),
+            "path under a session extra_root must resolve (#403)"
+        );
+
+        // A path under neither the jail nor any extra root is still rejected.
+        assert!(
+            jail_path_with_roots(&outside, &root, &extra).is_err(),
+            "paths outside ALL roots must still be rejected"
+        );
+
+        // Empty entries are ignored (no accidental allow-all).
+        assert!(jail_path_with_roots(&outside, &root, &[String::new()]).is_err());
     }
 }

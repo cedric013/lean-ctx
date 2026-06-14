@@ -61,6 +61,7 @@ All `std::sync::Mutex` unless noted otherwise.
 | L48 | `NO_GIT_ROOTS` | `core/git_signals.rs:23` | `Mutex<Option<HashSet<String>>>` | Roots probed and found non-git — negative cache so each root is probed at most once per process |
 | L49 | `BASELINE` | `core/datadog_push.rs:46` | `Mutex<Option<Baseline>>` | Last pushed counter totals for the Datadog agentless push — deltas are computed against it each interval (#401) |
 | L50 | `LINE_EMBED_CACHE` | `core/entropy.rs:299` | `Mutex<Option<HashMap<u64, Vec<f32>>>>` | Per-line embedding cache (line-hash → vector) for the semantic redundancy filter (#544); capacity-bounded, never blocks on model loads |
+| L51 | `SELECTED_ARMS` | `core/adaptive_thresholds.rs:342` | `Mutex<Option<SelectedArmRegistry>>` | Registry of recently selected bandit arms (per project root) so real bounce/edit-fail signals are attributed to the arm that produced the compression (#593); capacity-bounded (64 paths, oldest-first eviction) |
 
 ### Test / Environment Locks (serialise env-var mutations)
 
@@ -161,9 +162,9 @@ Override via `LEAN_CTX_WORKER_THREADS` (positive integer) for environments with 
 concurrent subagents. Example: `LEAN_CTX_WORKER_THREADS=8`. The blocking thread pool
 is always `worker_threads * 4`, clamped to `[8, 32]`.
 
-### Independent Static Locks (L3–L50)
+### Independent Static Locks (L3–L51)
 
-All other static locks (L3–L50) are **independent singletons** — they protect isolated subsystem
+All other static locks (L3–L51) are **independent singletons** — they protect isolated subsystem
 state and are never nested inside each other. Each should be acquired in isolation:
 
 - **Do not hold two static locks at the same time.** If a future change requires locking two

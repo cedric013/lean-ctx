@@ -6,50 +6,75 @@ behavior, and every config section. Source: `rust/src/core/data_dir.rs`,
 
 ---
 
-## 1. Data directory
+## 1. Directories (XDG Base Directory layout)
 
-### Resolution order (`lean_ctx_data_dir()`)
+Since GH #408 lean-ctx separates its files into the standard XDG categories so
+the **config dir can be mounted read-only**. Typed resolvers live in
+`rust/src/core/paths.rs` (`config_dir()`, `data_dir()`, `state_dir()`,
+`cache_dir()`, `runtime_dir()`).
 
-| Priority | Path | Condition |
-|----------|------|-----------|
-| 1 | `$LEAN_CTX_DATA_DIR` | set and non-empty → always wins |
-| 2 | `~/.lean-ctx` | exists **and** contains a marker (`stats.json`, `config.toml`, or `sessions/`) |
-| 3 | `$XDG_CONFIG_HOME/lean-ctx` (default `~/.config/lean-ctx`) | exists **and** contains a marker |
-| 4 | fallback | empty `~/.lean-ctx` if present, else new `~/.config/lean-ctx` |
+| Category | Default | Override | Contents |
+|----------|---------|----------|----------|
+| **Config** | `$XDG_CONFIG_HOME/lean-ctx` (`~/.config/lean-ctx`) | `LEAN_CTX_CONFIG_DIR` | `config.toml`, `env.sh`, `shell-hook.*` — **RO-safe** |
+| **Data** | `$XDG_DATA_HOME/lean-ctx` (`~/.local/share/lean-ctx`) | `LEAN_CTX_DATA_DIR` | `sessions/`, `vectors/`, `graphs/`, `knowledge/`, `archives/`, `memory/`, `packages/`, `agents/`, `stats.json`, `client-id.json` |
+| **State** | `$XDG_STATE_HOME/lean-ctx` (`~/.local/state/lean-ctx`) | `LEAN_CTX_STATE_DIR` | `events.jsonl`, `journal.md`, `*.log`, `mcp-live.json`, `heatmap.json`, `pipeline_stats.json`, `cost_attribution.json`, `context_ledger.json`, `cooccurrence/`, `tee/`, `dashboard.token`, `agent_runtime_env.json` (`0600`) |
+| **Cache** | `$XDG_CACHE_HOME/lean-ctx` (`~/.cache/lean-ctx`) | `LEAN_CTX_CACHE_DIR` | `semantic_cache/`, `models/`, `anomaly_detector.json`, `*_learned.json`, `litm_calibration.json`, `context_ir_v1.json`, `latest-version.json`, `.first_run_wow_done` |
+| **Runtime** | `dirs::data_local_dir()/lean-ctx` | — | `daemon.pid`, `daemon.sock`, `daemon-*.log`, `*.lock` |
 
-An empty `~/.lean-ctx/` without markers does **not** trigger legacy mode (this
-prevents the stats-split problem). Unix dir permissions: `0700`.
-`migrate_if_split()` merges stats if two `stats.json` sources are found.
+Unix dir permissions: `0700`. The **Runtime** dir is the OS data-local dir
+(`~/.local/share/lean-ctx` on Linux, `~/Library/Application Support/lean-ctx` on
+macOS); it holds only daemon IPC and is intentionally separate from the data dir.
 
-> **Do not hardcode `LEAN_CTX_DATA_DIR`** in editor MCP configs unless you
-> intentionally relocate the dir — a wrong value splits your stats. lean-ctx
-> auto-detects correctly.
+### Resolution order (per category)
 
-### A second, separate directory (daemon IPC)
+Each resolver applies the same three steps:
 
-`~/.local/share/lean-ctx/` (via `dirs::data_local_dir()`) holds only runtime IPC:
-`daemon.pid`, `daemon.sock`, `daemon-*.log`. This is **not** the data dir and is
-intentionally separate.
+1. **Explicit override** — `LEAN_CTX_<CATEGORY>_DIR` set & non-empty → wins.
+2. **Single-dir backward-compat** — existing installs never split silently. If
+   `LEAN_CTX_DATA_DIR` is set, **or** legacy `~/.lean-ctx` holds data, **or**
+   mixed `$XDG_CONFIG_HOME/lean-ctx` holds data (the pre-#408 layout), then **all**
+   categories collapse onto that one directory — byte-for-byte the old behavior.
+3. **XDG split default** — a fresh install uses the per-category default above.
 
-### What lives in the data dir
+"Holds data" = contains a data marker (`stats.json`, `sessions/`, `vectors/`,
+`graphs/`, `knowledge/`). `config.toml`/hooks alone do **not** count, so a
+config-only dir does not pin the other categories back onto it.
 
-| Area | Path | Contents |
-|------|------|----------|
-| Config | `config.toml` | Global config (see §3) |
-| Stats | `stats.json`, `mcp-live.json`, `mode_stats.json`, `heatmap.json` | Token/tool stats, live MCP metrics |
-| Sessions | `sessions/<id>.json`, `sessions/latest.json` | CCP session snapshots |
-| Knowledge | `knowledge/<project-hash>/{knowledge,gotchas,embeddings}.json` | Per-project facts |
-| Search | `vectors/<project-hash>/bm25_index.bin.zst`, `embeddings.json` | BM25 + dense vectors |
-| Graph | `graphs/<project-hash>/index.json.zst` | Property graph |
-| Archive | `archives/<id>/…`, `archives/index.db` | Zero-loss tool-output archive (FTS) |
-| Memory | `memory/{episodes,procedures,archive}/` | Episodic + procedural memory |
-| Reports | `report/`, `setup/`, `doctor/`, `status/latest.json` | Last command reports |
-| Packages | `packages/`, `package-index.json` | Context packages |
-| Agents | `agents/`, `handoffs/`, `keys/` | Multi-agent state + identity keys |
-| Misc | `filters/`, `tee/`, `audit/trail.jsonl`, `models/`, `cloud/` | Filters, tee logs, audit, embedding models, cloud creds |
-| Auth | `session_token` (0600) | Proxy/HTTP auth token |
+> **Don't hardcode `LEAN_CTX_DATA_DIR`** in editor MCP configs — it forces the
+> legacy single-dir layout (everything under one path). Leave it unset for the
+> clean XDG split; existing installs are auto-detected and keep working.
 
-Project-local lean-ctx data (in the repo, not the data dir): `.lean-ctx.toml`
+### Migrate an existing install to the split (opt-in)
+
+Legacy/mixed installs keep working in single-dir mode. To adopt the four-dir
+layout on demand:
+
+| Command | Effect |
+|---------|--------|
+| `lean-ctx doctor` | Reports `XDG layout: N item(s) in single dir` when a split is available |
+| `lean-ctx doctor --fix` | Moves data/state/cache out of the config dir into their XDG homes |
+
+The migration is **all-or-nothing** (partial moves would re-collapse via
+back-compat), **idempotent/resumable** (existing destinations are skipped, never
+clobbered) and **crash-safe** (atomic `rename`, copy+remove fallback across
+filesystems; the source is removed only after a successful copy). An explicit
+`LEAN_CTX_DATA_DIR` is treated as a deliberate single-dir choice and is never
+auto-split; runtime files are left in place.
+
+### Read-only config sandbox (the #408 goal)
+
+Once split, the config dir holds only `config.toml` + hooks, so it can be mounted
+read-only while the writable categories live elsewhere:
+
+```
+--ro    $XDG_CONFIG_HOME/lean-ctx     # config.toml, shell hooks
+--rw    $XDG_DATA_HOME/lean-ctx       # sessions, vectors, graphs, knowledge
+--rw    $XDG_STATE_HOME/lean-ctx      # events, journals, logs, ledgers
+--tmpfs $XDG_CACHE_HOME/lean-ctx      # semantic cache, models (regenerable)
+#       runtime (daemon.pid/sock) lives in the OS data-local dir
+```
+
+Project-local lean-ctx data (in the repo, not these dirs): `.lean-ctx.toml`
 (project config override), `.lean-ctx-id`, `.lean-ctx/`.
 
 ---
@@ -66,7 +91,10 @@ var always wins.
 |----------|---------|---------|
 | `LEAN_CTX_DISABLED=1` | Bypass ALL compression + disable shell hook | unset |
 | `LEAN_CTX_RAW=1` | Uncompressed output for one command | unset |
-| `LEAN_CTX_DATA_DIR` | Explicit data dir | auto-detected |
+| `LEAN_CTX_DATA_DIR` | Explicit data dir; **also forces legacy single-dir mode** (see §1) | `$XDG_DATA_HOME/lean-ctx` |
+| `LEAN_CTX_CONFIG_DIR` | Explicit config dir (`config.toml`, hooks) | `$XDG_CONFIG_HOME/lean-ctx` |
+| `LEAN_CTX_STATE_DIR` | Explicit state dir (events, logs, ledgers) | `$XDG_STATE_HOME/lean-ctx` |
+| `LEAN_CTX_CACHE_DIR` | Explicit cache dir (semantic cache, models) | `$XDG_CACHE_HOME/lean-ctx` |
 | `LEAN_CTX_PROJECT_ROOT` | Explicit project root | auto-detected |
 | `LEAN_CTX_TOOL_PROFILE` | `minimal\|standard\|power` | config / power |
 | `LEAN_CTX_PROFILE` | Active context profile | config / `coder` |
@@ -92,9 +120,10 @@ var always wins.
 
 ## 3. Config file (`config.toml`)
 
-Global at `<DATA_DIR>/config.toml`; per-project override at `<repo>/.lean-ctx.toml`
-(merged, project wins). Manage with `lean-ctx config` (`set`, `schema`,
-`validate`, `show`).
+Global at `<CONFIG_DIR>/config.toml` (`$XDG_CONFIG_HOME/lean-ctx/config.toml`,
+or the single dir for legacy/mixed installs — see §1); per-project override at
+`<repo>/.lean-ctx.toml` (merged, project wins). Manage with `lean-ctx config`
+(`set`, `schema`, `validate`, `show`).
 
 ### Sections
 
@@ -126,7 +155,7 @@ Key defaults worth knowing:
 
 ---
 
-## 4. Files written outside the data dir
+## 4. Files written outside the lean-ctx dirs
 
 | Category | Examples | Written by |
 |----------|----------|-----------|

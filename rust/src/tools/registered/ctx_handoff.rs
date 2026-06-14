@@ -623,25 +623,35 @@ fn import_knowledge_from_ledger(
         }
     };
 
-    let mut knowledge = crate::core::knowledge::ProjectKnowledge::load_or_create(&project_root);
-    let mut imported = 0u32;
-    let mut contradictions = 0u32;
-    for fact in &ledger.knowledge.facts {
-        let c = knowledge.remember(
-            &fact.category,
-            &fact.key,
-            &fact.value,
-            &session_id,
-            fact.confidence,
-            &policy,
-        );
-        if c.is_some() {
-            contradictions += 1;
-        }
-        imported += 1;
-    }
-    let _ = knowledge.run_memory_lifecycle(&policy);
-    let _ = knowledge.save();
+    // Import under the cross-process lock (#326/#594): the daemon, the MCP
+    // server and a CLI handoff can all write knowledge concurrently.
+    let result =
+        crate::core::knowledge::ProjectKnowledge::mutate_locked(&project_root, |knowledge| {
+            let mut imported = 0u32;
+            let mut contradictions = 0u32;
+            for fact in &ledger.knowledge.facts {
+                let c = knowledge.remember(
+                    &fact.category,
+                    &fact.key,
+                    &fact.value,
+                    &session_id,
+                    fact.confidence,
+                    &policy,
+                );
+                if c.is_some() {
+                    contradictions += 1;
+                }
+                imported += 1;
+            }
+            let _ = knowledge.run_memory_lifecycle(&policy);
+            (imported, contradictions)
+        });
 
-    Ok((imported, contradictions))
+    match result {
+        Ok((_, counts)) => Ok(counts),
+        Err(e) => Err(ErrorData::internal_error(
+            format!("knowledge import save failed: {e}"),
+            None,
+        )),
+    }
 }

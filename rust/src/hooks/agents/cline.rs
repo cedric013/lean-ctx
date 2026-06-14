@@ -41,14 +41,11 @@ Supported commands: git, cargo, npm, pnpm, docker, kubectl, pip, ruff, go, curl,
 
 fn install_vscode_mcp_for_cline(mcp_path: &std::path::Path) {
     let binary = resolve_binary_path();
-    let data_dir = crate::core::data_dir::lean_ctx_data_dir()
-        .map(|d| d.to_string_lossy().to_string())
-        .unwrap_or_default();
     let entry = serde_json::json!({
         "type": "stdio",
         "command": binary,
         "args": [],
-        "env": { "LEAN_CTX_DATA_DIR": data_dir }
+        "env": super::super::mcp_server_env_json()
     });
 
     crate::hooks::install_named_json_server(

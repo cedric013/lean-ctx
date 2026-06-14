@@ -130,7 +130,11 @@ mod resolve_path_tests {
 
     #[cfg(not(feature = "no-jail"))]
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn resolve_path_rejects_absolute_path_outside_trusted_startup_root() {
+        // Hermetic config + serialized via test_env_lock so a parallel test that
+        // flips `path_jail` cannot disable this jail-enforcement assertion (#406).
+        let _iso = crate::core::data_dir::isolated_data_dir();
         let tmp = tempfile::tempdir().unwrap();
         let stale = tmp.path().join("stale");
         let root = tmp.path().join("root");
@@ -257,7 +261,11 @@ mod resolve_path_tests {
 
     #[cfg(not(feature = "no-jail"))]
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn resolve_path_does_not_auto_update_when_current_root_is_real_project() {
+        // Hermetic config + serialized via test_env_lock so a parallel test that
+        // flips `path_jail` cannot disable this jail-enforcement assertion (#406).
+        let _iso = crate::core::data_dir::isolated_data_dir();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("root");
         let other = tmp.path().join("other");

@@ -103,27 +103,42 @@ pub(crate) fn handle_remember(
     #[cfg(feature = "embeddings")]
     {
         if let Some(engine) = embedding_engine() {
-            let mut idx = crate::core::knowledge_embedding::KnowledgeEmbeddingIndex::load(
-                &knowledge.project_hash,
-            )
-            .unwrap_or_else(|| {
-                crate::core::knowledge_embedding::KnowledgeEmbeddingIndex::new(
+            // Serialize the embedding index's read-modify-write under the same
+            // per-project lock as the fact write above, and compact against the
+            // freshly committed on-disk knowledge instead of this call's
+            // snapshot. The side-car write previously ran lock-free against a
+            // stale snapshot, so parallel `remember` calls clobbered each
+            // other's vectors and pruned just-stored embeddings — semantic
+            // recall then returned far fewer hits than facts stored (issue #412,
+            // a #326 follow-up). The model is fetched outside the lock so its
+            // load never serializes other writers.
+            let warn = ProjectKnowledge::with_project_lock(project_root, || {
+                let mut idx = crate::core::knowledge_embedding::KnowledgeEmbeddingIndex::load(
                     &knowledge.project_hash,
                 )
-            });
+                .unwrap_or_else(|| {
+                    crate::core::knowledge_embedding::KnowledgeEmbeddingIndex::new(
+                        &knowledge.project_hash,
+                    )
+                });
 
-            match crate::core::knowledge_embedding::embed_and_store(&mut idx, engine, cat, k, v) {
-                Ok(()) => {
-                    crate::core::knowledge_embedding::compact_against_knowledge(
-                        &mut idx, &knowledge, &policy,
-                    );
-                    if let Err(e) = idx.save() {
-                        result.push_str(&format!("\n(warn: embeddings save failed: {e})"));
+                match crate::core::knowledge_embedding::embed_and_store(&mut idx, engine, cat, k, v)
+                {
+                    Ok(()) => {
+                        let fresh = ProjectKnowledge::load(project_root);
+                        let kref = fresh.as_ref().unwrap_or(&knowledge);
+                        crate::core::knowledge_embedding::compact_against_knowledge(
+                            &mut idx, kref, &policy,
+                        );
+                        idx.save()
+                            .err()
+                            .map(|e| format!("\n(warn: embeddings save failed: {e})"))
                     }
+                    Err(e) => Some(format!("\n(warn: embeddings update failed: {e})")),
                 }
-                Err(e) => {
-                    result.push_str(&format!("\n(warn: embeddings update failed: {e})"));
-                }
+            });
+            if let Some(w) = warn {
+                result.push_str(&w);
             }
         }
     }

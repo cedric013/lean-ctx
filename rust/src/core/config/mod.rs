@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::SystemTime;
 
 use super::memory_policy::MemoryPolicy;
 
@@ -370,8 +369,9 @@ pub struct Config {
     /// Override via LEAN_CTX_ALLOW_REROOT env var.
     #[serde(default)]
     pub allow_auto_reroot: bool,
-    /// Disable PathJail entirely. Set to false to allow all paths.
-    /// Useful in container/Docker environments. Override via LEAN_CTX_NO_JAIL=1.
+    /// Disable PathJail entirely by setting `path_jail = false` in config.toml.
+    /// Useful in container/Docker environments where the sandbox is the boundary.
+    /// (The former `LEAN_CTX_NO_JAIL=1` env override was removed in v3.7.3.)
     #[serde(default)]
     pub path_jail: Option<bool>,
     /// Sandbox level for code execution (ctx_exec).
@@ -797,9 +797,13 @@ impl Config {
 }
 
 impl Config {
-    /// Returns the path to the global config file (`~/.lean-ctx/config.toml`).
+    /// Returns the path to the global config file (`$XDG_CONFIG_HOME/lean-ctx/config.toml`).
+    ///
+    /// Resolves via [`crate::core::paths::config_dir`] so config lives in the
+    /// RO-safe config category. Behavior-neutral today: `config_dir()` equals the
+    /// legacy data dir for existing/single-dir installs (GH #408 / GL #602).
     pub fn path() -> Option<PathBuf> {
-        crate::core::data_dir::lean_ctx_data_dir()
+        crate::core::paths::config_dir()
             .ok()
             .map(|d| d.join("config.toml"))
     }
@@ -870,8 +874,17 @@ impl Config {
     }
 
     /// Loads config from disk with caching, merging global + project-local overrides.
+    ///
+    /// The cache is keyed on a **content hash** of the global + project-local
+    /// files, not their mtime. mtime-only invalidation silently served a stale
+    /// `Config` whenever a content edit preserved the mtime (coarse filesystem
+    /// mtime resolution, `cp -p`, atomic save-then-rename, two edits within the
+    /// same second). A long-lived MCP server then kept the old value (e.g.
+    /// `path_jail`) while a fresh `lean-ctx doctor` process — with an empty
+    /// cache — saw the new one (#406). Config files are tiny, so reading +
+    /// hashing them on every load is negligible and guarantees liveness.
     pub fn load() -> Self {
-        static CACHE: Mutex<Option<(Config, SystemTime, Option<SystemTime>)>> = Mutex::new(None);
+        static CACHE: Mutex<Option<(Config, Option<String>, Option<String>)>> = Mutex::new(None);
 
         let Some(path) = Self::path() else {
             return Self::default();
@@ -879,24 +892,25 @@ impl Config {
 
         let local_path = Self::find_project_root().map(|r| Self::local_path(&r));
 
-        let mtime = std::fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-
-        let local_mtime = local_path
+        // Read raw content up front so the cache key is a content hash.
+        let global_content = std::fs::read_to_string(&path).ok();
+        let local_content = local_path
             .as_ref()
-            .and_then(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+            .and_then(|p| std::fs::read_to_string(p).ok());
+
+        let global_hash = global_content.as_deref().map(crate::core::hasher::hash_str);
+        let local_hash = local_content.as_deref().map(crate::core::hasher::hash_str);
 
         if let Ok(guard) = CACHE.lock() {
-            if let Some((ref cfg, ref cached_mtime, ref cached_local_mtime)) = *guard {
-                if *cached_mtime == mtime && *cached_local_mtime == local_mtime {
+            if let Some((ref cfg, ref cached_global, ref cached_local)) = *guard {
+                if *cached_global == global_hash && *cached_local == local_hash {
                     return cfg.clone();
                 }
             }
         }
 
-        let mut cfg: Config = if let Ok(content) = std::fs::read_to_string(&path) {
-            match toml::from_str(&content) {
+        let mut cfg: Config = if let Some(ref content) = global_content {
+            match toml::from_str(content) {
                 Ok(c) => {
                     record_parse_error(None);
                     c
@@ -917,14 +931,12 @@ impl Config {
             Self::default()
         };
 
-        if let Some(ref lp) = local_path {
-            if let Ok(local_content) = std::fs::read_to_string(lp) {
-                cfg.merge_local(&local_content);
-            }
+        if let Some(ref local) = local_content {
+            cfg.merge_local(local);
         }
 
         if let Ok(mut guard) = CACHE.lock() {
-            *guard = Some((cfg.clone(), mtime, local_mtime));
+            *guard = Some((cfg.clone(), global_hash, local_hash));
         }
 
         cfg

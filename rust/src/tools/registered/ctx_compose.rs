@@ -19,7 +19,7 @@ impl McpTool for CtxComposeTool {
             json!({
                 "type": "object",
                 "properties": {
-                    "task": { "type": "string", "description": "Natural-language task or question" },
+                    "task": { "type": "string", "description": "Task or question (short English preferred)" },
                     "path": { "type": "string", "description": "Project root (default: .)" }
                 },
                 "required": ["task"]

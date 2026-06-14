@@ -43,7 +43,8 @@ impl McpTool for CtxSearchTool {
     ) -> Result<ToolOutput, ErrorData> {
         let pattern = get_str(args, "pattern")
             .ok_or_else(|| ErrorData::invalid_params("pattern is required", None))?;
-        let resolved = crate::server::multi_path::resolve_tool_paths(args, ctx);
+        let resolved = crate::server::multi_path::resolve_tool_paths(args, ctx)
+            .map_err(|e| ErrorData::invalid_params(format!("ERROR: {e}"), None))?;
         // `include` is the canonical glob filter; `ext` is the deprecated alias
         // (bare extension → `*.{ext}`). `include` wins when both are supplied.
         let include =

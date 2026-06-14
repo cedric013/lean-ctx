@@ -186,6 +186,7 @@ mod tests {
     ) -> ToolContext {
         ToolContext {
             project_root: project_root.to_string(),
+            extra_roots: Vec::new(),
             minimal: false,
             resolved_paths: std::collections::HashMap::new(),
             crp_mode: CrpMode::Off,

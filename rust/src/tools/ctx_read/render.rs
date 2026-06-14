@@ -354,7 +354,10 @@ pub(crate) fn process_mode(
             } else {
                 0.0
             };
-            crate::core::adaptive_thresholds::report_bandit_outcome(compression_ratio > 0.15);
+            crate::core::adaptive_thresholds::report_bandit_outcome_for_path(
+                file_path,
+                compression_ratio > 0.15,
+            );
             (
                 append_compressed_hint(&format!("{output}\n{savings}"), file_path),
                 sent,

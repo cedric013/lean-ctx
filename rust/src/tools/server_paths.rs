@@ -29,7 +29,7 @@ impl LeanCtxServer {
         }
         let p = std::path::Path::new(&normalized);
 
-        let (resolved, jail_root) = {
+        let (resolved, jail_root, extra_roots) = {
             let session = self.session.read().await;
             let jail_root = session
                 .project_root
@@ -55,11 +55,17 @@ impl LeanCtxServer {
                 std::path::Path::new(&jail_root).join(&normalized)
             };
 
-            (resolved, jail_root)
+            // Session-scoped trusted roots (MCP roots/list, config extra_roots,
+            // git worktrees) must widen the jail for an explicit path (#403).
+            (resolved, jail_root, session.extra_roots.clone())
         };
 
         let jail_root_path = std::path::Path::new(&jail_root);
-        let jailed = match crate::core::pathjail::jail_path(&resolved, jail_root_path) {
+        let jailed = match crate::core::pathjail::jail_path_with_roots(
+            &resolved,
+            jail_root_path,
+            &extra_roots,
+        ) {
             Ok(p) => p,
             Err(e) => {
                 if p.is_absolute() {
@@ -90,7 +96,11 @@ impl LeanCtxServer {
                                 .or_else(|| Some(new_root_str.clone()));
                             let _ = session.save();
 
-                            crate::core::pathjail::jail_path(&resolved, &new_root)?
+                            crate::core::pathjail::jail_path_with_roots(
+                                &resolved,
+                                &new_root,
+                                &extra_roots,
+                            )?
                         } else {
                             return Err(e);
                         }

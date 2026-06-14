@@ -19,7 +19,7 @@ impl McpTool for CtxPlanTool {
             json!({
                 "type": "object",
                 "properties": {
-                    "task": { "type": "string", "description": "Task description" },
+                    "task": { "type": "string", "description": "Task description (short English preferred)" },
                     "budget": { "type": "integer", "description": "Token budget (default: 12000)" },
                     "profile": { "type": "string", "description": "ultra_lean|balanced|forensic" }
                 },

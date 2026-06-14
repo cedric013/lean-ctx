@@ -522,7 +522,7 @@ pub(super) fn docker_env_outcomes() -> Vec<Outcome> {
     if !crate::shell::is_container() {
         return vec![];
     }
-    let env_sh = crate::core::data_dir::lean_ctx_data_dir().map_or_else(
+    let env_sh = crate::core::paths::config_dir().map_or_else(
         |_| "/root/.lean-ctx/env.sh".to_string(),
         |d| d.join("env.sh").to_string_lossy().to_string(),
     );
@@ -1551,7 +1551,13 @@ mod tests {
 
     // GH #396: the exact post-`setup` state — CLAUDE.md block + skill, rules
     // file removed by setup. Must pass, not demand the retired rules file.
+    //
+    // `serial(claude_config_dir)`: `claude_state_dir` honours the process-global
+    // `CLAUDE_CONFIG_DIR`, which the contextops sync tests set for their own
+    // sandbox. Without serialization a concurrent setter makes this check read
+    // the wrong `.claude` dir and flake under load (seen on release CI, #401).
     #[test]
+    #[serial_test::serial(claude_config_dir)]
     fn v3_layout_block_and_skill_passes() {
         let tmp = tempfile::tempdir().unwrap();
         write(
@@ -1566,6 +1572,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(claude_config_dir)]
     fn block_without_skill_still_passes() {
         let tmp = tempfile::tempdir().unwrap();
         write(tmp.path(), ".claude/CLAUDE.md", "<!-- lean-ctx -->\nx");
@@ -1574,6 +1581,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(claude_config_dir)]
     fn legacy_rules_file_passes() {
         let tmp = tempfile::tempdir().unwrap();
         write(tmp.path(), ".claude/rules/lean-ctx.md", "rules");
@@ -1583,6 +1591,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(claude_config_dir)]
     fn nothing_installed_fails_and_suggests_setup() {
         let tmp = tempfile::tempdir().unwrap();
         let out = check(tmp.path(), RulesScope::Global, RulesInjection::Shared);

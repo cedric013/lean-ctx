@@ -184,9 +184,11 @@ pub fn list_profiles() -> Vec<ProfileInfo> {
 /// Writes the `tool_profile` setting to config.toml, preserving all comments,
 /// formatting, and unrelated keys (robust against substring/comment matches).
 pub fn set_profile_in_config(profile_name: &str) -> Result<(), String> {
-    let config_dir = crate::core::data_dir::lean_ctx_data_dir()
-        .map_err(|e| format!("Cannot determine config dir: {e}"))?;
-    let config_path = config_dir.join("config.toml");
+    // Canonical config location (RO-safe config category, GH #408). Writing it
+    // anywhere else than `Config::load` reads would split-brain once the data
+    // default flips to `$XDG_DATA_HOME`.
+    let config_path = crate::core::config::Config::path()
+        .ok_or_else(|| "Cannot determine config dir".to_string())?;
 
     let mut doc = crate::config_io::load_toml_document(&config_path);
     doc["tool_profile"] = toml_edit::value(profile_name);
@@ -199,9 +201,8 @@ pub fn set_profile_in_config(profile_name: &str) -> Result<(), String> {
 /// while every registered tool stays reachable through `ctx_call`. This is
 /// the recommended low-overhead mode (#575).
 pub fn clear_profile_in_config() -> Result<(), String> {
-    let config_dir = crate::core::data_dir::lean_ctx_data_dir()
-        .map_err(|e| format!("Cannot determine config dir: {e}"))?;
-    let config_path = config_dir.join("config.toml");
+    let config_path = crate::core::config::Config::path()
+        .ok_or_else(|| "Cannot determine config dir".to_string())?;
     if !config_path.exists() {
         return Ok(());
     }

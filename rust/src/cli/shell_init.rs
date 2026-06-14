@@ -39,12 +39,16 @@ fn backup_shell_config(path: &std::path::Path) {
     }
 }
 
-fn lean_ctx_dir() -> Option<std::path::PathBuf> {
-    crate::core::data_dir::lean_ctx_data_dir().ok()
+/// Directory for config artifacts written by `init`/`setup` — shell hooks and
+/// `env.sh`. These are config files (RO-safe), so they live in [`config_dir`]
+/// (GH #408). For legacy/mixed installs `config_dir()` collapses onto the same
+/// single directory as before, so this is a no-op there.
+fn config_artifact_dir() -> Option<std::path::PathBuf> {
+    crate::core::paths::config_dir().ok()
 }
 
 fn write_hook_file(filename: &str, content: &str) -> Option<std::path::PathBuf> {
-    let dir = lean_ctx_dir()?;
+    let dir = config_artifact_dir()?;
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join(filename);
     match std::fs::write(&path, content) {
@@ -64,7 +68,7 @@ fn write_hook_file(filename: &str, content: &str) -> Option<std::path::PathBuf> 
 }
 
 fn resolved_hook_dir_display() -> String {
-    lean_ctx_dir().map_or_else(
+    config_artifact_dir().map_or_else(
         || "$HOME/.lean-ctx".to_string(),
         |p| p.to_string_lossy().to_string(),
     )
@@ -666,7 +670,8 @@ fn ensure_bash_login_sources_bashrc() {
 }
 
 pub fn write_env_sh_for_containers(aliases: &str) {
-    let env_sh = match crate::core::data_dir::lean_ctx_data_dir() {
+    // env.sh is a config artifact (sourced via BASH_ENV/CLAUDE_ENV_FILE) → config_dir (#408).
+    let env_sh = match crate::core::paths::config_dir() {
         Ok(d) => d.join("env.sh"),
         Err(_) => return,
     };
@@ -733,7 +738,7 @@ fn print_docker_env_hints(is_zsh: bool) {
     if is_zsh || !crate::shell::is_container() {
         return;
     }
-    let env_sh = crate::core::data_dir::lean_ctx_data_dir().map_or_else(
+    let env_sh = crate::core::paths::config_dir().map_or_else(
         |_| "/root/.lean-ctx/env.sh".to_string(),
         |d| d.join("env.sh").to_string_lossy().to_string(),
     );
@@ -1014,12 +1019,13 @@ export EDITOR=vim
     fn env_sh_for_containers_includes_self_heal() {
         let _g = crate::core::data_dir::test_env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
-        let data_dir = tmp.path().join("data");
-        std::fs::create_dir_all(&data_dir).expect("mkdir data");
-        std::env::set_var("LEAN_CTX_DATA_DIR", &data_dir);
+        // env.sh is a config artifact (#408) → written under config_dir().
+        let config_dir = tmp.path().join("config");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config");
+        std::env::set_var("LEAN_CTX_CONFIG_DIR", &config_dir);
 
         write_env_sh_for_containers("alias git='lean-ctx -c git'\n");
-        let env_sh = data_dir.join("env.sh");
+        let env_sh = config_dir.join("env.sh");
         let content = std::fs::read_to_string(&env_sh).expect("env.sh exists");
         if !cfg!(windows) {
             if let Ok(mut bash) = std::process::Command::new("bash")
@@ -1055,7 +1061,7 @@ export EDITOR=vim
             "env.sh self-heal must be gated to container environments"
         );
 
-        std::env::remove_var("LEAN_CTX_DATA_DIR");
+        std::env::remove_var("LEAN_CTX_CONFIG_DIR");
     }
 
     #[cfg(unix)]

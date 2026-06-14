@@ -530,7 +530,18 @@ impl CtxReadTool {
                         tokens_original: original as u64,
                         cache_hits: hits as u32,
                         total_reads: turns as u32,
-                        task_completed: true,
+                        // Real behavioral signal instead of a hardcoded success
+                        // (#593): a compressed read only counts as task-completing
+                        // when this extension is not in a high-bounce state —
+                        // compression that keeps forcing full re-reads is not
+                        // "completing" anything. Unknown (too few reads) stays
+                        // optimistic so the cold start is unchanged. 0.30 mirrors
+                        // bounce_tracker::BOUNCE_RATE_THRESHOLD.
+                        task_completed: crate::core::bounce_tracker::global()
+                            .lock()
+                            .ok()
+                            .and_then(|bt| bt.bounce_rate_for_extension(&path_bg))
+                            .is_none_or(|rate| rate < 0.30),
                         timestamp: chrono::Local::now().to_rfc3339(),
                     };
                     let mut store = crate::core::feedback::FeedbackStore::load();

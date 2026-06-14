@@ -245,14 +245,11 @@ fn install_copilot_pretooluse_hook(global: bool) {
 }
 
 fn server_entry(binary: &str) -> serde_json::Value {
-    let data_dir = crate::core::data_dir::lean_ctx_data_dir()
-        .map(|d| d.to_string_lossy().to_string())
-        .unwrap_or_default();
     serde_json::json!({
         "type": "stdio",
         "command": binary,
         "args": [],
-        "env": { "LEAN_CTX_DATA_DIR": data_dir }
+        "env": super::super::mcp_server_env_json()
     })
 }
 
@@ -263,13 +260,10 @@ fn write_vscode_mcp_file(mcp_path: &PathBuf, binary: &str, label: &str) {
 
 /// Copilot CLI uses `"mcpServers"` as the top-level key in `.github/mcp.json`.
 fn write_copilot_cli_mcp_file(mcp_path: &PathBuf, binary: &str, label: &str) {
-    let data_dir = crate::core::data_dir::lean_ctx_data_dir()
-        .map(|d| d.to_string_lossy().to_string())
-        .unwrap_or_default();
     let entry = serde_json::json!({
         "command": binary,
         "args": [],
-        "env": { "LEAN_CTX_DATA_DIR": data_dir }
+        "env": super::super::mcp_server_env_json()
     });
     write_mcp_config(mcp_path, binary, label, "mcpServers", entry);
 }

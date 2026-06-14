@@ -21,7 +21,7 @@ impl McpTool for CtxPreloadTool {
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "Task description (e.g. 'fix auth bug in validate_token')"
+                        "description": "Task description, short English preferred (e.g. 'fix auth bug in validate_token')"
                     },
                     "path": {
                         "type": "string",

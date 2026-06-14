@@ -7,21 +7,11 @@ import type { McpBridgeRetryState, McpBridgeStatus } from "./types.js";
 /** Result shape returned by the MCP client's `callTool`. */
 type McpCallResult = Awaited<ReturnType<Client["callTool"]>>;
 
-const CLI_OVERRIDE_TOOLS = new Set([
-  "ctx_read",
-  "ctx_multi_read",
-  "ctx_shell",
-  "ctx_search",
-  "ctx_tree",
-]);
-
-// No additional prefix filter — CLI_OVERRIDE_TOOLS covers exactly the tools we overwrite
-
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAY_MS = 2000;
 const TOOL_CALL_TIMEOUT_MS = 120000;
 
-type McpTool = {
+export type McpTool = {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
@@ -35,11 +25,47 @@ type McpTool = {
 export type BridgeToolPolicy = {
   /** Lower-cased tool names the bridge must not register at all. */
   disabledTools: Set<string>;
+  /**
+   * Tool names already owned by a local CLI-first replacement in `index.ts`
+   * (e.g. `ctx_read`, `ctx_shell`). The bridge must not re-register their MCP
+   * namesakes. This is the *actual* set of locally registered names, supplied
+   * by `index.ts`, so a tool can never be suppressed without a replacement
+   * (the root cause of issue #409).
+   */
+  localTools: Set<string>;
   /** Optional prefix applied to the Pi-facing tool name (not the MCP call). */
   toolPrefix?: string;
 };
 
-const DEFAULT_TOOL_POLICY: BridgeToolPolicy = { disabledTools: new Set() };
+const DEFAULT_TOOL_POLICY: BridgeToolPolicy = {
+  disabledTools: new Set(),
+  localTools: new Set(),
+};
+
+/**
+ * Partition discovered MCP tools into the ones the bridge should register and
+ * the ones it must skip. A tool is skipped if and only if it is owned by a
+ * local CLI-first replacement (`localTools`); anything in `disabledTools` is
+ * handed to another extension (#359). Pure and exported so the #409 invariant —
+ * never suppress a tool without a local replacement — is locked by unit tests.
+ */
+export function selectBridgeTools(
+  tools: McpTool[],
+  localTools: Set<string>,
+  disabledTools: Set<string>,
+): { toRegister: McpTool[]; disabled: string[] } {
+  const toRegister: McpTool[] = [];
+  const disabled: string[] = [];
+  for (const tool of tools) {
+    if (localTools.has(tool.name)) continue;
+    if (disabledTools.has(tool.name.toLowerCase())) {
+      disabled.push(tool.name);
+      continue;
+    }
+    toRegister.push(tool);
+  }
+  return { toRegister, disabled };
+}
 
 function isAbortLikeError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -78,6 +104,8 @@ export class McpBridge {
   private extraEnv: Record<string, string>;
   private policy: BridgeToolPolicy;
   private reconnectAttempts = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private shuttingDown = false;
   private lastError: string | undefined;
   private lastHungTool: string | undefined;
   private lastRetry: McpBridgeRetryState | undefined;
@@ -104,6 +132,8 @@ export class McpBridge {
   }
 
   private async connect(): Promise<void> {
+    if (this.shuttingDown) return;
+
     this.transport = new StdioClientTransport({
       command: this.binary,
       args: [],
@@ -120,7 +150,7 @@ export class McpBridge {
     this.transport.onclose = () => {
       this.connected = false;
       this.lastError = "MCP transport closed";
-      this.scheduleReconnect();
+      if (!this.shuttingDown) this.scheduleReconnect();
     };
 
     this.transport.onerror = (err) => {
@@ -135,6 +165,8 @@ export class McpBridge {
   }
 
   private scheduleReconnect(): void {
+    if (this.shuttingDown) return;
+    if (this.reconnectTimer) return;
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       this.lastError = `Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached.`;
       console.error(
@@ -146,18 +178,22 @@ export class McpBridge {
     this.reconnectAttempts++;
     const delay = RECONNECT_DELAY_MS * this.reconnectAttempts;
 
-    setTimeout(async () => {
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = undefined;
+      if (this.shuttingDown) return;
       try {
         await this.connect();
-        console.error("[lean-ctx MCP bridge] Reconnected successfully");
+        if (!this.shuttingDown) console.error("[lean-ctx MCP bridge] Reconnected successfully");
       } catch (error) {
         this.lastError = error instanceof Error ? error.message : String(error);
         this.scheduleReconnect();
       }
     }, delay);
+    (this.reconnectTimer as { unref?: () => void }).unref?.();
   }
 
   private async forceReconnect(): Promise<void> {
+    if (this.shuttingDown) return;
     this.connected = false;
     try {
       await this.client?.close();
@@ -175,12 +211,13 @@ export class McpBridge {
     const result = await this.client.listTools();
     const tools = (result.tools ?? []) as McpTool[];
 
-    for (const tool of tools) {
-      if (CLI_OVERRIDE_TOOLS.has(tool.name)) continue;
-      if (this.policy.disabledTools.has(tool.name.toLowerCase())) {
-        this.disabledToolNames.push(tool.name);
-        continue;
-      }
+    const { toRegister, disabled } = selectBridgeTools(
+      tools,
+      this.policy.localTools,
+      this.policy.disabledTools,
+    );
+    this.disabledToolNames.push(...disabled);
+    for (const tool of toRegister) {
       this.registerMcpTool(pi, tool);
     }
   }
@@ -405,7 +442,12 @@ export class McpBridge {
   }
 
   async shutdown(): Promise<void> {
+    this.shuttingDown = true;
     this.reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     try {
       await this.client?.close();
     } catch {

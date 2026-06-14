@@ -745,10 +745,69 @@ fn make_executable(path: &PathBuf) {
 #[cfg(not(unix))]
 fn make_executable(_path: &PathBuf) {}
 
-fn full_server_entry(binary: &str) -> serde_json::Value {
+/// Env key/value pairs for the lean-ctx MCP server entry written into agent
+/// configs (Codex TOML + the JSON agents).
+///
+/// Always emits `LEAN_CTX_DATA_DIR`; adds `LEAN_CTX_PROJECT_ROOT` and
+/// `LEAN_CTX_EXTRA_ROOTS` when known (process env first, then config). Without
+/// these, a long-lived MCP server spawned by the agent loses the project /
+/// worktree scope captured at `init`, so an explicit path under a sibling
+/// worktree is wrongly rejected as a jail escape (#403). Single source of truth
+/// so every agent installer stays consistent.
+pub(crate) fn mcp_server_env_pairs() -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+
     let data_dir = crate::core::data_dir::lean_ctx_data_dir()
         .map(|d| d.to_string_lossy().to_string())
         .unwrap_or_default();
+    pairs.push(("LEAN_CTX_DATA_DIR".to_string(), data_dir));
+
+    let cfg = crate::core::config::Config::load();
+
+    let project_root = std::env::var("LEAN_CTX_PROJECT_ROOT")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| cfg.project_root.clone().filter(|v| !v.trim().is_empty()));
+    if let Some(root) = project_root {
+        pairs.push(("LEAN_CTX_PROJECT_ROOT".to_string(), root));
+    }
+
+    // Env override is already a platform path-list; config is a Vec we join the
+    // same way `LEAN_CTX_EXTRA_ROOTS` is parsed (`std::env::split_paths`).
+    let extra_roots = std::env::var("LEAN_CTX_EXTRA_ROOTS")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            let roots: Vec<&str> = cfg
+                .extra_roots
+                .iter()
+                .map(String::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .collect();
+            if roots.is_empty() {
+                return None;
+            }
+            std::env::join_paths(roots)
+                .ok()
+                .map(|s| s.to_string_lossy().to_string())
+        });
+    if let Some(extra) = extra_roots {
+        pairs.push(("LEAN_CTX_EXTRA_ROOTS".to_string(), extra));
+    }
+
+    pairs
+}
+
+/// The MCP server env block as a JSON object, for the JSON-config agents.
+pub(crate) fn mcp_server_env_json() -> serde_json::Value {
+    let map: serde_json::Map<String, serde_json::Value> = mcp_server_env_pairs()
+        .into_iter()
+        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .collect();
+    serde_json::Value::Object(map)
+}
+
+fn full_server_entry(binary: &str) -> serde_json::Value {
     // No LEAN_CTX_FULL_TOOLS here: forcing the full toolset (69+ schemas,
     // ~15k tokens of tool definitions resent every turn) made lean-ctx one of
     // the biggest token consumers in users' sessions (GitHub #385). The server
@@ -756,9 +815,7 @@ fn full_server_entry(binary: &str) -> serde_json::Value {
     // power users opt in via `tool_profile = "power"` in config.toml.
     serde_json::json!({
         "command": binary,
-        "env": {
-            "LEAN_CTX_DATA_DIR": data_dir
-        }
+        "env": mcp_server_env_json()
     })
 }
 
@@ -804,6 +861,47 @@ mod tests {
                 "exempt agent `{agent}` is not a Hybrid agent (stale exemption?)"
             );
         }
+    }
+
+    #[test]
+    fn mcp_env_pairs_propagate_project_and_extra_roots_from_env() {
+        // #403: init must bake the captured project/worktree scope into the MCP
+        // server entry, otherwise the long-lived server rejects explicit paths
+        // under sibling worktrees as jail escapes.
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        std::env::set_var("LEAN_CTX_PROJECT_ROOT", "/work/main");
+        std::env::set_var("LEAN_CTX_EXTRA_ROOTS", "/work/wt-a:/work/wt-b");
+
+        let pairs = mcp_server_env_pairs();
+        let get = |k: &str| pairs.iter().find(|(p, _)| p == k).map(|(_, v)| v.as_str());
+        assert!(
+            get("LEAN_CTX_DATA_DIR").is_some(),
+            "data dir always emitted"
+        );
+        assert_eq!(get("LEAN_CTX_PROJECT_ROOT"), Some("/work/main"));
+        assert_eq!(get("LEAN_CTX_EXTRA_ROOTS"), Some("/work/wt-a:/work/wt-b"));
+
+        // The JSON view mirrors the pairs for the JSON-config agents.
+        let json = mcp_server_env_json();
+        assert_eq!(json["LEAN_CTX_PROJECT_ROOT"].as_str(), Some("/work/main"));
+
+        std::env::remove_var("LEAN_CTX_PROJECT_ROOT");
+        std::env::remove_var("LEAN_CTX_EXTRA_ROOTS");
+    }
+
+    #[test]
+    fn mcp_env_pairs_omit_roots_when_unset() {
+        // No project context configured anywhere ⇒ only the data dir is emitted,
+        // so we never write empty/placeholder root keys into agent configs.
+        let _iso = crate::core::data_dir::isolated_data_dir();
+        std::env::remove_var("LEAN_CTX_PROJECT_ROOT");
+        std::env::remove_var("LEAN_CTX_EXTRA_ROOTS");
+
+        let pairs = mcp_server_env_pairs();
+        let keys: Vec<&str> = pairs.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"LEAN_CTX_DATA_DIR"));
+        assert!(!keys.contains(&"LEAN_CTX_PROJECT_ROOT"));
+        assert!(!keys.contains(&"LEAN_CTX_EXTRA_ROOTS"));
     }
 
     #[test]

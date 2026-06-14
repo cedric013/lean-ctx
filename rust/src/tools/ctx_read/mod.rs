@@ -335,7 +335,7 @@ fn handle_with_options_resolved(
         // opportunities and push the learned threshold up.
         let compressed = !matches!(result.resolved_mode.as_str(), "full" | "diff" | "lines");
         if compressed {
-            crate::core::threshold_learning::record_signal(
+            crate::core::adaptive_thresholds::record_quality_signal(
                 path,
                 crate::core::threshold_learning::QualitySignal::CleanCompressed,
             );
@@ -343,7 +343,7 @@ fn handle_with_options_resolved(
             && result.output_tokens > 2000
             && bt.bounce_rate_for_extension(path).unwrap_or(0.0) < 0.05
         {
-            crate::core::threshold_learning::record_signal(
+            crate::core::adaptive_thresholds::record_quality_signal(
                 path,
                 crate::core::threshold_learning::QualitySignal::WastedFull,
             );

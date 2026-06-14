@@ -131,12 +131,9 @@ pub(super) fn context_ir_source_kind(name: &str) -> ContextIrSourceKindV1 {
 /// evidence as proof of what was written. The rest of its output (status line,
 /// pre/postimage hashes) is already minimal, so terse has nothing to gain.
 fn skip_terse(name: &str, args: Option<&Map<String, Value>>, is_raw_shell: bool) -> bool {
-    let is_read_family = matches!(
-        name,
-        "ctx_read" | "ctx_multi_read" | "ctx_smart_read" | "ctx_compress" | "ctx_overview"
-    );
+    let mode = crate::server::helpers::get_str(args, "mode");
     is_raw_shell
-        || is_read_family
+        || crate::core::terse::is_verbatim_read(name, mode.as_deref())
         || name == "ctx_edit"
         || (name == "ctx_shell"
             && crate::server::helpers::get_str(args, "command")
@@ -277,6 +274,37 @@ mod tests {
         assert!(
             skip_terse("ctx_edit", None, false),
             "edit evidence must stay byte-accurate"
+        );
+    }
+
+    #[test]
+    fn skip_terse_mode_based_guard_protects_verbatim() {
+        use serde_json::json;
+        let full_args = json!({"mode": "full"}).as_object().unwrap().clone();
+        let lines_args = json!({"mode": "lines:1-20"}).as_object().unwrap().clone();
+        let map_args = json!({"mode": "map"}).as_object().unwrap().clone();
+        // Defense in depth: a non-read tool requesting a verbatim mode is still
+        // protected, so a future read path is byte-exact before it is named (#404).
+        assert!(skip_terse("ctx_future_reader", Some(&full_args), false));
+        assert!(skip_terse("ctx_x", Some(&lines_args), false));
+        // A non-read tool with a lossy/structured mode stays terse-eligible.
+        assert!(!skip_terse("ctx_search", Some(&map_args), false));
+    }
+
+    #[test]
+    fn compress_terse_keeps_reads_byte_identical() {
+        // Content laced with terse triggers (dictionary words, blank lines and a
+        // UTF-8 BOM) that the prose pipeline would otherwise mangle. A read must
+        // come back byte-for-byte even with the densest compression level (#404).
+        let content = "\u{feff}fn run() {\n\n    // command execution pipeline\n    let command = execution();\n    return command;\n}\n";
+        let cfg = Config {
+            compression_level: CompressionLevel::Max,
+            ..Config::default()
+        };
+        let out = compress_terse(content.to_string(), "ctx_read", None, &cfg, false);
+        assert_eq!(
+            out, content,
+            "ctx_read output must be byte-identical (#404)"
         );
     }
 

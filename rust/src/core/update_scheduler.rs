@@ -471,7 +471,7 @@ fn windows_status() -> ScheduleInfo {
 // ─── Shared ──────────────────────────────────────────────
 
 fn read_last_check_time() -> Option<String> {
-    let path = crate::core::data_dir::lean_ctx_data_dir()
+    let path = crate::core::paths::cache_dir()
         .ok()?
         .join("latest-version.json");
     let content = std::fs::read_to_string(path).ok()?;
@@ -483,10 +483,12 @@ fn read_last_check_time() -> Option<String> {
 
 /// Check if the user has ever configured `auto_update` (the key exists in config.toml).
 pub fn has_user_decided() -> bool {
-    let Some(home) = dirs::home_dir() else {
+    // Read the canonical config location (GH #408) — the hardcoded `~/.lean-ctx`
+    // path missed configs stored under `~/.config/lean-ctx`, the default for
+    // most installs, so the prompt could re-fire after the user had decided.
+    let Some(config_path) = crate::core::config::Config::path() else {
         return false;
     };
-    let config_path = home.join(".lean-ctx").join("config.toml");
     let content = std::fs::read_to_string(config_path).unwrap_or_default();
     content.contains("auto_update")
 }
@@ -494,12 +496,12 @@ pub fn has_user_decided() -> bool {
 /// Writes the `[updates]` settings to config.toml, preserving all comments,
 /// formatting, and unrelated keys.
 pub fn set_auto_update(enabled: bool, notify_only: bool, interval_hours: u64) {
-    let Some(home) = dirs::home_dir() else {
+    let Some(config_path) = crate::core::config::Config::path() else {
         return;
     };
-    let config_dir = home.join(".lean-ctx");
-    let _ = std::fs::create_dir_all(&config_dir);
-    let config_path = config_dir.join("config.toml");
+    if let Some(dir) = config_path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
 
     let mut doc = crate::config_io::load_toml_document(&config_path);
     apply_auto_update(&mut doc, enabled, notify_only, interval_hours);

@@ -61,6 +61,9 @@ pub fn cmd_init(args: &[String]) {
             if result.skill_installed {
                 qprintln!("  ✓ SKILL.md installed for {agent_name}");
             }
+            if result.mcp_skipped {
+                qprintln!("  • MCP registration skipped for {agent_name} (auto_update_mcp=false)");
+            }
             for e in &result.errors {
                 eprintln!("  ✗ {agent_name}: {e}");
             }

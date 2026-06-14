@@ -10,12 +10,9 @@ pub(crate) fn install_amp_hook() {
         let _ = std::fs::create_dir_all(parent);
     }
 
-    let data_dir = crate::core::data_dir::lean_ctx_data_dir()
-        .map(|d| d.to_string_lossy().to_string())
-        .unwrap_or_default();
     let entry = serde_json::json!({
         "command": binary,
-        "env": { "LEAN_CTX_DATA_DIR": data_dir }
+        "env": super::super::mcp_server_env_json()
     });
     install_named_json_server("Amp", display_path, &config_path, "amp.mcpServers", entry);
 }

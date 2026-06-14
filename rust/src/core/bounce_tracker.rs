@@ -129,8 +129,9 @@ impl BounceTracker {
                     // files keep bouncing so auto-mode learns across restarts.
                     crate::core::path_mode_memory::record_bounce(norm_path);
                     // Quality signal (#538): bounces push the learned entropy
-                    // threshold down for this extension (compress less).
-                    crate::core::threshold_learning::record_signal(
+                    // threshold down for this extension (compress less) and
+                    // penalize the bandit arm that produced the read (#593).
+                    crate::core::adaptive_thresholds::record_quality_signal(
                         norm_path,
                         crate::core::threshold_learning::QualitySignal::Bounce,
                     );

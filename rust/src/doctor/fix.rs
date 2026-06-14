@@ -306,6 +306,46 @@ pub(super) fn run_fix(opts: &DoctorFixOptions) -> Result<i32, String> {
     });
     steps.push(startup_step);
 
+    // Split a legacy/mixed single-dir install into the typed XDG dirs (GH #408).
+    let mut xdg_step = SetupStepReport {
+        name: "xdg_layout".to_string(),
+        ok: true,
+        items: Vec::new(),
+        warnings: Vec::new(),
+        errors: Vec::new(),
+    };
+    match crate::core::xdg_migrate::migrate() {
+        Some(report) => {
+            let moved = report.moved.len();
+            let skipped = report.skipped.len();
+            xdg_step.items.push(SetupItem {
+                name: "split".to_string(),
+                status: if moved > 0 {
+                    format!("moved {moved}")
+                } else {
+                    "clean".to_string()
+                },
+                path: Some(report.source.to_string_lossy().to_string()),
+                note: Some(format!(
+                    "split single-dir install into XDG config/data/state/cache ({moved} moved, {skipped} already present)"
+                )),
+            });
+            if !report.errors.is_empty() {
+                xdg_step.ok = false;
+                xdg_step.errors.extend(report.errors.clone());
+            }
+        }
+        None => {
+            xdg_step.items.push(SetupItem {
+                name: "split".to_string(),
+                status: "clean".to_string(),
+                path: None,
+                note: Some("already XDG-split or fresh install — nothing to migrate".to_string()),
+            });
+        }
+    }
+    steps.push(xdg_step);
+
     let mut verify_step = SetupStepReport {
         name: "verify".to_string(),
         ok: true,
