@@ -174,6 +174,7 @@ impl Default for ToolContext {
     fn default() -> Self {
         Self {
             project_root: String::new(),
+            extra_roots: Vec::new(),
             minimal: false,
             resolved_paths: std::collections::HashMap::new(),
             crp_mode: crate::tools::CrpMode::Off,
