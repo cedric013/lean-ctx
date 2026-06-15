@@ -78,6 +78,26 @@ fn format_summary(engine: &GainEngine, model: Option<&str>) -> String {
         out_m = s.model.cost.output_per_m,
     );
 
+    // Net-of-injection honesty line (#361): reconcile the meter to the bill.
+    // On a non-caching rail the fixed per-turn injection is re-billed every
+    // turn, so the true bill impact is gross saved minus that tax.
+    let overhead_pt = s.injected_overhead_tokens_per_turn;
+    if s.turns > 0 {
+        let sign = if s.net_tokens_saved < 0 { "-" } else { "" };
+        report.push_str(&format!(
+            "Injection: {op}/turn × {turns} turns = {tax} re-billed  | net saved {sign}{net}\n",
+            op = format_tokens(overhead_pt),
+            turns = s.turns,
+            tax = format_tokens(s.injected_overhead_total_tokens),
+            net = format_tokens(s.net_tokens_saved.unsigned_abs()),
+        ));
+    } else if overhead_pt > 0 {
+        report.push_str(&format!(
+            "Injection: {op}/turn fixed context tax (proxy not in request path — net = gross above)\n",
+            op = format_tokens(overhead_pt),
+        ));
+    }
+
     if let Some(reason) = bridge.zero_savings_reason(s.tokens_saved) {
         report.push('\n');
         report.push_str(&reason);
@@ -644,6 +664,11 @@ mod tests {
             "avoided_usd",
             "model",
             "score",
+            // Net-of-injection reconciliation (#361) — part of the stable DTO.
+            "injected_overhead_tokens_per_turn",
+            "turns",
+            "injected_overhead_total_tokens",
+            "net_tokens_saved",
         ] {
             assert!(summary.get(k).is_some(), "summary.{k} missing");
         }

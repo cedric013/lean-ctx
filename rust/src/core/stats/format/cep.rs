@@ -101,6 +101,19 @@ pub fn format_cep_report() -> String {
     let dim = theme::dim();
 
     if cep.sessions == 0 && live.is_none() {
+        // A short / phase-isolated bridge run can do real work (commands, proxy
+        // turns, token savings) before any per-session CEP snapshot lands. Don't
+        // mislabel that as "nothing recorded" — point at the meter that has the
+        // real numbers (#361).
+        let proxy_turns = crate::proxy::metrics::load_persisted().map_or(0, |m| m.requests_total);
+        if store.total_commands > 0 || proxy_turns > 0 {
+            return format!(
+                "{dim}No per-session CEP snapshot yet, but lean-ctx is active \
+                 ({cmds} commands, {proxy_turns} proxy turns).{rst}\n\
+                 Run `lean-ctx gain` for token savings and net-of-injection bill impact.",
+                cmds = store.total_commands,
+            );
+        }
         return format!(
             "{dim}No CEP sessions recorded yet.{rst}\n\
              Use lean-ctx as an MCP server in your editor to start tracking.\n\

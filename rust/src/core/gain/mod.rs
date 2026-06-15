@@ -38,6 +38,21 @@ pub struct GainSummary {
     /// traffic (their denominator), not the full provider bill (GitHub #361).
     #[serde(default)]
     pub injected_overhead_tokens_per_turn: u64,
+    /// Provider turns (requests) the proxy actually saw carry the injected
+    /// prefix. `0` when the proxy is not in the request path, in which case the
+    /// net figure below collapses to the gross `tokens_saved` (we cannot count
+    /// turns we never observed, and we refuse to guess).
+    #[serde(default)]
+    pub turns: u64,
+    /// `injected_overhead_tokens_per_turn × turns` — the total fixed context tax
+    /// re-billed across the run on a provider without prompt caching.
+    #[serde(default)]
+    pub injected_overhead_total_tokens: u64,
+    /// The honest bill impact: `tokens_saved − injected_overhead_total_tokens`.
+    /// Signed, because on a non-caching rail a short run can legitimately go
+    /// net-negative until savings outgrow the per-turn injection.
+    #[serde(default)]
+    pub net_tokens_saved: i64,
     pub avoided_usd: f64,
     /// Estimated grid energy avoided (Wh) by keeping `tokens_saved` out of context.
     pub energy_wh: f64,
@@ -65,6 +80,20 @@ pub struct FileGainRow {
     pub access_count: u32,
     pub tokens_saved: u64,
     pub compression_pct: f32,
+}
+
+/// Pure net-of-injection reconciliation: the total injection tax
+/// (`overhead_per_turn × turns`) and the signed net savings after subtracting
+/// it. Extracted so the bill-reconciliation math is unit-testable without the
+/// global proxy/stats state that [`GainEngine::summary`] reads.
+pub(crate) fn net_of_injection(
+    tokens_saved: u64,
+    overhead_per_turn: u64,
+    turns: u64,
+) -> (u64, i64) {
+    let total = overhead_per_turn.saturating_mul(turns);
+    let net = tokens_saved as i64 - total as i64;
+    (total, net)
 }
 
 impl GainEngine {
@@ -111,6 +140,12 @@ impl GainEngine {
         let daemon_hint: Option<String> = None;
         let injected_overhead_tokens_per_turn =
             crate::core::context_overhead::ContextOverhead::cached().total_tokens() as u64;
+        // Reconcile to the real bill: the proxy is the only component that sees
+        // every provider turn, so its persisted request count is the honest
+        // multiplier for the per-turn injection tax (GitHub #361).
+        let turns = crate::proxy::metrics::load_persisted().map_or(0, |m| m.requests_total);
+        let (injected_overhead_total_tokens, net_tokens_saved) =
+            net_of_injection(tokens_saved, injected_overhead_tokens_per_turn, turns);
         GainSummary {
             model: quote,
             total_commands: self.stats.total_commands,
@@ -119,6 +154,9 @@ impl GainEngine {
             tokens_saved,
             gain_rate_pct,
             injected_overhead_tokens_per_turn,
+            turns,
+            injected_overhead_total_tokens,
+            net_tokens_saved,
             avoided_usd,
             energy_wh: crate::core::energy::wh_for_tokens(tokens_saved),
             co2_grams: crate::core::energy::co2_grams_for_tokens(tokens_saved),
@@ -182,5 +220,28 @@ impl GainEngine {
                 compression_pct: e.avg_compression_ratio * 100.0,
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::net_of_injection;
+
+    #[test]
+    fn net_of_injection_subtracts_per_turn_tax() {
+        // 1000 saved, 50/turn over 8 turns = 400 tax → net 600.
+        assert_eq!(net_of_injection(1000, 50, 8), (400, 600));
+    }
+
+    #[test]
+    fn net_of_injection_can_go_negative_on_short_runs() {
+        // The honest case the report must not hide: gross < injection tax.
+        assert_eq!(net_of_injection(100, 50, 8), (400, -300));
+    }
+
+    #[test]
+    fn net_of_injection_collapses_to_gross_without_proxy_turns() {
+        // No proxy in the path → no counted turns → net == gross.
+        assert_eq!(net_of_injection(1234, 3000, 0), (0, 1234));
     }
 }
