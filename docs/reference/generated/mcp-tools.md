@@ -329,7 +329,7 @@ Parameters: `format`
 ## `ctx_read`
 
 Read a file. Prefer over native Read/cat/head/tail (cached, compressed).
-Unchanged re-reads cost ~13 tokens. Auto-selects mode. fresh=true forces a disk re-read.
+Omit mode to auto-select (recommended); use full only right before editing. Re-reads ~13 tokens. fresh=true forces a disk re-read.
 
 Parameters: `fresh`, `mode`, `path`*, `start_line`
 
@@ -383,7 +383,7 @@ Parameters: `ext`, `ignore_gitignore`, `include`, `max_results`, `path`, `paths`
 
 ## `ctx_semantic_search`
 
-Semantic code search (BM25 + embeddings/hybrid + reranking). action=reindex|find_related.
+Concept/semantic code search (hybrid BM25+embeddings). Use when keyword ctx_search misses intent.
 
 Parameters: `action`, `file_path`, `languages`, `line`, `mode`, `path`, `path_glob`, `query`*, `top_k`
 

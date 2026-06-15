@@ -41,6 +41,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   which a `GITHUB_TOKEN`-created release never triggers. The plugin version is now
   single-sourced in `gradle.properties` and mirrors the engine release via
   `-Pversion=<tag>`, so it can no longer drift (it had been stuck at 3.8.3).
+- **The wake-up briefing listed dead and foreign agents (#419)** — `ctx_overview`
+  read the raw `AgentRegistry`, so it showed peers from crashed or exited MCP
+  processes (and from other projects). It now prunes stale entries
+  (`cleanup_stale`) and scopes the list to the current project root, matching
+  what `ctx_agent list` and the dashboard already do.
+- **`ctx_read` map/signatures served pre-rebuild output (#420)** — `lean-ctx graph
+  build --force` and `lean-ctx index build-full` only dropped the in-process graph
+  cache, but a running daemon kept serving stale `map`/`signatures` from its
+  long-lived `SessionCache` in another process. Both commands now also flush the
+  daemon's read cache over IPC (never auto-starting one), so derivations
+  re-derive on the next read.
+- **`ctx_multi_read` ignored `auto` mode (#421)** — batch reads forced
+  `auto`→`full`, so every file came back fully expanded regardless of the active
+  profile. `ctx_multi_read` now honours `auto` like a single `ctx_read`, resolving
+  the optimal mode per file. Tool descriptions, schemas and the injected rules
+  (bumped to v12) now steer agents to omit `mode` (= `auto`) and reserve `full`
+  for the read immediately before an edit.
+- **`ctx_semantic_search` was hidden in the default profile (#422)** — the
+  meaning-based search tool was categorised under `Memory` and absent from the
+  lean core set, so it never appeared in the default ("lean") gate. It is now a
+  Core tool and part of the advertised core surface; the setup/doctor tool counts
+  are derived dynamically instead of a hard-coded "13".
 
 ## [3.8.5] — 2026-06-14
 
