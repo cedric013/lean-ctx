@@ -36,10 +36,8 @@ const ALLOWLIST: &[&str] = &[
     // Group 2: pre-existing direct home-writers/readers (tracked debt).
     "report.rs",
     "core/slo.rs",
-    "core/update_scheduler.rs",
     "core/context_package/keys.rs",
     "core/providers/config_provider/discovery.rs",
-    "cli/cloud.rs",
     "cli/wrapped_publish.rs",
     "cli/dispatch/analytics/gain.rs",
     "tui/event_reader.rs",
@@ -62,28 +60,42 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// True when the file builds the HOME legacy dir `~/.lean-ctx` directly: some
-/// `join(".lean-ctx")` is rooted at a `home` token (`home.join(".lean-ctx")`,
-/// `dirs::home_dir()…join(".lean-ctx")`, `resolve_home_dir()…join(".lean-ctx")`).
+/// `join(".lean-ctx…")` is rooted at a `home` token (`home.join(".lean-ctx")`,
+/// `dirs::home_dir()…join(".lean-ctx/logs")`, `…join(".lean-ctx/agents/…")`).
+///
+/// Both the bare dir (`join(".lean-ctx")`) and any subpath join
+/// (`join(".lean-ctx/logs")`, `join(".lean-ctx/agents/tasks.json")`) are
+/// matched: the byte right after `.lean-ctx` must be `"` or `/`, so the
+/// project markers `.lean-ctx.toml` / `.lean-ctx-id` (followed by `.` / `-`)
+/// stay out of scope. This closes the slash-variant gap that previously let
+/// `proxy_autostart` (`.lean-ctx/logs`) and `a2a/task` (`.lean-ctx/agents/…`)
+/// slip past the firewall.
 ///
 /// The scan spans lines on purpose — the join is frequently chained on its own
-/// line below `dirs::home_dir()`, which the earlier line-by-line check missed
-/// (it under-counted real writers like `core::agents`). A bounded, char-boundary
+/// line below `dirs::home_dir()`, which a line-by-line check missed (it
+/// under-counted real writers like `core::agents`). A bounded, char-boundary
 /// safe look-back keeps project-local roots (`project_root`, `root`, `cwd`,
 /// `dir`) — which carry no `home` token — out of scope by design.
 fn builds_home_legacy_path(text: &str) -> bool {
-    const NEEDLE: &str = r#"join(".lean-ctx")"#;
+    const PREFIX: &str = r#"join(".lean-ctx"#;
     const LOOKBACK: usize = 160;
+    let bytes = text.as_bytes();
     let mut search_from = 0;
-    while let Some(rel) = text[search_from..].find(NEEDLE) {
+    while let Some(rel) = text[search_from..].find(PREFIX) {
         let idx = search_from + rel;
-        let mut start = idx.saturating_sub(LOOKBACK);
-        while start > 0 && !text.is_char_boundary(start) {
-            start -= 1;
+        let after = idx + PREFIX.len();
+        // Legacy dir itself (`"`) or a subpath under it (`/`) — never the
+        // `.lean-ctx.toml` / `.lean-ctx-id` project markers.
+        if matches!(bytes.get(after), Some(b'"' | b'/')) {
+            let mut start = idx.saturating_sub(LOOKBACK);
+            while start > 0 && !text.is_char_boundary(start) {
+                start -= 1;
+            }
+            if text[start..idx].contains("home") {
+                return true;
+            }
         }
-        if text[start..idx].contains("home") {
-            return true;
-        }
-        search_from = idx + NEEDLE.len();
+        search_from = after;
     }
     false
 }

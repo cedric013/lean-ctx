@@ -152,9 +152,12 @@ fn install_launchagent(binary: &str, port: u16, quiet: bool) {
     let _ = std::fs::create_dir_all(&plist_dir);
 
     let plist_path = plist_dir.join(format!("{PLIST_LABEL}.plist"));
-    let log_dir = dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join(".lean-ctx/logs");
+    // GH #439: proxy logs are STATE — resolve through the typed dir so a
+    // post-split install writes to $XDG_STATE_HOME/lean-ctx/logs instead of a
+    // re-created ~/.lean-ctx. Legacy single-dir installs still resolve here.
+    let log_dir = crate::core::paths::state_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("lean-ctx"))
+        .join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
 
     // #356: wrap the launchd invocation in a deny-~/Documents seatbelt sandbox

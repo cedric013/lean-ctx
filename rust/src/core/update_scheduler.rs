@@ -110,8 +110,11 @@ fn install_macos_launchagent(
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
 
-    let home = dirs::home_dir().unwrap_or_default();
-    let log_dir = home.join(".lean-ctx");
+    // GH #439: auto-update logs are STATE — route through the typed resolver so a
+    // post-split install writes to $XDG_STATE_HOME/lean-ctx, not a re-created
+    // ~/.lean-ctx. Legacy single-dir installs keep resolving to ~/.lean-ctx.
+    let log_dir =
+        crate::core::paths::state_dir().unwrap_or_else(|_| std::env::temp_dir().join("lean-ctx"));
     let _ = std::fs::create_dir_all(&log_dir);
 
     let binary_str = binary.to_string_lossy();
