@@ -30,7 +30,9 @@ pub fn unified_tool_defs() -> Vec<Tool> {
                 "properties": {
                     "path": { "type": "string", "description": "File path" },
                     "mode": { "type": "string", "default": "auto" },
-                    "start_line": { "type": "integer" },
+                    "start_line": { "type": "integer", "description": "Read from this 1-based line on (alias: offset)" },
+                    "offset": { "type": "integer", "description": "Alias for start_line (1-based first line)" },
+                    "limit": { "type": "integer", "description": "Max number of lines to read from start_line/offset" },
                     "fresh": { "type": "boolean" }
                 },
                 "required": ["path"]

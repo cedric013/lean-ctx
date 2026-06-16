@@ -3,6 +3,41 @@
 All notable changes to lean-ctx are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- **Secret redaction no longer mangles source files read via `ctx_read` (#430)** —
+  the key/value secret pattern matched TypeScript type annotations and language
+  literals such as `password: undefined`, `secret: string` and `token: null`,
+  replacing the value with `[REDACTED:API key param]` and corrupting files read
+  through `ctx_read`. The redactor now skips a denylist of obvious non-secret
+  literals (undefined/null/none/true/false/string/number/boolean/…). The same
+  pass fixed two latent **under**-redaction bugs: AWS keys and generic long
+  secrets were annotated in place (the secret kept, `[REDACTED]` merely
+  appended) instead of removed. The shell tee redactor and the `ctx_read`
+  redactor now share one implementation (`core::redaction`), so the two layers
+  can never drift apart again.
+- **Dashboard tool profile "Lean" no longer reverts to "Power" (#431)** —
+  selecting Lean persisted `tool_profile = "lean"`, but the config loader didn't
+  recognise it (logging `Unknown tool_profile 'lean'` and falling back to Power)
+  and the settings API reported the *effective* profile (Power) rather than the
+  unpinned state. `lean`/`lazy`/`reset` are now understood everywhere as the
+  unpin sentinel (centralised in `tool_profiles::is_unpinned_alias`), the loader
+  self-heals silently, and the dashboard reports — and round-trips — Lean (the
+  toggle is labelled "Lean (default)").
+- **Dashboard settings page no longer times out on load (#431)** — route
+  handlers ran synchronously on the small async worker pool, so one slow
+  endpoint (e.g. a graph/index build) could starve a trivial `GET /api/settings`
+  for minutes on few-core machines. Handlers now run on the blocking thread
+  pool, keeping light endpoints responsive, and any handler crossing 1s is
+  logged for diagnosis.
+- **`ctx_read` accepts `offset`/`limit` aliases (#432)** — agents trained on the
+  native Read tool send `offset`/`limit`, but the schema only documented
+  `start_line`, so those range reads were silently ignored. `offset` is now an
+  alias for `start_line` and `limit` bounds the window (`lines:N-M`); the aliases
+  are advertised in the tool schema and the generated manifest/reference docs,
+  with `PI_AGENTS.md` aligned.
+
 ## [3.8.7] — 2026-06-15
 
 ### Added

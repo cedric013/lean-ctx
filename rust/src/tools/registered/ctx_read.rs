@@ -46,7 +46,9 @@ impl McpTool for CtxReadTool {
                         "default": "auto",
                         "description": "Omit to auto-select (recommended). auto(default)|full (for editing)|raw|map (large files)|signatures|diff|task|reference|aggressive|entropy|lines:N-M|density:0.X"
                     },
-                    "start_line": { "type": "integer", "description": "Read from this line on" },
+                    "start_line": { "type": "integer", "description": "First line, 1-based (alias: offset)" },
+                    "offset": { "type": "integer", "description": "Alias for start_line" },
+                    "limit": { "type": "integer", "description": "Max lines to read" },
                     "fresh": { "type": "boolean", "description": "Bypass cache, force disk re-read" }
                 },
                 "required": ["path"]
@@ -141,20 +143,18 @@ impl CtxReadTool {
         if cache_policy == "off" {
             fresh = true;
         }
-        let start_line = get_int(args, "start_line");
-        if let Some(sl) = start_line {
-            let sl = sl.max(1_i64);
-            if sl > 1 {
-                fresh = true;
-                // Only override mode when no explicit mode was requested,
-                // or when the explicit mode is already a lines range.
-                // If the caller explicitly set mode=map/signatures/etc.,
-                // start_line must not clobber it (GitHub #259).
-                if !explicit_mode || mode.starts_with("lines") {
-                    mode = format!("lines:{sl}-999999");
-                }
-            }
-        }
+        // `start_line` (and its `offset`/`limit` aliases) can pin a line window.
+        // The resolution lives in `apply_line_window`/`resolve_line_window` so
+        // the runtime path and the unit tests share one implementation and can
+        // never drift (GitHub #432 aliases, #259 explicit-mode, #253 line-1).
+        apply_line_window(
+            &mut mode,
+            &mut fresh,
+            explicit_mode,
+            get_int(args, "start_line"),
+            get_int(args, "offset"),
+            get_int(args, "limit"),
+        );
 
         let pressure_action = ctx.pressure_snapshot.as_ref().map(|p| &p.recommendation);
         let resolved_agent_id = ctx.agent_id.as_ref().and_then(|a| match a.try_read() {
@@ -604,6 +604,58 @@ impl CtxReadTool {
     }
 }
 
+/// Resolve the `start_line`/`offset`/`limit` arguments into `(start, limit)`.
+///
+/// `offset` is an alias for `start_line` (1-based first line); `start_line`
+/// wins if a caller passes both. `limit` (when > 0) bounds the number of lines;
+/// a bare `limit` reads from line 1. Returns `None` when no windowing argument
+/// is present, so the caller leaves the mode untouched (GitHub #432).
+fn resolve_line_window(
+    start_line: Option<i64>,
+    offset: Option<i64>,
+    limit: Option<i64>,
+) -> Option<(i64, Option<i64>)> {
+    let start = start_line.or(offset).map(|v| v.max(1));
+    let limit = limit.filter(|&l| l > 0);
+    match (start, limit) {
+        (Some(s), l) => Some((s, l)),
+        (None, Some(_)) => Some((1, limit)),
+        (None, None) => None,
+    }
+}
+
+/// Build the `lines:N-M` mode string for a resolved window. An unbounded window
+/// (no `limit`) reads to EOF via the historical `999999` sentinel.
+fn lines_mode(start: i64, limit: Option<i64>) -> String {
+    match limit {
+        Some(l) => format!("lines:{start}-{}", start + l - 1),
+        None => format!("lines:{start}-999999"),
+    }
+}
+
+/// Apply a resolved line window to `mode`/`fresh`. An explicit non-lines mode
+/// (map/signatures/…) is never clobbered (#259), and `start_line=1` with no
+/// limit is a no-op so it cannot disturb an auto/explicit read (#253).
+fn apply_line_window(
+    mode: &mut String,
+    fresh: &mut bool,
+    explicit_mode: bool,
+    start_line: Option<i64>,
+    offset: Option<i64>,
+    limit: Option<i64>,
+) {
+    let Some((start, limit)) = resolve_line_window(start_line, offset, limit) else {
+        return;
+    };
+    if start <= 1 && limit.is_none() {
+        return;
+    }
+    *fresh = true;
+    if !explicit_mode || mode.starts_with("lines") {
+        *mode = lines_mode(start, limit);
+    }
+}
+
 fn apply_verdict(
     mode: &str,
     verdict: crate::core::degradation_policy::DegradationVerdictV1,
@@ -793,23 +845,15 @@ mod tests {
     }
 
     // -- Regression: GitHub Issue #253 + #259 --
-    // Helper that mirrors the runtime start_line logic.
+    // Delegates to the real runtime helper so this test can never drift from
+    // production behaviour.
     fn apply_start_line(
         mode: &mut String,
         fresh: &mut bool,
         explicit_mode: bool,
         start_line: Option<i64>,
     ) {
-        if let Some(sl) = start_line {
-            let sl = sl.max(1_i64);
-            if sl <= 1 {
-                return;
-            }
-            *fresh = true;
-            if !explicit_mode || mode.starts_with("lines") {
-                *mode = format!("lines:{sl}-999999");
-            }
-        }
+        super::apply_line_window(mode, fresh, explicit_mode, start_line, None, None);
     }
 
     #[test]
@@ -881,6 +925,88 @@ mod tests {
         apply_start_line(&mut mode, &mut fresh, true, Some(1));
         assert_eq!(mode, "map");
         assert!(!fresh);
+    }
+
+    // -- Regression: GitHub Issue #432 — `offset`/`limit` aliases --
+
+    #[test]
+    fn offset_is_alias_for_start_line() {
+        let mut mode = "auto".to_string();
+        let mut fresh = false;
+        super::apply_line_window(&mut mode, &mut fresh, false, None, Some(40), None);
+        assert_eq!(mode, "lines:40-999999");
+        assert!(fresh);
+    }
+
+    #[test]
+    fn offset_and_limit_make_bounded_window() {
+        let mut mode = "auto".to_string();
+        let mut fresh = false;
+        super::apply_line_window(&mut mode, &mut fresh, false, None, Some(40), Some(20));
+        assert_eq!(mode, "lines:40-59", "20 inclusive lines starting at 40");
+        assert!(fresh);
+    }
+
+    #[test]
+    fn limit_alone_reads_from_first_line() {
+        let mut mode = "auto".to_string();
+        let mut fresh = false;
+        super::apply_line_window(&mut mode, &mut fresh, false, None, None, Some(25));
+        assert_eq!(mode, "lines:1-25");
+        assert!(fresh);
+    }
+
+    #[test]
+    fn start_line_wins_over_offset_when_both_present() {
+        assert_eq!(
+            super::resolve_line_window(Some(10), Some(99), None),
+            Some((10, None))
+        );
+    }
+
+    #[test]
+    fn resolve_clamps_start_and_drops_nonpositive_limit() {
+        // Negative/zero start clamps to 1; non-positive limit is ignored.
+        assert_eq!(
+            super::resolve_line_window(Some(-5), None, Some(0)),
+            Some((1, None))
+        );
+        // A bare non-positive limit yields no window at all.
+        assert_eq!(super::resolve_line_window(None, None, Some(-3)), None);
+        assert_eq!(super::resolve_line_window(None, None, None), None);
+    }
+
+    #[test]
+    fn lines_mode_bounds_are_inclusive() {
+        assert_eq!(super::lines_mode(40, Some(20)), "lines:40-59");
+        assert_eq!(super::lines_mode(5, None), "lines:5-999999");
+    }
+
+    #[test]
+    fn explicit_map_not_clobbered_by_offset_limit() {
+        // #259 must also hold for the new aliases.
+        let mut mode = "map".to_string();
+        let mut fresh = false;
+        super::apply_line_window(&mut mode, &mut fresh, true, None, Some(40), Some(20));
+        assert_eq!(mode, "map", "explicit mode wins over offset/limit");
+        assert!(fresh);
+    }
+
+    /// Schema/handler consistency (GitHub #432): the handler reads
+    /// start_line/offset/limit, so the advertised schema must document them —
+    /// otherwise agents (and the generated docs/manifest) can't discover the
+    /// aliases and the divergence that caused this bug returns.
+    #[test]
+    fn schema_advertises_line_window_aliases() {
+        let tool = CtxReadTool.tool_def();
+        let props = tool
+            .input_schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("ctx_read schema has a properties object");
+        for key in ["path", "mode", "start_line", "offset", "limit", "fresh"] {
+            assert!(props.contains_key(key), "ctx_read schema missing '{key}'");
+        }
     }
 
     // -- Regression: GitHub Issue #262 --

@@ -299,10 +299,14 @@ mod tests {
     /// it joined the lean core so agents discover semantic search by default
     /// instead of never reaching for it. The per-tool cap (300) still guards
     /// individual bloat; the total budget is sized to that 14-tool surface.
+    ///
+    /// Bumped to 2260 for #432: `ctx_read` now advertises the `offset`/`limit`
+    /// aliases (so agents trained on the native Read tool discover them), a
+    /// deliberate +~32 tok. Descriptions are kept terse to limit the cost.
     #[test]
     fn core_tool_surface_stays_within_budget() {
         const PER_TOOL_BUDGET: usize = 300;
-        const TOTAL_BUDGET: usize = 2220;
+        const TOTAL_BUDGET: usize = 2260;
 
         let _guard = crate::core::data_dir::isolated_data_dir();
         let core = crate::tool_defs::core_tool_names();

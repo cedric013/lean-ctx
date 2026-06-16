@@ -331,7 +331,7 @@ Parameters: `format`
 Read a file. Prefer over native Read/cat/head/tail (cached, compressed).
 Omit mode to auto-select (recommended); use full only right before editing. Re-reads ~13 tokens. fresh=true forces a disk re-read.
 
-Parameters: `fresh`, `mode`, `path`*, `start_line`
+Parameters: `fresh`, `limit`, `mode`, `offset`, `path`*, `start_line`
 
 ## `ctx_refactor`
 
