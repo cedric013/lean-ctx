@@ -244,6 +244,7 @@ SHELL HOOK PATTERNS (95+):
     data-eng  dbt, spark, alembic, flyway
     ai        ollama, mlflow
     security  semgrep, trivy, grype, syft, cosign, swiftlint
+    vcs/tool  jj, mise, buf, gem, uv add/lock/tool
     utils     curl, grep/rg, find, ls, wget, env
     data      JSON schema extraction, log deduplication
 

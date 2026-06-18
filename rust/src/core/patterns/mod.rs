@@ -11,6 +11,7 @@ pub mod ansible;
 pub mod artisan;
 pub mod aws;
 pub mod bazel;
+pub mod buf;
 pub mod bun;
 pub mod cargo;
 pub mod clang;
@@ -29,6 +30,7 @@ pub mod fd;
 pub mod find;
 pub mod flutter;
 pub mod flyway;
+pub mod gem;
 pub mod gh;
 pub mod git;
 pub mod glab;
@@ -36,6 +38,7 @@ pub mod golang;
 pub mod grep;
 pub mod grype;
 pub mod helm;
+pub mod jj;
 pub mod json_schema;
 pub mod just;
 pub mod kubectl;
@@ -43,6 +46,7 @@ pub mod log_dedup;
 pub mod ls;
 pub mod make;
 pub mod maven;
+pub mod mise;
 pub mod mix;
 pub mod mlflow;
 pub mod mypy;
@@ -289,8 +293,7 @@ pub fn try_specific_pattern(cmd: &str, output: &str) -> Option<String> {
         return flutter::compress(c, output);
     }
     if c.starts_with("poetry ")
-        || c.starts_with("uv sync")
-        || (c.starts_with("uv ") && c.contains("pip install"))
+        || c.starts_with("uv ")
         || c.starts_with("conda ")
         || c.starts_with("mamba ")
         || c.starts_with("pipx ")
@@ -440,6 +443,20 @@ pub fn try_specific_pattern(cmd: &str, output: &str) -> Option<String> {
         return swiftlint::compress(c, output);
     }
 
+    // --- vcs / toolchain (#660) ---
+    if c == "jj" || c.starts_with("jj ") {
+        return jj::compress(c, output);
+    }
+    if c == "mise" || c.starts_with("mise ") {
+        return mise::compress(c, output);
+    }
+    if c == "buf" || c.starts_with("buf ") {
+        return buf::compress(c, output);
+    }
+    if c.starts_with("gem ") {
+        return gem::compress(c, output);
+    }
+
     None
 }
 
@@ -526,6 +543,23 @@ mod tests {
         assert!(compress_output("semgrep scan", semgrep).is_some());
         let swiftlint = "Linting Swift files in current working directory\nLinting 'A.swift' (1/3)\nLinting 'B.swift' (2/3)\nLinting 'C.swift' (3/3)\n/path/A.swift:10:5: warning: Line Length Violation: Line should be 120 chars or less (line_length)\n/path/A.swift:22:1: warning: Trailing Whitespace Violation: no trailing whitespace (trailing_whitespace)\n/path/B.swift:5:1: error: Force Cast Violation: avoid force casts (force_cast)\n/path/C.swift:8:3: warning: Todo Violation: resolve TODOs (todo)\nDone linting! Found 4 violations, 1 serious in 3 files.";
         assert!(compress_output("swiftlint", swiftlint).is_some());
+    }
+
+    #[test]
+    fn routes_vcs_toolchain_domain() {
+        let jj = "@  qpvuntsm user@host.com 2024-01-01 12:00:00 1234abcd\n│  add feature x\n○  zzzzmmmm user@host.com 2024-01-01 11:00:00 main 5678efab\n│  initial commit\n~";
+        assert!(compress_output("jj log", jj).is_some());
+        let mise = "node    20.10.0  ~/.config/mise/config.toml\npython  3.12.0   ~/.tool-versions\nrust    1.75.0   ~/.config/mise/config.toml";
+        assert!(compress_output("mise ls", mise).is_some());
+        let buf_lines: Vec<String> = (0..30)
+            .map(|i| format!("proto/f{i}.proto:{i}:1:Field name should be lower_snake_case here."))
+            .collect();
+        let buf = buf_lines.join("\n");
+        assert!(compress_output("buf lint", &buf).is_some());
+        let gem = "Fetching rails-7.1.0.gem\nSuccessfully installed activesupport-7.1.0\nSuccessfully installed rails-7.1.0\nParsing documentation for rails-7.1.0\nInstalling ri documentation for rails-7.1.0\nDone installing documentation for rails after 3 seconds\n2 gems installed";
+        assert!(compress_output("gem install rails", gem).is_some());
+        let uv = "Resolved 42 packages in 120ms\nDownloading numpy (18.2MiB)\n 100%|████████| 18.2M/18.2M [00:01<00:00, 15.3MiB/s]\nDownloading pandas (12.1MiB)\n 100%|████████| 12.1M/12.1M [00:00<00:00, 14.1MiB/s]\nPrepared 5 packages in 1.2s\nInstalled 5 packages in 30ms\n + numpy==1.26.0\n + pandas==2.1.0";
+        assert!(compress_output("uv add pandas", uv).is_some());
     }
 
     #[test]
