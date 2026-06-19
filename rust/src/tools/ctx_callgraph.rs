@@ -1,5 +1,5 @@
-use crate::core::call_graph::{CallGraph, RiskLevel};
-use crate::core::graph_index;
+use crate::core::call_graph::{CallGraph, CallGraphInputs, RiskLevel};
+use crate::core::index_paths;
 
 const MAX_BFS_DEPTH: usize = 5;
 
@@ -31,8 +31,8 @@ pub fn handle(
 }
 
 fn load_graph(project_root: &str) -> CallGraph {
-    let index = graph_index::load_or_build(project_root);
-    let graph = CallGraph::load_or_build(project_root, &index);
+    let inputs = CallGraphInputs::open(project_root);
+    let graph = CallGraph::load_or_build(project_root, &inputs);
     let _ = graph.save();
     graph
 }
@@ -120,7 +120,7 @@ fn handle_risk(symbol: &str, project_root: &str) -> String {
 fn format_callers(symbol: &str, graph: &CallGraph, filter: Option<&str>) -> String {
     let mut callers = graph.callers_of(symbol);
     if let Some(f) = filter {
-        callers.retain(|e| graph_index::graph_match_key(&e.caller_file).contains(f));
+        callers.retain(|e| index_paths::graph_match_key(&e.caller_file).contains(f));
     }
 
     if callers.is_empty() {
@@ -144,7 +144,7 @@ fn format_callers(symbol: &str, graph: &CallGraph, filter: Option<&str>) -> Stri
 fn format_callees(symbol: &str, graph: &CallGraph, filter: Option<&str>) -> String {
     let mut callees = graph.callees_of(symbol);
     if let Some(f) = filter {
-        callees.retain(|e| graph_index::graph_match_key(&e.caller_file).contains(f));
+        callees.retain(|e| index_paths::graph_match_key(&e.caller_file).contains(f));
     }
 
     if callees.is_empty() {
@@ -177,7 +177,7 @@ fn format_bfs_callers(
 ) -> String {
     let mut nodes = graph.bfs_callers(symbol, depth);
     if let Some(f) = filter {
-        nodes.retain(|n| graph_index::graph_match_key(&n.file).contains(f));
+        nodes.retain(|n| index_paths::graph_match_key(&n.file).contains(f));
     }
 
     if nodes.is_empty() {
@@ -213,7 +213,7 @@ fn format_bfs_callees(
 ) -> String {
     let mut nodes = graph.bfs_callees(symbol, depth);
     if let Some(f) = filter {
-        nodes.retain(|n| graph_index::graph_match_key(&n.file).contains(f));
+        nodes.retain(|n| index_paths::graph_match_key(&n.file).contains(f));
     }
 
     if nodes.is_empty() {
@@ -242,10 +242,10 @@ fn format_bfs_callees(
 }
 
 fn graph_file_filter(file: &str, project_root: &str) -> String {
-    let rel = graph_index::graph_relative_key(file, project_root);
-    let rel_key = graph_index::graph_match_key(&rel);
+    let rel = index_paths::graph_relative_key(file, project_root);
+    let rel_key = index_paths::graph_match_key(&rel);
     if rel_key.is_empty() {
-        graph_index::graph_match_key(file)
+        index_paths::graph_match_key(file)
     } else {
         rel_key
     }

@@ -26,11 +26,11 @@ fn project_basename(abs_root: &str) -> String {
     )
 }
 
-/// `202 Accepted` body for a graph/index route whose backing index is still
+/// `202 Accepted` body for a graph/index route whose backing graph is still
 /// being built in the background (#452). The dashboard polls the same route and
 /// renders the data once it returns `200`.
 fn building_response(
-    progress: &crate::core::graph_index::IndexBuildProgress,
+    progress: &crate::core::graph_coordinator::GraphBuildProgress,
 ) -> (&'static str, &'static str, String) {
     let json =
         serde_json::to_string(progress).unwrap_or_else(|_| "{\"status\":\"building\"}".to_string());

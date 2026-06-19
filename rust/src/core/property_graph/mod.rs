@@ -22,7 +22,7 @@ pub use node::{Node, NodeKind};
 pub use queries::{
     DependencyChain, GraphQuery, ImpactResult, edge_weight, file_connectivity, related_files,
 };
-pub use sync::{mirror_index, populate_from_project_index};
+pub use sync::{mirror_index, parse_symbol_metadata, populate_from_project_index};
 
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -255,6 +255,12 @@ impl CodeGraph {
 
     pub fn symbol_count(&self) -> anyhow::Result<usize> {
         node::symbol_count(&self.conn)
+    }
+
+    /// Every symbol node with its line span (unfiltered). Backend for the
+    /// call-graph symbol table after the `graph_index` teardown (#696).
+    pub fn all_symbols(&self) -> anyhow::Result<Vec<Node>> {
+        node::all_symbols(&self.conn)
     }
 
     pub fn all_edges_flat(&self) -> anyhow::Result<Vec<(String, String, String, f64)>> {

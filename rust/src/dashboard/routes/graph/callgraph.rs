@@ -14,33 +14,33 @@ pub(super) fn get_route(
 
 fn call_graph() -> (&'static str, &'static str, String) {
     let root = detect_project_root_for_dashboard();
-    let index = match crate::core::graph_index::get_or_start_build(&root) {
-        Ok(index) => index,
+    let provider = match crate::core::graph_coordinator::get_or_start_build(&root) {
+        Ok(open) => open.provider,
         Err(progress) => return super::building_response(&progress),
     };
-    match crate::core::call_graph::CallGraph::get_or_start_build(&root, index.clone()) {
+    let cg_inputs = std::sync::Arc::new(crate::core::call_graph::CallGraphInputs::from_provider(
+        &root, &provider,
+    ));
+    match crate::core::call_graph::CallGraph::get_or_start_build(&root, cg_inputs.clone()) {
         Ok(graph) => {
             // file_path → community_id, shared with the deps tab for a consistent
             // colour palette across both graph views.
-            let communities = crate::core::graph_provider::open_best_effort(&root)
-                .map(|open| {
-                    crate::core::community::detect_communities_for_provider(&open.provider, &root)
-                        .assignment_min_size(2)
-                })
-                .unwrap_or_default();
+            let communities =
+                crate::core::community::detect_communities_for_provider(&provider, &root)
+                    .assignment_min_size(2);
             let payload = serde_json::json!({
                 "status": "ready",
                 "project_root": super::project_basename(&graph.project_root),
                 "edges": graph.edges,
                 "file_hashes": graph.file_hashes,
-                "indexed_file_count": index.files.len(),
-                "indexed_symbol_count": index.symbols.len(),
+                "indexed_file_count": provider.file_count(),
+                "indexed_symbol_count": provider.symbol_count(),
                 "analyzed_file_count": graph.file_hashes.len(),
-                "call_graph_support": call_graph_support(&index),
+                "call_graph_support": call_graph_support(&provider),
                 "language_matrix":
-                    super::capability_matrix::realized_from_index(&index, Some(graph.edges.as_slice())),
+                    super::capability_matrix::realized_from_provider(&provider, Some(graph.edges.as_slice())),
                 "communities": communities,
-                "symbol_files": crate::core::call_graph::resolve_callee_files(&index, &graph.edges),
+                "symbol_files": crate::core::call_graph::resolve_callee_files(&cg_inputs, &graph.edges),
             });
             let json = serde_json::to_string(&payload)
                 .unwrap_or_else(|_| "{\"error\":\"failed to serialize call graph\"}".to_string());
@@ -58,14 +58,14 @@ fn call_graph() -> (&'static str, &'static str, String) {
 /// Mirrors the dependency graph's `graph_support` so the dashboard can show a
 /// truthful "call graph not supported for <language>" message instead of an
 /// index-rebuild hint that produces zero edges (e.g. for a pure C#/Ruby project).
-fn call_graph_support(index: &crate::core::graph_index::ProjectIndex) -> serde_json::Value {
+fn call_graph_support(provider: &crate::core::graph_provider::GraphProvider) -> serde_json::Value {
     use crate::core::language_capabilities as lc;
 
     let mut unsupported_counts: std::collections::HashMap<&'static str, usize> =
         std::collections::HashMap::new();
     let mut has_supported = false;
-    for path in index.files.keys() {
-        let Some(lang) = lc::language_for_path(path) else {
+    for path in provider.file_paths() {
+        let Some(lang) = lc::language_for_path(&path) else {
             continue;
         };
         if lc::supports_call_graph(lang) {
@@ -99,18 +99,18 @@ fn call_graph_status() -> (&'static str, &'static str, String) {
 
 fn symbols(query_str: &str) -> (&'static str, &'static str, String) {
     let root = detect_project_root_for_dashboard();
-    let index = match crate::core::graph_index::get_or_start_build(&root) {
-        Ok(index) => index,
+    let provider = match crate::core::graph_coordinator::get_or_start_build(&root) {
+        Ok(open) => open.provider,
         Err(progress) => return super::building_response(&progress),
     };
     let q = extract_query_param(query_str, "q");
     let kind = extract_query_param(query_str, "kind");
-    let json = build_symbols_json(&index, q.as_deref(), kind.as_deref());
+    let json = build_symbols_json(&provider, q.as_deref(), kind.as_deref());
     ("200 OK", "application/json", json)
 }
 
 fn build_symbols_json(
-    index: &crate::core::graph_index::ProjectIndex,
+    provider: &crate::core::graph_provider::GraphProvider,
     query: Option<&str>,
     kind: Option<&str>,
 ) -> String {
@@ -121,9 +121,9 @@ fn build_symbols_json(
         .map(|k| k.trim().to_lowercase())
         .filter(|k| !k.is_empty());
 
-    let mut symbols: Vec<&crate::core::graph_index::SymbolEntry> = index
-        .symbols
-        .values()
+    let mut symbols: Vec<crate::core::graph_provider::SymbolInfo> = provider
+        .all_symbols()
+        .into_iter()
         .filter(|sym| {
             let kind_match = match kind.as_ref() {
                 Some(k) => sym.kind.eq_ignore_ascii_case(k),

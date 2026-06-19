@@ -279,6 +279,33 @@ pub(super) fn find_symbols(
     Ok(results)
 }
 
+/// Every symbol node (`kind != 'file'`) with its line span — the unfiltered
+/// counterpart of [`find_symbols`]. Powers the backend-agnostic symbol table
+/// that the call-graph builder needs (replacing `ProjectIndex::symbols`).
+pub(super) fn all_symbols(conn: &Connection) -> anyhow::Result<Vec<Node>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, kind, name, file_path, line_start, line_end, metadata
+         FROM nodes WHERE kind != 'file'
+         ORDER BY file_path, line_start",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(Node {
+            id: Some(row.get(0)?),
+            kind: NodeKind::parse(&row.get::<_, String>(1)?),
+            name: row.get(2)?,
+            file_path: row.get(3)?,
+            line_start: row.get::<_, Option<i64>>(4)?.map(|v| v as usize),
+            line_end: row.get::<_, Option<i64>>(5)?.map(|v| v as usize),
+            metadata: row.get(6)?,
+        })
+    })?;
+    let mut results = Vec::new();
+    for r in rows {
+        results.push(r?);
+    }
+    Ok(results)
+}
+
 pub(super) fn symbol_count(conn: &Connection) -> anyhow::Result<usize> {
     let c: i64 = conn.query_row(
         "SELECT COUNT(*) FROM nodes WHERE kind != 'file'",

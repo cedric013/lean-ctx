@@ -1,6 +1,6 @@
 //! `/api/tree` — a collapsible directory → file → symbol hierarchy built from the
-//! real project index (`graph_index`). Powers the Explorer tab. No mock data: the
-//! tree mirrors indexed files and their extracted symbols.
+//! real graph provider (PropertyGraph). Powers the Explorer tab. No mock data:
+//! the tree mirrors indexed files and their extracted symbols.
 
 use crate::dashboard::routes::helpers::detect_project_root_for_dashboard;
 use std::collections::BTreeMap;
@@ -39,43 +39,34 @@ struct FileLeaf {
 fn tree() -> (&'static str, &'static str, String) {
     let root = detect_project_root_for_dashboard();
     let project = super::project_basename(&root);
-    let index = match crate::core::graph_index::get_or_start_build(&root) {
-        Ok(index) => index,
+    let provider = match crate::core::graph_coordinator::get_or_start_build(&root) {
+        Ok(open) => open.provider,
         Err(progress) => return super::building_response(&progress),
     };
 
     // Group symbols by their (relative) file path.
-    let mut syms_by_file: std::collections::HashMap<
-        &str,
-        Vec<&crate::core::graph_index::SymbolEntry>,
-    > = std::collections::HashMap::new();
-    for sym in index.symbols.values() {
-        syms_by_file.entry(sym.file.as_str()).or_default().push(sym);
+    let mut syms_by_file: std::collections::HashMap<String, Vec<SymLeaf>> =
+        std::collections::HashMap::new();
+    for sym in provider.all_symbols() {
+        syms_by_file.entry(sym.file).or_default().push(SymLeaf {
+            name: sym.name,
+            kind: sym.kind,
+            line: sym.start_line,
+            exported: sym.is_exported,
+        });
     }
 
     let mut tree_root = DirNode::default();
     let mut file_count = 0usize;
     let mut symbol_count = 0usize;
 
-    for (path, entry) in &index.files {
+    for entry in provider.file_entries() {
         file_count += 1;
-        let mut symbols: Vec<SymLeaf> = syms_by_file
-            .get(path.as_str())
-            .map(|v| {
-                v.iter()
-                    .map(|s| SymLeaf {
-                        name: s.name.clone(),
-                        kind: s.kind.clone(),
-                        line: s.start_line,
-                        exported: s.is_exported,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut symbols: Vec<SymLeaf> = syms_by_file.remove(&entry.path).unwrap_or_default();
         symbols.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.name.cmp(&b.name)));
         symbol_count += symbols.len();
 
-        let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let parts: Vec<&str> = entry.path.split('/').filter(|s| !s.is_empty()).collect();
         if parts.is_empty() {
             continue;
         }
@@ -86,7 +77,7 @@ fn tree() -> (&'static str, &'static str, String) {
         }
         node.files.push(FileLeaf {
             name: file_name[0].to_string(),
-            path: path.clone(),
+            path: entry.path.clone(),
             language: entry.language.clone(),
             lines: entry.line_count,
             symbols,

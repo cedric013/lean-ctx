@@ -41,13 +41,10 @@ pub fn extract_routes_from_file(file_path: &str, content: &str) -> Vec<RouteEntr
     routes
 }
 
-pub fn extract_routes_from_project(
-    project_root: &str,
-    files: &std::collections::HashMap<String, super::graph_index::FileEntry>,
-) -> Vec<RouteEntry> {
+pub fn extract_routes_from_project(project_root: &str, file_paths: &[String]) -> Vec<RouteEntry> {
     let mut all_routes = Vec::new();
 
-    for rel_path in files.keys() {
+    for rel_path in file_paths {
         if !is_route_candidate(rel_path) {
             continue;
         }

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::core::graph_index::ProjectIndex;
+use crate::core::graph_provider::GraphProvider;
 use crate::core::knowledge::ProjectKnowledge;
 use crate::core::memory_policy::MemoryPolicy;
 
@@ -14,7 +14,7 @@ const BOOTSTRAP_CONFIDENCE: f32 = 0.95;
 pub fn bootstrap_if_empty(
     knowledge: &mut ProjectKnowledge,
     project_root: &str,
-    index: Option<&ProjectIndex>,
+    graph: Option<&GraphProvider>,
     policy: &MemoryPolicy,
 ) -> bool {
     if !knowledge.facts.is_empty() {
@@ -50,10 +50,10 @@ pub fn bootstrap_if_empty(
         );
     }
 
-    if let Some(idx) = index {
-        let file_count = idx.files.len();
-        let symbol_count = idx.symbols.len();
-        let edge_count = idx.edges.len();
+    if let Some(gp) = graph {
+        let file_count = gp.file_count();
+        let symbol_count = gp.symbol_count();
+        let edge_count = gp.edge_count().unwrap_or(0);
         changed |= remember_fact(
             knowledge,
             "workflow",
@@ -62,17 +62,12 @@ pub fn bootstrap_if_empty(
             policy,
         );
 
-        if !idx.last_scan.trim().is_empty() {
-            changed |= remember_fact(
-                knowledge,
-                "workflow",
-                "index_last_scan",
-                &idx.last_scan,
-                policy,
-            );
+        let last_scan = gp.last_scan();
+        if !last_scan.trim().is_empty() {
+            changed |= remember_fact(knowledge, "workflow", "index_last_scan", &last_scan, policy);
         }
 
-        let (langs, total_tokens) = summarize_languages_and_tokens(idx);
+        let (langs, total_tokens) = summarize_languages_and_tokens(gp);
         if !langs.is_empty() {
             changed |= remember_fact(knowledge, "architecture", "languages_top", &langs, policy);
         }
@@ -158,22 +153,22 @@ fn detect_build_markers(project_root: &str) -> Vec<&'static str> {
     out
 }
 
-fn summarize_languages_and_tokens(index: &ProjectIndex) -> (String, u64) {
+fn summarize_languages_and_tokens(gp: &GraphProvider) -> (String, u64) {
     let mut total_tokens: u64 = 0;
-    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
-    for f in index.files.values() {
+    for f in gp.file_entries() {
         total_tokens = total_tokens.saturating_add(f.token_count as u64);
         let lang = if f.language.trim().is_empty() {
-            "unknown"
+            "unknown".to_string()
         } else {
-            f.language.as_str()
+            f.language
         };
         *counts.entry(lang).or_insert(0) += 1;
     }
 
-    let mut entries: Vec<(&str, usize)> = counts.into_iter().collect();
-    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let mut entries: Vec<(String, usize)> = counts.into_iter().collect();
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     let langs = entries
         .into_iter()

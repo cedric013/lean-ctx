@@ -1,8 +1,9 @@
 // DEPRECATED: This module is being replaced by PropertyGraph (core/property_graph/).
 // New code should use GraphProvider (core/graph_provider.rs) instead of accessing
-// ProjectIndex directly. Remaining direct consumers: call_graph, graph_enricher,
-// ctx_callgraph, ctx_graph_diagram, ctx_routes, autonomy, dashboard/callgraph.
-// See OPT-14/15 plan for the full migration path.
+// ProjectIndex directly. The dashboard now resolves graphs through
+// `graph_coordinator` (PropertyGraph-first); the remaining direct consumers are
+// the build pipeline (index_orchestrator) and the extractor itself.
+// See OPT-14/15 (#696) plan for the full migration path.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -11,8 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::import_resolver;
 use crate::core::signatures;
-mod coordinator;
-pub use coordinator::{IndexBuildProgress, get_or_start_build};
 mod edges;
 pub(crate) use edges::*;
 #[cfg(test)]
@@ -286,65 +285,27 @@ impl ProjectIndex {
             .map(|d| d.join("graphs").join(hash))
     }
 
+    /// Reconstruct the index from the property graph — the sole persistence
+    /// store since #696 C4. The PG is a parity-proven lossless superset of the
+    /// former JSON index, so this is a faithful round-trip (see
+    /// `graph_provider::materialize_project_index` + its round-trip test).
+    /// `None` when the graph has not been built yet (empty file catalog).
     pub fn load(project_root: &str) -> Option<Self> {
-        let dir = Self::index_dir(project_root)?;
-
-        let zst_path = dir.join("index.json.zst");
-        if zst_path.exists() {
-            let compressed = std::fs::read(&zst_path).ok()?;
-            let data = zstd::decode_all(compressed.as_slice()).ok()?;
-            let content = String::from_utf8(data).ok()?;
-            let index: Self = serde_json::from_str(&content).ok()?;
-            if index.version != INDEX_VERSION {
-                return None;
-            }
-            return Some(index);
-        }
-
-        let json_path = dir.join("index.json");
-        let content = std::fs::read_to_string(&json_path)
-            .or_else(|_| -> std::io::Result<String> {
-                let legacy_hash = short_hash(&normalize_project_root(project_root));
-                let legacy_dir = crate::core::data_dir::lean_ctx_data_dir()
-                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "no data dir"))?
-                    .join("graphs")
-                    .join(legacy_hash);
-                let legacy_path = legacy_dir.join("index.json");
-                let data = std::fs::read_to_string(&legacy_path)?;
-                if let Err(e) = copy_dir_fallible(&legacy_dir, &dir) {
-                    tracing::debug!("graph index migration: {e}");
-                }
-                Ok(data)
-            })
-            .ok()?;
-        let index: Self = serde_json::from_str(&content).ok()?;
-        if index.version != INDEX_VERSION {
+        let graph = crate::core::property_graph::CodeGraph::open(project_root).ok()?;
+        if graph.file_catalog_count().unwrap_or(0) == 0 {
             return None;
         }
-        // Auto-migrate: compress legacy JSON to zstd
-        if let Ok(compressed) = zstd::encode_all(content.as_bytes(), 9) {
-            let zst_tmp = zst_path.with_extension("zst.tmp");
-            if std::fs::write(&zst_tmp, &compressed).is_ok()
-                && std::fs::rename(&zst_tmp, &zst_path).is_ok()
-            {
-                let _ = std::fs::remove_file(&json_path);
-            }
-        }
-        Some(index)
+        let provider = crate::core::graph_provider::GraphProvider::PropertyGraph(graph);
+        Some(provider.materialize_project_index(project_root))
     }
 
+    /// Persist the index by mirroring it into the property graph (the sole store
+    /// since #696 C4). Replaces the former `index.json.zst` write; the mirror
+    /// also stamps `graph.meta.json`, which the resident graph cache fingerprints
+    /// for invalidation.
     pub fn save(&self) -> Result<(), String> {
-        let dir = Self::index_dir(&self.project_root)
-            .ok_or_else(|| "Cannot determine data directory".to_string())?;
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let json = serde_json::to_string(self).map_err(|e| e.to_string())?;
-        let compressed = zstd::encode_all(json.as_bytes(), 9).map_err(|e| format!("zstd: {e}"))?;
-        let target = dir.join("index.json.zst");
-        let tmp = target.with_extension("zst.tmp");
-        std::fs::write(&tmp, &compressed).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, &target).map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(dir.join("index.json"));
-        Ok(())
+        crate::core::property_graph::mirror_index(&self.project_root, self)
+            .map_err(|e| e.to_string())
     }
 
     /// Remove all cached graph indices that are older than max_age_hours.
@@ -365,12 +326,15 @@ impl ProjectIndex {
             if !path.is_dir() {
                 continue;
             }
-            let zst = path.join("index.json.zst");
-            let json = path.join("index.json");
-            let index_file = if zst.exists() {
-                &zst
-            } else if json.exists() {
-                &json
+            // #696 C4: the property graph (graph.db, stamped by graph.meta.json)
+            // is the sole store; age the directory by its last build instead of
+            // the retired JSON index.
+            let meta = path.join("graph.meta.json");
+            let db = path.join("graph.db");
+            let index_file = if meta.exists() {
+                &meta
+            } else if db.exists() {
+                &db
             } else {
                 continue;
             };
@@ -610,9 +574,13 @@ fn index_looks_stale(index: &ProjectIndex, root_abs: &str) -> bool {
 }
 
 /// Modified time of the persisted index artifact, if one exists.
+///
+/// Since #696 C4 the property graph is the sole store, so staleness is measured
+/// against `graph.meta.json` (rewritten on every mirror) with the `graph.db`
+/// file as a fallback.
 fn index_file_mtime(root_abs: &str) -> Option<std::time::SystemTime> {
     let dir = ProjectIndex::index_dir(root_abs)?;
-    for name in ["index.json.zst", "index.json"] {
+    for name in ["graph.meta.json", "graph.db"] {
         if let Ok(meta) = std::fs::metadata(dir.join(name))
             && let Ok(modified) = meta.modified()
         {
@@ -696,9 +664,20 @@ fn source_content_changed_since_index(index: &ProjectIndex, root_abs: &str) -> b
 
 /// Delete the persisted graph-index artifacts for a project so the next scan
 /// rebuilds from scratch. Backs `graph build --force`.
+///
+/// Since #696 C4 the property graph (`graph.db` + `graph.meta.json`) is the sole
+/// store; the legacy JSON names are still removed so upgrades clear stale files.
 pub fn purge_index(project_root: &str) {
     if let Some(dir) = ProjectIndex::index_dir(project_root) {
-        for name in ["index.json.zst", "index.json", "call_graph.json.zst"] {
+        for name in [
+            "graph.db",
+            "graph.db-wal",
+            "graph.db-shm",
+            "graph.meta.json",
+            "index.json.zst",
+            "index.json",
+            "call_graph.json.zst",
+        ] {
             let _ = std::fs::remove_file(dir.join(name));
         }
     }
@@ -1098,6 +1077,7 @@ fn compute_hash(content: &str) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+#[cfg(test)]
 fn short_hash(input: &str) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -1105,20 +1085,6 @@ fn short_hash(input: &str) -> String {
     let mut hasher = DefaultHasher::new();
     input.hash(&mut hasher);
     format!("{:08x}", hasher.finish() & 0xFFFF_FFFF)
-}
-
-fn copy_dir_fallible(src: &std::path::Path, dst: &std::path::Path) -> Result<(), std::io::Error> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)?.flatten() {
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_fallible(&from, &to)?;
-        } else {
-            std::fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
 }
 
 fn make_relative(path: &str, root: &str) -> String {

@@ -232,18 +232,13 @@ pub fn ensure_all_background(project_root: &str) {
         }
         let graph_result = std::panic::catch_unwind(|| {
             let (idx, content_cache) = graph_index::scan_with_content_cache(&root);
-            // JSON index write is kept for backward compatibility with remaining
-            // direct ProjectIndex consumers. Will be removed when all consumers
-            // are migrated to GraphProvider/PropertyGraph. (OPT-14/15 Phase 6)
-            let _ = idx.save();
-            // #682.2: mirror the freshly scanned index into the property graph in
-            // the same reliable worker, so PG inherits the JSON index's build
-            // reliability. Backend-gated: `auto` (default since #682.4) and
-            // `property-graph` mirror here; only `legacy` opts out.
-            if crate::core::config::GraphBackend::effective(&crate::core::config::Config::load())
-                != crate::core::config::GraphBackend::Legacy
-            {
-                let _ = crate::core::property_graph::mirror_index(&root, &idx);
+            // #696 C4: the property graph is the sole store. `save()` mirrors the
+            // freshly scanned index into PG (stamping `graph.meta.json`) in this
+            // same reliable worker, so PG inherits the scan's build reliability —
+            // no separate fire-and-forget mirror thread that dies in short-lived
+            // processes.
+            if let Err(e) = idx.save() {
+                tracing::warn!("[index_orchestrator: graph save failed: {e}]");
             }
             (idx, content_cache)
         });
@@ -407,8 +402,8 @@ pub fn bm25_summary(project_root: &str) -> Bm25Summary {
 }
 
 pub fn try_load_graph_index(project_root: &str) -> Option<ProjectIndex> {
-    // Resident cache: avoids re-reading + zstd-decompressing + serde-parsing the
-    // on-disk index on every graph-touching query. Returns an in-memory clone.
+    // Resident cache: avoids re-materializing the index from the property graph
+    // (SQLite query) on every graph-touching query. Returns an in-memory clone.
     crate::core::graph_cache::get_cached(project_root).map(|arc| (*arc).clone())
 }
 
@@ -480,19 +475,18 @@ pub struct DiskStatusAll {
 }
 
 fn disk_status_for_graph(project_root: &str) -> DiskStatus {
+    // #696 C4: the property graph is the sole store. The logical graph-index
+    // view (file count) is sized/timed by `graph.meta.json`, which the mirror
+    // stamps on every build; `disk_status_for_code_graph` reports the raw
+    // SQLite store (nodes, graph.db) as a distinct facet.
     let Some(dir) = graph_index::ProjectIndex::index_dir(project_root) else {
         return DiskStatus::default();
     };
-    let zst = dir.join("index.json.zst");
-    let json = dir.join("index.json");
-    let path = if zst.exists() {
-        zst
-    } else if json.exists() {
-        json
-    } else {
+    let meta_file = dir.join("graph.meta.json");
+    if !meta_file.exists() {
         return DiskStatus::default();
-    };
-    let meta = std::fs::metadata(&path).ok();
+    }
+    let meta = std::fs::metadata(&meta_file).ok();
     let file_count =
         graph_index::ProjectIndex::load(project_root).map(|idx| idx.files.len() as u64);
     DiskStatus {

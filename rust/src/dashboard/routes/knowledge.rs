@@ -34,12 +34,14 @@ fn get_routes(path: &str, _query_str: &str) -> Option<(&'static str, &'static st
             let mut knowledge =
                 crate::core::knowledge::ProjectKnowledge::load_or_create(&project_root);
             if knowledge.facts.is_empty() {
-                // Keep /api/knowledge fast: avoid forcing a full index build here.
-                let idx = crate::core::graph_index::ProjectIndex::load(&project_root);
+                // Keep /api/knowledge fast: read the property graph if it is already
+                // populated, but never force a full (re)build on this request path.
+                let open = crate::core::graph_provider::open_best_effort(&project_root);
+                let provider = open.as_ref().map(|o| &o.provider);
                 if crate::core::knowledge_bootstrap::bootstrap_if_empty(
                     &mut knowledge,
                     &project_root,
-                    idx.as_ref(),
+                    provider,
                     &policy,
                 ) {
                     let _ = knowledge.save();

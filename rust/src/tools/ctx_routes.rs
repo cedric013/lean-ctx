@@ -1,14 +1,16 @@
-use crate::core::graph_index;
+use crate::core::graph_provider;
 use crate::core::route_extractor::{self, RouteEntry};
 
 pub fn handle(method: Option<&str>, path_prefix: Option<&str>, project_root: &str) -> String {
-    let index = graph_index::load_or_build(project_root);
-    let routes = route_extractor::extract_routes_from_project(project_root, &index.files);
+    let file_paths = graph_provider::open_or_build(project_root)
+        .map(|o| o.provider.file_paths())
+        .unwrap_or_default();
+    let routes = route_extractor::extract_routes_from_project(project_root, &file_paths);
 
     if routes.is_empty() {
         return format!(
             "No HTTP routes found in project ({} files scanned)",
-            index.file_count()
+            file_paths.len()
         );
     }
 

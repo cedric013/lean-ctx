@@ -29,13 +29,9 @@ pub(crate) fn cmd_index(args: &[String]) {
         Some("build-full") => {
             let bm25_path = crate::core::bm25_index::BM25Index::index_file_path(root);
             let _ = std::fs::remove_file(&bm25_path);
-            if let Some(dir) = crate::core::graph_index::ProjectIndex::index_dir(&project_root) {
-                let _ = std::fs::remove_file(dir.join("index.json.zst"));
-                let _ = std::fs::remove_file(dir.join("index.json"));
-                let _ = std::fs::remove_file(dir.join("call_graph.json.zst"));
-                let _ = std::fs::remove_file(dir.join("graph.db"));
-                let _ = std::fs::remove_file(dir.join("graph.meta.json"));
-            }
+            // #696 C4: purge the property graph (graph.db + wal/shm + meta) and
+            // any retired JSON/call-graph artifacts so the rebuild starts clean.
+            crate::core::graph_index::purge_index(&project_root);
             crate::core::index_orchestrator::ensure_all_background(&project_root);
 
             let started = std::time::Instant::now();

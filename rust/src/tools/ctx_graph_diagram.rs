@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::core::call_graph::CallGraph;
-use crate::core::graph_index;
+use crate::core::call_graph::{CallGraph, CallGraphInputs};
+use crate::core::graph_provider::{self, EdgeInfo};
 
 const DEFAULT_MAX_NODES: usize = 30;
 const DEFAULT_DEPTH: usize = 2;
@@ -22,21 +22,23 @@ pub fn handle(
 }
 
 fn render_dep_graph(file: Option<&str>, depth: usize, project_root: &str) -> String {
-    let index = graph_index::load_or_build(project_root);
+    let Some(open) = graph_provider::open_or_build(project_root) else {
+        return "No dependency edges found in project index.".to_string();
+    };
+    let all_edges = open.provider.edges();
 
-    if index.edges.is_empty() {
+    if all_edges.is_empty() {
         return "No dependency edges found in project index.".to_string();
     }
 
-    let edges: Vec<_> = if let Some(focus) = file {
-        let reachable = bfs_reachable_files(focus, &index.edges, depth);
-        index
-            .edges
+    let edges: Vec<&EdgeInfo> = if let Some(focus) = file {
+        let reachable = bfs_reachable_files(focus, &all_edges, depth);
+        all_edges
             .iter()
             .filter(|e| reachable.contains(e.from.as_str()) || reachable.contains(e.to.as_str()))
             .collect()
     } else {
-        index.edges.iter().collect()
+        all_edges.iter().collect()
     };
 
     if edges.is_empty() {
@@ -61,7 +63,7 @@ fn render_dep_graph(file: Option<&str>, depth: usize, project_root: &str) -> Str
     }
     mermaid.push_str("```");
 
-    let total = index.edges.len();
+    let total = all_edges.len();
     let shown = top_edges.len();
     if shown < total {
         format!("{mermaid}\n\n({shown}/{total} edges shown, top by connectivity)")
@@ -72,7 +74,7 @@ fn render_dep_graph(file: Option<&str>, depth: usize, project_root: &str) -> Str
 
 fn bfs_reachable_files(
     start: &str,
-    edges: &[graph_index::IndexEdge],
+    edges: &[EdgeInfo],
     max_depth: usize,
 ) -> std::collections::HashSet<String> {
     let mut visited = std::collections::HashSet::new();
@@ -113,8 +115,8 @@ fn bfs_reachable_files(
 }
 
 fn render_call_graph(file: Option<&str>, _depth: usize, project_root: &str) -> String {
-    let index = graph_index::load_or_build(project_root);
-    let call_graph = CallGraph::load_or_build(project_root, &index);
+    let inputs = CallGraphInputs::open(project_root);
+    let call_graph = CallGraph::load_or_build(project_root, &inputs);
     let _ = call_graph.save();
 
     if call_graph.edges.is_empty() {
@@ -172,10 +174,7 @@ fn render_call_graph(file: Option<&str>, _depth: usize, project_root: &str) -> S
     }
 }
 
-fn select_top_edges<'a>(
-    edges: &'a [&'a graph_index::IndexEdge],
-    max_nodes: usize,
-) -> Vec<&'a graph_index::IndexEdge> {
+fn select_top_edges<'a>(edges: &'a [&'a EdgeInfo], max_nodes: usize) -> Vec<&'a EdgeInfo> {
     let mut node_counts: HashMap<&str, usize> = HashMap::new();
     for edge in edges {
         *node_counts.entry(&edge.from).or_insert(0) += 1;

@@ -386,17 +386,22 @@ fn handle_impact(path: Option<&str>, root: &str) -> String {
     let rel_target = graph_index::graph_relative_key(target, root);
     let module_prefixes = file_path_to_module_prefixes(&rel_target, root, gp);
 
-    let import_edges = gp.edges_by_kind("import");
-    let direct: Vec<&str> = import_edges
-        .iter()
-        .filter(|e| edge_matches_file(&e.to, &module_prefixes))
-        .map(|e| e.from.as_str())
-        .collect();
+    // Direct importers come from two complementary lookups, merged + deduped:
+    //   1. `dependents(rel_target)` — the import resolver records edges keyed by
+    //      the target's project-relative *file path*, so this is the primary,
+    //      backend-agnostic match (works for Rust/TS/JS/Python/…).
+    //   2. `edge_matches_file` over module-path prefixes — additionally catches
+    //      edges keyed by a module/symbol path rather than a file (Rust `mod`,
+    //      Kotlin package, barrel re-exports), which the file-path match misses.
+    let mut direct: Vec<String> = gp.dependents(&rel_target);
+    for e in gp.edges_by_kind("import") {
+        if edge_matches_file(&e.to, &module_prefixes) && !direct.contains(&e.from) {
+            direct.push(e.from);
+        }
+    }
+    direct.retain(|d| *d != rel_target);
 
-    let mut all_dependents: Vec<String> = direct
-        .iter()
-        .map(std::string::ToString::to_string)
-        .collect();
+    let mut all_dependents: Vec<String> = direct.clone();
     for d in &direct {
         for dep in gp.dependents(d) {
             if !all_dependents.contains(&dep) && dep != rel_target {
@@ -427,7 +432,7 @@ fn handle_impact(path: Option<&str>, root: &str) -> String {
 
     let indirect: Vec<&String> = all_dependents
         .iter()
-        .filter(|d| !direct.contains(&d.as_str()))
+        .filter(|d| !direct.contains(d))
         .collect();
     if !indirect.is_empty() {
         result.push_str(&format!("\nIndirect ({}):\n", indirect.len()));

@@ -104,8 +104,10 @@ pub(super) fn handle(
 
                     if content.is_none() && !candidate.is_absolute() && !rel.trim().is_empty() {
                         // Premium path healing: try to map stale paths to current indexed files.
-                        let index = crate::core::graph_index::load_or_build(&root);
-                        let requested_key = crate::core::graph_index::graph_match_key(&rel);
+                        let file_paths = crate::core::graph_provider::open_or_build(&root)
+                            .map(|o| o.provider.file_paths())
+                            .unwrap_or_default();
+                        let requested_key = crate::core::index_paths::graph_match_key(&rel);
                         let requested_name = requested_key.rsplit('/').next().unwrap_or("");
 
                         let mut exact: Vec<String> = Vec::new();
@@ -113,12 +115,12 @@ pub(super) fn handle(
                         let mut filename: Vec<String> = Vec::new();
                         let mut seen = std::collections::HashSet::<&str>::new();
 
-                        for p in index.files.keys() {
+                        for p in &file_paths {
                             let p_str = p.as_str();
                             if !seen.insert(p_str) {
                                 continue;
                             }
-                            let p_key = crate::core::graph_index::graph_match_key(p_str);
+                            let p_key = crate::core::index_paths::graph_match_key(p_str);
                             if p_key == requested_key {
                                 exact.push(p_str.to_string());
                             } else if !requested_key.is_empty() && p_key.ends_with(&requested_key) {

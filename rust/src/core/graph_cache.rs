@@ -1,12 +1,12 @@
 //! Resident graph-index cache (Phase 5 of the efficiency epic).
 //!
-//! `try_load_graph_index` used to deserialize the on-disk `ProjectIndex`
-//! (read + zstd-decompress + serde parse) on *every* query that touches the
-//! graph (symbol lookups, related hints, impact). This keeps the deserialized
+//! Materializing a `ProjectIndex` from the property graph (open SQLite + query
+//! files/symbols/edges) on *every* query that touches the graph (symbol
+//! lookups, related hints, impact) is wasteful. This keeps the materialized
 //! index resident in RAM keyed by project root, invalidated by the on-disk
-//! index file's mtime so a background rebuild is picked up immediately (no TTL
-//! wait). Callers that need an owned value get a cheap in-memory clone instead
-//! of a disk round-trip.
+//! `graph.meta.json` fingerprint so a background rebuild is picked up
+//! immediately (no TTL wait). Callers that need an owned value get a cheap
+//! in-memory clone instead of a SQLite round-trip.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -14,13 +14,13 @@ use std::time::{Instant, SystemTime};
 
 /// Max distinct project roots kept resident. A daemon touching many roots/branches/
 /// worktrees would otherwise retain every ProjectIndex (MBs each) forever. LRU-evict
-/// beyond this; an evicted root pays one disk reload (read+zstd+serde) on its next
+/// beyond this; an evicted root pays one materialization (SQLite query) on its next
 /// query — bounded and self-healing.
 const MAX_ROOTS: usize = 8;
 
 use crate::core::graph_index::ProjectIndex;
 
-/// `(mtime, size)` fingerprint of the on-disk index file. Size pairs with mtime
+/// `(mtime, size)` fingerprint of the on-disk graph store. Size pairs with mtime
 /// to catch same-second rebuilds that coarse (1–2 s) filesystem mtime would
 /// otherwise hide — cheap, no file read.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -41,12 +41,17 @@ fn cache() -> &'static Mutex<HashMap<String, Entry>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// `(mtime, size)` of the persisted graph index file (zst preferred), if any.
+/// `(mtime, size)` of the persisted property graph, if any.
+///
+/// Since #696 C4 the property graph is the sole store; every mirror rewrites
+/// `graph.meta.json` (fresh `built_at` + node/edge counts) so its `(mtime, size)`
+/// shifts on each rebuild — a reliable, read-free invalidation signal. The
+/// `graph.db` file is the fallback when no meta has been stamped yet.
 fn index_fingerprint(project_root: &str) -> Fingerprint {
     let Some(dir) = ProjectIndex::index_dir(project_root) else {
         return Fingerprint::default();
     };
-    for name in ["index.json.zst", "index.json"] {
+    for name in ["graph.meta.json", "graph.db"] {
         if let Ok(meta) = std::fs::metadata(dir.join(name)) {
             return Fingerprint {
                 mtime: meta.modified().ok(),

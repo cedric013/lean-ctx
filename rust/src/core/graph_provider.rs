@@ -16,6 +16,38 @@ pub struct SymbolInfo {
     pub is_exported: bool,
 }
 
+/// Normalize a property-graph edge-kind string back to the graph_index spelling
+/// when materializing a [`ProjectIndex`]. The mirror maps graph_index `import` →
+/// `EdgeKind::Imports`, which serializes as the plural `imports`; the legacy
+/// dependency consumers (`graph_index` BFS, the facade's index-backed
+/// `dependencies`/`dependents`, `ctx_graph`) filter on the singular `import`, so
+/// reverse exactly that one rename. All other kinds already share their spelling
+/// across both stores (#696 C1).
+fn index_edge_kind(pg_kind: &str) -> String {
+    match pg_kind {
+        "imports" => "import".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Convert a property-graph symbol [`Node`] into a backend-agnostic
+/// [`SymbolInfo`], recovering the precise source `kind` and export flag from the
+/// node metadata (the `Node` itself only carries a coarse `NodeKind`). Single
+/// source of truth for the three facade methods that surface PG symbols, so a
+/// materialized `ProjectIndex` is lossless (#696 C1).
+fn symbol_info_from_node(n: super::property_graph::Node) -> SymbolInfo {
+    let (meta_kind, meta_exported) =
+        super::property_graph::parse_symbol_metadata(n.metadata.as_deref());
+    SymbolInfo {
+        kind: meta_kind.unwrap_or_else(|| n.kind.as_str().to_string()),
+        is_exported: meta_exported.unwrap_or(true),
+        name: n.name,
+        file: n.file_path,
+        start_line: n.line_start.unwrap_or(0),
+        end_line: n.line_end.unwrap_or(0),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EdgeInfo {
     pub from: String,
@@ -63,16 +95,6 @@ impl GraphProvider {
         match self {
             GraphProvider::PropertyGraph(g) => g.edge_count().ok(),
             GraphProvider::GraphIndex(i) => Some(i.edge_count()),
-        }
-    }
-
-    /// The underlying [`ProjectIndex`] when this provider is index-backed; `None`
-    /// for the property-graph backend. Lets callers compute index-derived
-    /// analyses (e.g. realized per-language coverage) without re-opening it.
-    pub fn as_graph_index(&self) -> Option<&ProjectIndex> {
-        match self {
-            GraphProvider::GraphIndex(i) => Some(i),
-            GraphProvider::PropertyGraph(_) => None,
         }
     }
 
@@ -146,14 +168,7 @@ impl GraphProvider {
                 .find_symbols(name, file_filter, kind_filter)
                 .unwrap_or_default()
                 .into_iter()
-                .map(|n| SymbolInfo {
-                    name: n.name,
-                    file: n.file_path,
-                    kind: n.kind.as_str().to_string(),
-                    start_line: n.line_start.unwrap_or(0),
-                    end_line: n.line_end.unwrap_or(0),
-                    is_exported: true,
-                })
+                .map(symbol_info_from_node)
                 .collect(),
             GraphProvider::GraphIndex(i) => {
                 let name_lower = name.to_lowercase();
@@ -176,6 +191,32 @@ impl GraphProvider {
         }
     }
 
+    /// Every symbol with its file + line span (unfiltered). Backend-agnostic
+    /// equivalent of iterating `ProjectIndex::symbols` — used by the call-graph
+    /// builder to attribute call sites to their enclosing symbol.
+    pub fn all_symbols(&self) -> Vec<SymbolInfo> {
+        match self {
+            GraphProvider::PropertyGraph(g) => g
+                .all_symbols()
+                .unwrap_or_default()
+                .into_iter()
+                .map(symbol_info_from_node)
+                .collect(),
+            GraphProvider::GraphIndex(i) => i
+                .symbols
+                .values()
+                .map(|s| SymbolInfo {
+                    name: s.name.clone(),
+                    file: s.file.clone(),
+                    kind: s.kind.clone(),
+                    start_line: s.start_line,
+                    end_line: s.end_line,
+                    is_exported: s.is_exported,
+                })
+                .collect(),
+        }
+    }
+
     pub fn get_symbol(&self, key: &str) -> Option<SymbolInfo> {
         match self {
             GraphProvider::PropertyGraph(g) => {
@@ -191,14 +232,7 @@ impl GraphProvider {
                 g.get_node_by_symbol(sym_name, file_path)
                     .ok()
                     .flatten()
-                    .map(|n| SymbolInfo {
-                        name: n.name,
-                        file: n.file_path,
-                        kind: n.kind.as_str().to_string(),
-                        start_line: n.line_start.unwrap_or(0),
-                        end_line: n.line_end.unwrap_or(0),
-                        is_exported: true,
-                    })
+                    .map(symbol_info_from_node)
             }
             GraphProvider::GraphIndex(i) => i.get_symbol(key).map(|s| SymbolInfo {
                 name: s.name.clone(),
@@ -213,6 +247,11 @@ impl GraphProvider {
 
     pub fn edges(&self) -> Vec<EdgeInfo> {
         match self {
+            // Normalize the raw property-graph edge-kind vocabulary back to the
+            // graph_index vocabulary every consumer speaks (notably `imports` →
+            // `import`, queried by impact/overview via `edges_by_kind("import")`).
+            // Without this the facade leaks `EdgeKind::as_str()` plurals and PG
+            // vs legacy backends would answer the same query differently (#696).
             GraphProvider::PropertyGraph(g) => g
                 .all_edges_flat()
                 .unwrap_or_default()
@@ -220,7 +259,7 @@ impl GraphProvider {
                 .map(|(from, to, kind, weight)| EdgeInfo {
                     from,
                     to,
-                    kind,
+                    kind: index_edge_kind(&kind),
                     weight,
                 })
                 .collect(),
@@ -242,6 +281,32 @@ impl GraphProvider {
             .into_iter()
             .filter(|e| e.kind == kind)
             .collect()
+    }
+
+    /// Every catalogued file as [`FileInfo`]. Backend-agnostic equivalent of
+    /// iterating `ProjectIndex::files` — used by stats/bootstrap consumers that
+    /// need per-file language + token counts, not just paths.
+    pub fn file_entries(&self) -> Vec<FileInfo> {
+        match self {
+            GraphProvider::PropertyGraph(_) => self
+                .file_paths()
+                .into_iter()
+                .filter_map(|p| self.get_file_entry(&p))
+                .collect(),
+            GraphProvider::GraphIndex(i) => i
+                .files
+                .values()
+                .map(|e| FileInfo {
+                    path: e.path.clone(),
+                    hash: e.hash.clone(),
+                    language: e.language.clone(),
+                    line_count: e.line_count,
+                    token_count: e.token_count,
+                    exports: e.exports.clone(),
+                    summary: e.summary.clone(),
+                })
+                .collect(),
+        }
     }
 
     pub fn get_file_entry(&self, path: &str) -> Option<FileInfo> {
@@ -274,6 +339,70 @@ impl GraphProvider {
             GraphProvider::PropertyGraph(_) => String::new(),
             GraphProvider::GraphIndex(i) => i.last_scan.clone(),
         }
+    }
+
+    /// Reconstruct a full [`ProjectIndex`] from this provider — the inverse of
+    /// the graph_index→PG mirror ([`populate_from_project_index`]). Lets the
+    /// remaining legacy `ProjectIndex` consumers be sourced from the
+    /// PropertyGraph (parity-proven lossless, #682.3) so the redundant JSON
+    /// store can be retired (#696 phase C). For the GraphIndex backend it clones
+    /// the index it already holds.
+    pub fn materialize_project_index(&self, project_root: &str) -> ProjectIndex {
+        if let GraphProvider::GraphIndex(i) = self {
+            return i.clone();
+        }
+        let mut idx = ProjectIndex::new(project_root);
+        // Stamp `last_scan` from the graph's build time (graph.meta.json) so the
+        // TTL staleness check reflects the real build age, not this
+        // materialization moment (#696 C4). Content-based staleness still keys
+        // off the meta file's mtime independently.
+        if let Some(meta) = super::property_graph::load_meta(project_root)
+            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&meta.built_at)
+        {
+            idx.last_scan = dt
+                .with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string();
+        }
+        for f in self.file_entries() {
+            idx.files.insert(
+                f.path.clone(),
+                graph_index::FileEntry {
+                    path: f.path,
+                    hash: f.hash,
+                    language: f.language,
+                    line_count: f.line_count,
+                    token_count: f.token_count,
+                    exports: f.exports,
+                    summary: f.summary,
+                },
+            );
+        }
+        for s in self.all_symbols() {
+            let key = format!("{}::{}", s.file, s.name);
+            idx.symbols.insert(
+                key,
+                graph_index::SymbolEntry {
+                    file: s.file,
+                    name: s.name,
+                    kind: s.kind,
+                    start_line: s.start_line,
+                    end_line: s.end_line,
+                    is_exported: s.is_exported,
+                },
+            );
+        }
+        for e in self.edges() {
+            // `edges()` already normalizes PG kinds to the graph_index
+            // vocabulary, so `e.kind` is ready to store verbatim.
+            idx.edges.push(graph_index::IndexEdge {
+                from: e.from,
+                to: e.to,
+                kind: e.kind,
+                weight: e.weight as f32,
+            });
+        }
+        idx
     }
 
     pub fn index_dir(project_root: &str) -> Option<std::path::PathBuf> {
@@ -603,6 +732,120 @@ mod tests {
         assert_eq!(
             pg_dependents, gi_dependents,
             "Dependents must match between PG and GraphIndex"
+        );
+    }
+
+    /// Round-trip guard for #696 C1: graph_index → PG (mirror) → graph_index
+    /// (materialize) must preserve files (full catalog), symbols (incl. the
+    /// precise `kind` + `is_exported`, which live in node metadata) and import
+    /// edges. Proves the PropertyGraph can be the sole source for the remaining
+    /// legacy `ProjectIndex` consumers — the prerequisite for retiring the JSON
+    /// store.
+    #[test]
+    fn materialize_project_index_round_trips_losslessly() {
+        use super::super::graph_index::{FileEntry, IndexEdge, SymbolEntry};
+        use super::super::property_graph::populate_from_project_index;
+
+        let mut a = ProjectIndex::new("/test");
+        a.files.insert(
+            "src/a.rs".to_string(),
+            FileEntry {
+                path: "src/a.rs".to_string(),
+                hash: "hash-a".to_string(),
+                language: "rs".to_string(),
+                line_count: 42,
+                token_count: 137,
+                exports: vec!["Foo".to_string()],
+                summary: "module a".to_string(),
+            },
+        );
+        a.files.insert(
+            "src/b.rs".to_string(),
+            FileEntry {
+                path: "src/b.rs".to_string(),
+                hash: "hash-b".to_string(),
+                language: "rs".to_string(),
+                line_count: 7,
+                token_count: 19,
+                exports: vec![],
+                summary: String::new(),
+            },
+        );
+        // Two symbols with DIFFERENT kinds and export flags — the fields most at
+        // risk of being flattened by the coarse property-graph `NodeKind`.
+        a.symbols.insert(
+            "src/a.rs::Foo".to_string(),
+            SymbolEntry {
+                file: "src/a.rs".to_string(),
+                name: "Foo".to_string(),
+                kind: "struct".to_string(),
+                start_line: 1,
+                end_line: 9,
+                is_exported: true,
+            },
+        );
+        a.symbols.insert(
+            "src/b.rs::helper".to_string(),
+            SymbolEntry {
+                file: "src/b.rs".to_string(),
+                name: "helper".to_string(),
+                kind: "function".to_string(),
+                start_line: 3,
+                end_line: 6,
+                is_exported: false,
+            },
+        );
+        a.edges.push(IndexEdge {
+            from: "src/b.rs".to_string(),
+            to: "src/a.rs".to_string(),
+            kind: "import".to_string(),
+            weight: 1.0,
+        });
+
+        let pg = CodeGraph::open_in_memory().unwrap();
+        populate_from_project_index(&pg, &a).unwrap();
+        let provider = GraphProvider::PropertyGraph(pg);
+        let b = provider.materialize_project_index("/test");
+
+        // Files: inventory + every catalog field survive.
+        let mut a_files: Vec<&String> = a.files.keys().collect();
+        let mut b_files: Vec<&String> = b.files.keys().collect();
+        a_files.sort();
+        b_files.sort();
+        assert_eq!(a_files, b_files, "file inventory must round-trip");
+        for (path, fa) in &a.files {
+            let fb = b.files.get(path).expect("file present after round trip");
+            assert_eq!(fa.hash, fb.hash, "hash {path}");
+            assert_eq!(fa.language, fb.language, "language {path}");
+            assert_eq!(fa.line_count, fb.line_count, "line_count {path}");
+            assert_eq!(fa.token_count, fb.token_count, "token_count {path}");
+            assert_eq!(fa.exports, fb.exports, "exports {path}");
+            assert_eq!(fa.summary, fb.summary, "summary {path}");
+        }
+
+        // Symbols: keys + spans + the metadata-carried kind/export flag survive.
+        let mut a_syms: Vec<&String> = a.symbols.keys().collect();
+        let mut b_syms: Vec<&String> = b.symbols.keys().collect();
+        a_syms.sort();
+        b_syms.sort();
+        assert_eq!(a_syms, b_syms, "symbol table must round-trip");
+        for (key, sa) in &a.symbols {
+            let sb = b.symbols.get(key).expect("symbol present after round trip");
+            assert_eq!(sa.name, sb.name, "name {key}");
+            assert_eq!(sa.file, sb.file, "file {key}");
+            assert_eq!(sa.kind, sb.kind, "kind {key}");
+            assert_eq!(sa.start_line, sb.start_line, "start_line {key}");
+            assert_eq!(sa.end_line, sb.end_line, "end_line {key}");
+            assert_eq!(sa.is_exported, sb.is_exported, "is_exported {key}");
+        }
+
+        // Structural edges: the import edge survives (PG may enrich, never lose).
+        assert!(
+            b.edges
+                .iter()
+                .any(|e| e.from == "src/b.rs" && e.to == "src/a.rs" && e.kind == "import"),
+            "import edge must round-trip; got {:?}",
+            b.edges
         );
     }
 }

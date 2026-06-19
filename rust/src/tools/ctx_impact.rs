@@ -61,9 +61,13 @@ pub fn handle(
 /// current graph_index and quantify whether PG reproduces everything the
 /// facade exposes (symbols, edges, dependencies) before any backend flip.
 fn handle_parity(root: &str, fmt: OutputFormat) -> String {
-    let index = crate::core::index_orchestrator::try_load_graph_index(root)
-        .filter(|i| !i.files.is_empty())
-        .unwrap_or_else(|| crate::core::graph_index::scan_with_content_cache(root).0);
+    // Compare the *fresh extractor* output (a real graph_index scan, built
+    // in-memory from the file walk + signature extraction) against a
+    // PropertyGraph populated from it — the genuine "mirror is lossless"
+    // invariant. Loading the persisted index would be circular since #696 C4
+    // (it is itself materialized from the PG), yielding a meaningless trivially
+    // lossless result, so always rescan to keep this a real proof.
+    let index = crate::core::graph_index::scan_with_content_cache(root).0;
 
     let report = match crate::core::graph_parity::compare(&index) {
         Ok(r) => r,
@@ -451,10 +455,10 @@ fn format_chain(chain: &DependencyChain, root: &str, fmt: OutputFormat) -> Strin
 }
 
 fn graph_target_key(path: &str, root: &str) -> String {
-    let rel = crate::core::graph_index::graph_relative_key(path, root);
-    let rel_key = crate::core::graph_index::graph_match_key(&rel);
+    let rel = crate::core::index_paths::graph_relative_key(path, root);
+    let rel_key = crate::core::index_paths::graph_match_key(&rel);
     if rel_key.is_empty() {
-        crate::core::graph_index::graph_match_key(path)
+        crate::core::index_paths::graph_match_key(path)
     } else {
         rel_key
     }
@@ -1167,6 +1171,7 @@ fn handle_build(root: &str, fmt: OutputFormat) -> String {
             schema_version: 1,
             engine_version: crate::core::property_graph::GRAPH_ENGINE_VERSION,
             built_with: env!("CARGO_PKG_VERSION").to_string(),
+            project_root: crate::core::graph_index::normalize_project_root(root),
             built_at: chrono::Utc::now().to_rfc3339(),
             git_head: git_out(root_path, &["rev-parse", "--short", "HEAD"]),
             git_dirty: Some(git_dirty(root_path)),
@@ -1313,6 +1318,7 @@ fn handle_update(root: &str, fmt: OutputFormat) -> String {
             schema_version: 1,
             engine_version: crate::core::property_graph::GRAPH_ENGINE_VERSION,
             built_with: env!("CARGO_PKG_VERSION").to_string(),
+            project_root: crate::core::graph_index::normalize_project_root(root),
             built_at: chrono::Utc::now().to_rfc3339(),
             git_head: git_out(root_path, &["rev-parse", "--short", "HEAD"]),
             git_dirty: Some(git_dirty(root_path)),

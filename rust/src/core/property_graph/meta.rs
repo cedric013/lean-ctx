@@ -15,6 +15,11 @@ pub struct PropertyGraphMetaV1 {
     /// lean-ctx version (`CARGO_PKG_VERSION`) that built this graph, recorded
     /// for diagnostics. Empty for graphs written before the stamp existed.
     pub built_with: String,
+    /// Absolute, normalized project root this graph was built for. Recorded so
+    /// the one-way `graphs/<hash>/` directory can be pruned when its project no
+    /// longer exists on disk (#696 C4 — replaces the `project_root` the retired
+    /// JSON index used to carry). Empty for graphs written before this field.
+    pub project_root: String,
     /// RFC3339 timestamp (UTC) of the last successful build.
     pub built_at: String,
     /// Git HEAD (short) at build time, if available.
@@ -37,6 +42,7 @@ impl Default for PropertyGraphMetaV1 {
             schema_version: 1,
             engine_version: 0,
             built_with: String::new(),
+            project_root: String::new(),
             built_at: String::new(),
             git_head: None,
             git_dirty: None,

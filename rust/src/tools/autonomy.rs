@@ -9,7 +9,7 @@ use crate::core::autonomy_drivers::{
 };
 use crate::core::cache::SessionCache;
 use crate::core::config::AutonomyConfig;
-use crate::core::graph_index::ProjectIndex;
+use crate::core::graph_provider::GraphProvider;
 use crate::core::protocol;
 use crate::core::tokens::count_tokens;
 use crate::tools::CrpMode;
@@ -252,17 +252,20 @@ pub fn enrich_after_read(
         _ => return result,
     };
 
-    let index = crate::core::graph_index::load_or_build(&root);
-    if index.files.is_empty() {
+    let Some(open) = crate::core::graph_provider::open_or_build(&root) else {
+        return result;
+    };
+    let provider = &open.provider;
+    if provider.file_count() == 0 {
         return result;
     }
 
     if state.config.auto_related && prof.auto_related_effective() {
-        result.related_hint = build_related_hints(cache, file_path, &index);
+        result.related_hint = build_related_hints(cache, file_path, provider);
     }
 
     if state.config.silent_preload && prof.silent_preload_effective() {
-        silent_preload_imports(cache, file_path, &index, &root);
+        silent_preload_imports(cache, file_path, provider, &root);
     }
 
     if !minimal_overhead && prof.auto_prefetch_effective() {
@@ -316,16 +319,21 @@ pub struct EnrichResult {
 fn build_related_hints(
     cache: &SessionCache,
     file_path: &str,
-    index: &ProjectIndex,
+    provider: &GraphProvider,
 ) -> Option<String> {
-    let related: Vec<_> = index
-        .edges
-        .iter()
-        .filter(|e| e.from == file_path || e.to == file_path)
-        .map(|e| if e.from == file_path { &e.to } else { &e.from })
-        .filter(|path| cache.get(path).is_none())
-        .take(3)
-        .collect();
+    let mut related: Vec<String> = Vec::new();
+    for path in provider
+        .dependencies(file_path)
+        .into_iter()
+        .chain(provider.dependents(file_path))
+    {
+        if related.len() >= 3 {
+            break;
+        }
+        if cache.get(&path).is_none() && !related.contains(&path) {
+            related.push(path);
+        }
+    }
 
     if related.is_empty() {
         return None;
@@ -339,14 +347,12 @@ fn build_related_hints(
 fn silent_preload_imports(
     cache: &mut SessionCache,
     file_path: &str,
-    index: &ProjectIndex,
+    provider: &GraphProvider,
     project_root: &str,
 ) {
-    let imports: Vec<String> = index
-        .edges
-        .iter()
-        .filter(|e| e.from == file_path)
-        .map(|e| e.to.clone())
+    let imports: Vec<String> = provider
+        .dependencies(file_path)
+        .into_iter()
         .take(2)
         .collect();
 

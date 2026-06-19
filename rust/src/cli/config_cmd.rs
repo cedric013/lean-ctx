@@ -994,22 +994,17 @@ pub fn prune_graph_caches() -> PruneResult {
         }
         result.scanned += 1;
 
-        let index_path = dir.join("index.json.zst");
-        let index_json = dir.join("index.json");
-
-        let has_index = index_path.exists() || index_json.exists();
-        if !has_index {
+        // #696 C4: the property graph (graph.db + graph.meta.json) is the sole
+        // store. The meta carries the absolute project root, so an orphaned
+        // `graphs/<hash>/` dir (project deleted) can still be pruned.
+        let meta_file = dir.join("graph.meta.json");
+        let db_file = dir.join("graph.db");
+        if !meta_file.exists() && !db_file.exists() {
             continue;
         }
 
-        let idx_file = if index_path.exists() {
-            &index_path
-        } else {
-            &index_json
-        };
-
-        let root_from_index = try_read_project_root_from_graph(idx_file);
-        if let Some(root) = root_from_index
+        let root_from_meta = try_read_project_root_from_graph(&meta_file);
+        if let Some(root) = root_from_meta
             && !root.is_empty()
             && !std::path::Path::new(&root).exists()
         {
@@ -1026,16 +1021,20 @@ pub fn prune_graph_caches() -> PruneResult {
             continue;
         }
 
-        if let Ok(meta) = std::fs::metadata(idx_file)
+        // Oversized guard: a pathologically large (e.g. corrupt) graph store is
+        // dropped so the next query rebuilds it cleanly — a rebuild cost, not
+        // data loss.
+        if let Ok(meta) = std::fs::metadata(&db_file)
             && meta.len() > 100 * 1024 * 1024
         {
-            result.bytes_freed += meta.len();
-            let _ = std::fs::remove_file(idx_file);
+            let freed = dir_size(&dir);
+            result.bytes_freed += freed;
+            let _ = std::fs::remove_dir_all(&dir);
             result.removed += 1;
             println!(
                 "  Removed oversized graph ({:.1} MB): {}",
-                meta.len() as f64 / 1_048_576.0,
-                idx_file.display()
+                freed as f64 / 1_048_576.0,
+                dir.display()
             );
         }
     }
@@ -1043,14 +1042,10 @@ pub fn prune_graph_caches() -> PruneResult {
     result
 }
 
+/// Read the absolute project root recorded in a `graph.meta.json` file, if
+/// present (#696 C4 — replaces reading it from the retired JSON index).
 fn try_read_project_root_from_graph(path: &std::path::Path) -> Option<String> {
-    let data = if path.extension().and_then(|e| e.to_str()) == Some("zst") {
-        let compressed = std::fs::read(path).ok()?;
-        zstd::decode_all(compressed.as_slice()).ok()?
-    } else {
-        std::fs::read(path).ok()?
-    };
-    let content = String::from_utf8(data).ok()?;
+    let content = std::fs::read_to_string(path).ok()?;
     let val: serde_json::Value = serde_json::from_str(&content).ok()?;
     val.get("project_root")?.as_str().map(String::from)
 }

@@ -350,16 +350,16 @@ pub fn enrich_graph(
 fn consolidate_callgraph(graph: &CodeGraph, project_root: &str) -> anyhow::Result<EnrichmentStats> {
     let mut stats = EnrichmentStats::default();
 
-    let index = crate::core::graph_index::load_or_build(project_root);
-    let call_graph = crate::core::call_graph::CallGraph::load_or_build(project_root, &index);
+    let inputs = crate::core::call_graph::CallGraphInputs::open(project_root);
+    let call_graph = crate::core::call_graph::CallGraph::load_or_build(project_root, &inputs);
 
-    let callee_to_file: std::collections::HashMap<&str, &str> = index
+    // Symbols now come from the PropertyGraph via the facade (#696, resolving
+    // opt1415): the call-graph inputs already carry the full symbol table.
+    let callee_to_file: std::collections::HashMap<&str, &str> = inputs
         .symbols
-        .values()
+        .iter()
         .map(|s| (s.name.as_str(), s.file.as_str()))
         .collect();
-    // TODO(opt1415): Once PropertyGraph stores all symbols, replace
-    // ProjectIndex lookup with: SELECT file_path FROM nodes WHERE kind='symbol' AND name=?
 
     for edge in &call_graph.edges {
         let from_file = &edge.caller_file;

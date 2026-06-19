@@ -7,7 +7,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::deep_queries;
-use super::graph_index::{ProjectIndex, SymbolEntry, normalize_project_root};
+use super::graph_provider::GraphProvider;
+use super::index_paths::normalize_project_root;
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -26,6 +27,101 @@ pub struct CallEdge {
     pub caller_symbol: String,
     pub caller_line: usize,
     pub callee_name: String,
+}
+
+/// Minimal symbol span the call-graph builder needs to attribute a call site to
+/// its enclosing symbol — backend-agnostic, decoupled from any graph store.
+#[derive(Debug, Clone)]
+pub struct SymbolSpan {
+    pub file: String,
+    pub name: String,
+    pub start_line: usize,
+    pub end_line: usize,
+}
+
+/// Everything the call-graph builder reads, sourced from the [`GraphProvider`]
+/// facade (PropertyGraph). Replaces the former direct `ProjectIndex`
+/// dependency (#696): the file inventory, the symbol table (for enclosing-symbol
+/// attribution) and the import/reexport adjacency (for scope-aware callee
+/// resolution). Source content itself is still read fresh from disk per file.
+#[derive(Debug, Clone, Default)]
+pub struct CallGraphInputs {
+    pub project_root: String,
+    pub file_paths: Vec<String>,
+    pub symbols: Vec<SymbolSpan>,
+    /// `(from, to)` pairs for `import`/`reexport` edges only.
+    pub import_edges: Vec<(String, String)>,
+}
+
+impl CallGraphInputs {
+    /// Open the project graph (PropertyGraph, falling back to legacy) and
+    /// materialize call-graph inputs. Returns empty inputs (rooted at
+    /// `project_root`) when no graph is available yet — matching the old
+    /// behaviour of building from an empty index.
+    pub fn open(project_root: &str) -> Self {
+        match crate::core::graph_provider::open_or_build(project_root) {
+            Some(open) => Self::from_provider(project_root, &open.provider),
+            None => Self {
+                project_root: normalize_project_root(project_root),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Bridge for callers that already hold a freshly-scanned [`ProjectIndex`]
+    /// (repomap, dashboard coordinator) and want call-graph inputs consistent
+    /// with *that* scan rather than a possibly-lagging PropertyGraph. Removed in
+    /// #696 Phase D once those callers move to the facade/extractor wholesale.
+    pub fn from_project_index(index: &super::graph_index::ProjectIndex) -> Self {
+        let symbols = index
+            .symbols
+            .values()
+            .map(|s| SymbolSpan {
+                file: s.file.clone(),
+                name: s.name.clone(),
+                start_line: s.start_line,
+                end_line: s.end_line,
+            })
+            .collect();
+        let import_edges = index
+            .edges
+            .iter()
+            .filter(|e| e.kind == "import" || e.kind == "reexport")
+            .map(|e| (e.from.clone(), e.to.clone()))
+            .collect();
+        Self {
+            project_root: index.project_root.clone(),
+            file_paths: index.files.keys().cloned().collect(),
+            symbols,
+            import_edges,
+        }
+    }
+
+    /// Materialize the builder inputs from a [`GraphProvider`] facade.
+    pub fn from_provider(project_root: &str, provider: &GraphProvider) -> Self {
+        let symbols = provider
+            .all_symbols()
+            .into_iter()
+            .map(|s| SymbolSpan {
+                file: s.file,
+                name: s.name,
+                start_line: s.start_line,
+                end_line: s.end_line,
+            })
+            .collect();
+        let import_edges = provider
+            .edges()
+            .into_iter()
+            .filter(|e| e.kind == "import" || e.kind == "reexport")
+            .map(|e| (e.from, e.to))
+            .collect();
+        Self {
+            project_root: normalize_project_root(project_root),
+            file_paths: provider.file_paths(),
+            symbols,
+            import_edges,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -121,12 +217,12 @@ impl CallGraph {
     // -----------------------------------------------------------------------
 
     pub fn build_parallel(
-        index: &ProjectIndex,
+        inputs: &CallGraphInputs,
         progress: Option<(&AtomicUsize, &AtomicUsize)>,
     ) -> Self {
-        let project_root = &index.project_root;
-        let symbols_by_file = group_symbols_by_file_owned(index);
-        let file_keys: Vec<String> = index.files.keys().cloned().collect();
+        let project_root = &inputs.project_root;
+        let symbols_by_file = group_symbols_by_file_owned(inputs);
+        let file_keys: Vec<String> = inputs.file_paths.clone();
 
         let results: Vec<(String, String, Vec<CallEdge>)> = file_keys
             .par_iter()
@@ -184,13 +280,13 @@ impl CallGraph {
     // -----------------------------------------------------------------------
 
     pub fn build_incremental_parallel(
-        index: &ProjectIndex,
+        inputs: &CallGraphInputs,
         previous: &CallGraph,
         progress: Option<(&AtomicUsize, &AtomicUsize)>,
     ) -> Self {
-        let project_root = &index.project_root;
-        let symbols_by_file = group_symbols_by_file_owned(index);
-        let file_keys: Vec<String> = index.files.keys().cloned().collect();
+        let project_root = &inputs.project_root;
+        let symbols_by_file = group_symbols_by_file_owned(inputs);
+        let file_keys: Vec<String> = inputs.file_paths.clone();
 
         let prev_edges_by_file = group_edges_by_file(&previous.edges);
 
@@ -261,7 +357,7 @@ impl CallGraph {
     /// Returns the cached graph immediately, or `None` + starts a background build.
     pub fn get_or_start_build(
         project_root: &str,
-        index: Arc<ProjectIndex>,
+        inputs: Arc<CallGraphInputs>,
     ) -> Result<Arc<CallGraph>, BuildProgress> {
         let state = global_state();
         let mut guard = state
@@ -290,14 +386,14 @@ impl CallGraph {
 
         // Try serving from disk cache first
         if let Some(cached) = Self::load(project_root)
-            && !cache_looks_stale(&cached, &index)
+            && !cache_looks_stale(&cached, &inputs)
         {
             let arc = Arc::new(cached);
             *guard = BuildState::Ready(Arc::clone(&arc));
             return Ok(arc);
         }
 
-        let files_total = index.files.len();
+        let files_total = inputs.file_paths.len();
         let files_done = Arc::new(AtomicUsize::new(0));
         let edges_found = Arc::new(AtomicUsize::new(0));
 
@@ -316,9 +412,9 @@ impl CallGraph {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let previous = CallGraph::load(&root);
                 if let Some(prev) = &previous {
-                    CallGraph::build_incremental_parallel(&index, prev, Some((&fd, &ef)))
+                    CallGraph::build_incremental_parallel(&inputs, prev, Some((&fd, &ef)))
                 } else {
-                    CallGraph::build_parallel(&index, Some((&fd, &ef)))
+                    CallGraph::build_parallel(&inputs, Some((&fd, &ef)))
                 }
             }));
 
@@ -405,12 +501,12 @@ impl CallGraph {
     // Legacy synchronous API (kept for non-dashboard callers)
     // -----------------------------------------------------------------------
 
-    pub fn build(index: &ProjectIndex) -> Self {
-        Self::build_parallel(index, None)
+    pub fn build(inputs: &CallGraphInputs) -> Self {
+        Self::build_parallel(inputs, None)
     }
 
-    pub fn build_incremental(index: &ProjectIndex, previous: &CallGraph) -> Self {
-        Self::build_incremental_parallel(index, previous, None)
+    pub fn build_incremental(inputs: &CallGraphInputs, previous: &CallGraph) -> Self {
+        Self::build_incremental_parallel(inputs, previous, None)
     }
 
     pub fn callers_of(&self, symbol: &str) -> Vec<&CallEdge> {
@@ -663,11 +759,11 @@ impl CallGraph {
         None
     }
 
-    pub fn load_or_build(project_root: &str, index: &ProjectIndex) -> Self {
+    pub fn load_or_build(project_root: &str, inputs: &CallGraphInputs) -> Self {
         if let Some(previous) = Self::load(project_root) {
-            Self::build_incremental(index, &previous)
+            Self::build_incremental(inputs, &previous)
         } else {
-            Self::build(index)
+            Self::build(inputs)
         }
     }
 }
@@ -676,14 +772,14 @@ impl CallGraph {
 // Cache staleness check (fast — mtime-based, no content reads)
 // ---------------------------------------------------------------------------
 
-fn cache_looks_stale(cached: &CallGraph, index: &ProjectIndex) -> bool {
-    if cached.file_hashes.len() != index.files.len() {
+fn cache_looks_stale(cached: &CallGraph, inputs: &CallGraphInputs) -> bool {
+    if cached.file_hashes.len() != inputs.file_paths.len() {
         return true;
     }
     let cached_files: std::collections::HashSet<&str> =
         cached.file_hashes.keys().map(String::as_str).collect();
     let index_files: std::collections::HashSet<&str> =
-        index.files.keys().map(String::as_str).collect();
+        inputs.file_paths.iter().map(String::as_str).collect();
     cached_files != index_files
 }
 
@@ -692,7 +788,7 @@ fn cache_looks_stale(cached: &CallGraph, index: &ProjectIndex) -> bool {
 // ---------------------------------------------------------------------------
 
 fn call_graph_dir(project_root: &str) -> Option<std::path::PathBuf> {
-    ProjectIndex::index_dir(project_root)
+    GraphProvider::index_dir(project_root)
 }
 
 fn group_edges_by_file(edges: &[CallEdge]) -> HashMap<&str, Vec<CallEdge>> {
@@ -706,9 +802,9 @@ fn group_edges_by_file(edges: &[CallEdge]) -> HashMap<&str, Vec<CallEdge>> {
 }
 
 /// Owned version for safe `Send` across rayon threads.
-fn group_symbols_by_file_owned(index: &ProjectIndex) -> HashMap<String, Vec<SymbolEntry>> {
-    let mut map: HashMap<String, Vec<SymbolEntry>> = HashMap::new();
-    for sym in index.symbols.values() {
+fn group_symbols_by_file_owned(inputs: &CallGraphInputs) -> HashMap<String, Vec<SymbolSpan>> {
+    let mut map: HashMap<String, Vec<SymbolSpan>> = HashMap::new();
+    for sym in &inputs.symbols {
         map.entry(sym.file.clone()).or_default().push(sym.clone());
     }
     for syms in map.values_mut() {
@@ -717,11 +813,11 @@ fn group_symbols_by_file_owned(index: &ProjectIndex) -> HashMap<String, Vec<Symb
     map
 }
 
-fn find_enclosing_symbol_owned(file_symbols: Option<&Vec<SymbolEntry>>, line: usize) -> String {
+fn find_enclosing_symbol_owned(file_symbols: Option<&Vec<SymbolSpan>>, line: usize) -> String {
     let Some(syms) = file_symbols else {
         return "<module>".to_string();
     };
-    let mut best: Option<&SymbolEntry> = None;
+    let mut best: Option<&SymbolSpan> = None;
     for sym in syms {
         if line >= sym.start_line && line <= sym.end_line {
             match best {
@@ -766,13 +862,11 @@ fn simple_hash(content: &str) -> String {
 /// Build a `file -> imported files` adjacency from the project index's import
 /// and reexport edges, used to scope callee resolution to a caller's imports.
 pub fn build_import_adjacency(
-    index: &ProjectIndex,
+    inputs: &CallGraphInputs,
 ) -> HashMap<String, std::collections::HashSet<String>> {
     let mut adj: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
-    for e in &index.edges {
-        if e.kind == "import" || e.kind == "reexport" {
-            adj.entry(e.from.clone()).or_default().insert(e.to.clone());
-        }
+    for (from, to) in &inputs.import_edges {
+        adj.entry(from.clone()).or_default().insert(to.clone());
     }
     adj
 }
@@ -813,12 +907,12 @@ fn rank_callee_def_file(
 pub fn resolve_callee_file(
     callee_name: &str,
     caller_file: &str,
-    index: &ProjectIndex,
+    inputs: &CallGraphInputs,
     imports: &HashMap<String, std::collections::HashSet<String>>,
 ) -> Option<String> {
-    let mut def_files: Vec<&str> = index
+    let mut def_files: Vec<&str> = inputs
         .symbols
-        .values()
+        .iter()
         .filter(|s| s.name == callee_name)
         .map(|s| s.file.as_str())
         .collect();
@@ -831,17 +925,20 @@ pub fn resolve_callee_file(
 /// unambiguous across all call sites*. Names that resolve to different files
 /// from different scopes are omitted, so callers never attribute a call to the
 /// wrong file. Keyed by callee name to match the call graph's name-keyed nodes.
-pub fn resolve_callee_files(index: &ProjectIndex, edges: &[CallEdge]) -> HashMap<String, String> {
+pub fn resolve_callee_files(
+    inputs: &CallGraphInputs,
+    edges: &[CallEdge],
+) -> HashMap<String, String> {
     use std::collections::HashSet;
 
-    let imports = build_import_adjacency(index);
+    let imports = build_import_adjacency(inputs);
     let callee_names: HashSet<&str> = edges.iter().map(|e| e.callee_name.as_str()).collect();
     if callee_names.is_empty() {
         return HashMap::new();
     }
 
     let mut name_files: HashMap<&str, Vec<&str>> = HashMap::new();
-    for sym in index.symbols.values() {
+    for sym in &inputs.symbols {
         if callee_names.contains(sym.name.as_str()) {
             name_files
                 .entry(sym.name.as_str())
@@ -934,14 +1031,12 @@ mod tests {
         assert_eq!(callees.len(), 2);
     }
 
-    fn sym(name: &str, file: &str) -> SymbolEntry {
-        SymbolEntry {
+    fn sym(name: &str, file: &str) -> SymbolSpan {
+        SymbolSpan {
             file: file.to_string(),
             name: name.to_string(),
-            kind: "function".to_string(),
             start_line: 1,
             end_line: 2,
-            is_exported: true,
         }
     }
 
@@ -949,32 +1044,32 @@ mod tests {
     fn resolve_callee_file_scopes_same_named_methods() {
         // `Run` is defined in two files (two classes). Each caller must resolve
         // to its *own* file, never to both.
-        let mut index = ProjectIndex::new("/p");
-        index.symbols.insert("a::Run".into(), sym("Run", "a.rs"));
-        index.symbols.insert("b::Run".into(), sym("Run", "b.rs"));
+        let inputs = CallGraphInputs {
+            project_root: "/p".to_string(),
+            symbols: vec![sym("Run", "a.rs"), sym("Run", "b.rs")],
+            ..Default::default()
+        };
         let imports: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
 
         assert_eq!(
-            resolve_callee_file("Run", "a.rs", &index, &imports).as_deref(),
+            resolve_callee_file("Run", "a.rs", &inputs, &imports).as_deref(),
             Some("a.rs")
         );
         assert_eq!(
-            resolve_callee_file("Run", "b.rs", &index, &imports).as_deref(),
+            resolve_callee_file("Run", "b.rs", &inputs, &imports).as_deref(),
             Some("b.rs")
         );
         // A caller that neither defines nor imports `Run` stays ambiguous.
-        assert_eq!(resolve_callee_file("Run", "c.rs", &index, &imports), None);
+        assert_eq!(resolve_callee_file("Run", "c.rs", &inputs, &imports), None);
     }
 
     #[test]
     fn resolve_callee_file_prefers_imported_definition() {
-        let mut index = ProjectIndex::new("/p");
-        index
-            .symbols
-            .insert("lib::Run".into(), sym("Run", "lib.rs"));
-        index
-            .symbols
-            .insert("other::Run".into(), sym("Run", "other.rs"));
+        let inputs = CallGraphInputs {
+            project_root: "/p".to_string(),
+            symbols: vec![sym("Run", "lib.rs"), sym("Run", "other.rs")],
+            ..Default::default()
+        };
         let mut imports: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
         imports.insert(
             "main.rs".to_string(),
@@ -983,19 +1078,22 @@ mod tests {
         // `main.rs` imports only `lib.rs`, so `Run` resolves there despite the
         // global ambiguity with `other.rs`.
         assert_eq!(
-            resolve_callee_file("Run", "main.rs", &index, &imports).as_deref(),
+            resolve_callee_file("Run", "main.rs", &inputs, &imports).as_deref(),
             Some("lib.rs")
         );
     }
 
     #[test]
     fn resolve_callee_files_drops_cross_scope_ambiguity() {
-        let mut index = ProjectIndex::new("/p");
-        index.symbols.insert("a::Run".into(), sym("Run", "a.rs"));
-        index.symbols.insert("b::Run".into(), sym("Run", "b.rs"));
-        index
-            .symbols
-            .insert("u::Unique".into(), sym("Unique", "u.rs"));
+        let inputs = CallGraphInputs {
+            project_root: "/p".to_string(),
+            symbols: vec![
+                sym("Run", "a.rs"),
+                sym("Run", "b.rs"),
+                sym("Unique", "u.rs"),
+            ],
+            ..Default::default()
+        };
         let edges = vec![
             CallEdge {
                 caller_file: "a.rs".into(),
@@ -1016,7 +1114,7 @@ mod tests {
                 callee_name: "Unique".into(),
             },
         ];
-        let map = resolve_callee_files(&index, &edges);
+        let map = resolve_callee_files(&inputs, &edges);
         // `Run` resolves to a.rs from a and b.rs from b → two files → omitted.
         assert!(!map.contains_key("Run"));
         // `Unique` is globally unique → resolved.
@@ -1025,21 +1123,17 @@ mod tests {
 
     #[test]
     fn find_enclosing_picks_narrowest() {
-        let outer = SymbolEntry {
+        let outer = SymbolSpan {
             file: "a.rs".to_string(),
             name: "Outer".to_string(),
-            kind: "struct".to_string(),
             start_line: 1,
             end_line: 50,
-            is_exported: true,
         };
-        let inner = SymbolEntry {
+        let inner = SymbolSpan {
             file: "a.rs".to_string(),
             name: "inner_fn".to_string(),
-            kind: "fn".to_string(),
             start_line: 10,
             end_line: 20,
-            is_exported: false,
         };
         let syms = vec![outer, inner];
         let result = find_enclosing_symbol_owned(Some(&syms), 15);
@@ -1048,13 +1142,11 @@ mod tests {
 
     #[test]
     fn find_enclosing_returns_module_when_no_match() {
-        let sym = SymbolEntry {
+        let sym = SymbolSpan {
             file: "a.rs".to_string(),
             name: "foo".to_string(),
-            kind: "fn".to_string(),
             start_line: 10,
             end_line: 20,
-            is_exported: false,
         };
         let syms = vec![sym];
         let result = find_enclosing_symbol_owned(Some(&syms), 5);

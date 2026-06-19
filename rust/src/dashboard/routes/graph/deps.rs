@@ -170,12 +170,9 @@ fn graph() -> (&'static str, &'static str, String) {
         None
     };
 
-    // Realized per-language coverage when the provider is index-backed (real
-    // symbol/import counts); fall back to capability-only flags otherwise.
-    let language_matrix = match gp.as_graph_index() {
-        Some(index) => super::capability_matrix::realized_from_index(index, None),
-        None => crate::core::language_capabilities::language_capability_matrix(gp.file_paths()),
-    };
+    // Realized per-language coverage (real symbol/import counts) — works for
+    // either backend now that the facade surfaces symbols + edges (#696 phase C).
+    let language_matrix = super::capability_matrix::realized_from_provider(gp, None);
 
     let val = serde_json::json!({
         "project_root": super::project_basename(&root),
@@ -310,28 +307,7 @@ fn routes(_query_str: &str) -> (&'static str, &'static str, String) {
     let gp = &open.provider;
     let file_paths = gp.file_paths();
 
-    let files_map: std::collections::HashMap<String, crate::core::graph_index::FileEntry> =
-        file_paths
-            .iter()
-            .filter_map(|p| {
-                gp.get_file_entry(p).map(|f| {
-                    (
-                        p.clone(),
-                        crate::core::graph_index::FileEntry {
-                            path: f.path,
-                            hash: f.hash,
-                            language: f.language,
-                            line_count: f.line_count,
-                            token_count: f.token_count,
-                            exports: f.exports,
-                            summary: f.summary,
-                        },
-                    )
-                })
-            })
-            .collect();
-
-    let routes = crate::core::route_extractor::extract_routes_from_project(&root, &files_map);
+    let routes = crate::core::route_extractor::extract_routes_from_project(&root, &file_paths);
     let route_candidate_count = file_paths
         .iter()
         .filter(|p| {

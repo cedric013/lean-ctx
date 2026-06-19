@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::core::call_graph::CallGraph;
+use crate::core::call_graph::{CallGraph, CallGraphInputs};
 use crate::core::graph_index::{self, ProjectIndex, SymbolEntry};
 
 /// A symbol definition with its file context.
@@ -36,7 +36,8 @@ impl RepoGraph {
     /// then merges their edges into a unified file-level graph.
     pub fn build(project_root: &str) -> Self {
         let (index, content_cache) = graph_index::scan_with_content_cache(project_root);
-        let call_graph = CallGraph::load_or_build(project_root, &index);
+        let cg_inputs = CallGraphInputs::from_project_index(&index);
+        let call_graph = CallGraph::load_or_build(project_root, &cg_inputs);
 
         Self::from_index_and_calls(&index, &call_graph, &content_cache)
     }
