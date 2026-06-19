@@ -17,3 +17,15 @@ date_of_birth = '(?i)\b(dob|date[ _-]?of[ _-]?birth)\b[ :=#]*\d{1,4}[-/.]\d{1,2}
 national_id = '\b\d{3}-\d{2}-\d{4}\b'
 iban = '\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b'
 payment_card = '\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{1,7}\b'
+
+[filters]
+# CC6.7 / C1.1 (GL #675): personal & financial identifiers are redacted from
+# tool output; prompt-injection in retrieved content is flagged for review.
+pii = "redact"
+injection = "warn"
+
+[egress]
+# CC6.6 boundary protection (GL #676): agent writes/actions carrying detected
+# secrets or PII are blocked before they execute; rate is bounded.
+block_secrets = true
+max_writes_per_min = 240

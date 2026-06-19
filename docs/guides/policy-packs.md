@@ -29,11 +29,18 @@ Commit `.lean-ctx/policy.toml`. From now on, governance changes are diffs.
 |---|---|
 | `baseline` | Any team — secret redaction (private keys, AWS, credentials, bearer tokens), 90-day audit expectation |
 | `strict-redaction` | Teams handling customer data — adds JWT, GitHub/GitLab/Slack tokens, OpenAI/Anthropic/Stripe keys, DB connection strings; compact `map` reads |
+| `open-source` | Public repos — permissive, but secrets stay covered |
 | `finance-eu` | EU financial services — adds IBAN, payment cards, EU VAT, SWIFT/BIC; denies web fetches; 1-year audit expectation |
 | `healthcare` | HIPAA-aligned — adds SSN, MRN, member ids, DOB, NPI; denies web fetches; 6-year audit expectation |
-| `open-source` | Public repos — permissive, but secrets stay covered |
+| `soc2-context` | SOC 2 TSC alignment (CC6.1 access, CC6.6 boundary, C1.1 confidentiality) |
+| `iso42001-aligned` | ISO/IEC 42001 Annex A (A.7.4 data filtering, A.9.2/A.9.4 use control) |
+| `eu-ai-act-deployer` | EU AI Act deployer (Art. 10(5) data, 14(4)(e) cap, 26(6) retention) |
 
-Inspect any of them resolved (`lean-ctx policy show healthcare`) or raw
+The five regulated packs (`finance-eu`, `healthcare`, `soc2-context`,
+`iso42001-aligned`, `eu-ai-act-deployer`) ship live `[filters]` (PII redaction +
+prompt-injection handling) and `[egress]` DLP (`block_secrets`, write-rate cap)
+on top of their redaction — the runtime filter matches the posture they
+advertise. Inspect any pack resolved (`lean-ctx policy show healthcare`) or raw
 (`--toml`).
 
 ## Writing your own pack
@@ -144,6 +151,27 @@ Guarantees that keep this safe:
   edits.
 
 What `policy show` resolves is exactly what gets enforced.
+
+### Test enforcement without the server
+
+`lean-ctx policy enforce` runs the **exact same guards** as the live agent
+pipeline — role/policy gating, egress DLP, output redaction and filters — for a
+single tool call, **without starting the MCP server**, and records the same
+audit entries. Use it to prove what a pack does before you roll it out, or to
+produce enforcement evidence in CI:
+
+```bash
+lean-ctx policy enforce ctx_url_read --project-root .            # → DENIED (deny_tools)
+lean-ctx policy enforce ctx_shell    --project-root . \
+    --json '{"command":"echo TOKEN=sk-live-…"}'                  # → BLOCKED (egress)
+lean-ctx policy enforce ctx_search   --project-root . \
+    --json '{"pattern":"IBAN","path":"."}' --as-json            # → ALLOWED, redactions + filters
+```
+
+It honors the active policy (project pack ⊕ trusted org floor), so the verdict
+is exactly what an agent on this endpoint would hit. `scripts/demo-great-filter.sh`
+chains these into the full CISO flow: sign → install → enforce → signed
+compliance report → offline verify.
 
 ## Input filters (#675)
 

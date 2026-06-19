@@ -21,6 +21,7 @@ pub(crate) fn cmd_policy(args: &[String]) {
         Some("show") => cmd_show(&args[1..]),
         Some("validate") => cmd_validate(&args[1..]),
         Some("coverage") => cmd_coverage(&args[1..]),
+        Some("enforce") => crate::cli::policy_enforce_cmd::cmd_enforce(&args[1..]),
         Some("org") => crate::cli::policy_org_cmd::cmd_policy_org(&args[1..]),
         Some("-h" | "--help") | None => print_help(),
         Some(other) => {
@@ -46,6 +47,10 @@ USAGE:\n\
                                        Framework coverage report: mapping\n\
                                        matrix + live pack verification\n\
                                        (defaults to the reference pack)\n\
+  lean-ctx policy enforce <tool> --project-root <path> [--json '<args>']\n\
+                                       Evaluate a tool call against the active\n\
+                                       policy (deny/egress/redact/filter) and\n\
+                                       record audit evidence — no server needed\n\
   lean-ctx policy org <key|sign|verify|trust|install|status>\n\
                                        Central, signed org policy distribution\n\
                                        (un-bypassable floor); see `policy org -h`\n\n\
@@ -198,6 +203,35 @@ fn print_resolved(r: &ResolvedPolicy) {
         println!("  redaction            {} patterns:", r.redaction.len());
         for (name, pattern) in &r.redaction {
             println!("    {name:<22} {pattern}");
+        }
+    }
+    if r.filters.is_empty() {
+        println!("  filters              (none)");
+    } else {
+        let f = &r.filters;
+        println!(
+            "  filters              pii={} classification={} injection={}",
+            f.pii.as_deref().unwrap_or("off"),
+            f.classification.as_deref().unwrap_or("off"),
+            f.injection.as_deref().unwrap_or("off"),
+        );
+        if !f.blocked_labels.is_empty() {
+            println!("    blocked_labels       {}", f.blocked_labels.join(", "));
+        }
+    }
+    if r.egress.is_empty() {
+        println!("  egress               (none)");
+    } else {
+        let e = &r.egress;
+        println!(
+            "  egress               block_secrets={}  forbidden_patterns={}  max_writes_per_min={}",
+            e.block_secrets.unwrap_or(false),
+            e.forbidden_patterns.len(),
+            e.max_writes_per_min
+                .map_or("(unlimited)".to_string(), |v| v.to_string()),
+        );
+        for p in &e.forbidden_patterns {
+            println!("    forbidden            {p}");
         }
     }
 }

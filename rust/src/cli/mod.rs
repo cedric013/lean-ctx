@@ -24,6 +24,7 @@ mod overview_cmd;
 mod pack_cmd;
 pub mod plugin_cmd;
 mod policy_cmd;
+mod policy_enforce_cmd;
 mod policy_org_cmd;
 mod profile_cmd;
 mod proof_cmd;

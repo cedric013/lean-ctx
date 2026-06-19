@@ -20,3 +20,16 @@ member_id = '(?i)\b(member|subscriber|policy)[ _-]?(no|number|id)\b[ :=#]*[A-Z0-
 date_of_birth = '(?i)\b(dob|date[ _-]?of[ _-]?birth)\b[ :=#]*\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}'
 # US National Provider Identifier as a labeled field.
 npi = '(?i)\bnpi\b[ :=#]*\d{10}\b'
+
+[filters]
+# Inbound DLP (GL #675): PHI is redacted from tool output before it reaches the
+# model (HIPAA minimum-necessary); prompt-injection in retrieved content is an
+# attack on integrity and is refused.
+pii = "redact"
+injection = "block"
+
+[egress]
+# Output DLP (GL #676): block agent writes/actions that carry detected secrets
+# or PHI, and bound the write/action rate.
+block_secrets = true
+max_writes_per_min = 120

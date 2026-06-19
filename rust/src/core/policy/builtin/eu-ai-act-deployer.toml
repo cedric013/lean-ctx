@@ -21,3 +21,16 @@ national_id = '\b\d{3}-\d{2}-\d{4}\b'
 # Financial identifiers tied to natural persons.
 iban = '\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b'
 payment_card = '\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{1,7}\b'
+
+[filters]
+# Art. 10(5) (GL #675): special-category/regulated identifiers are filtered out
+# of inbound context. Art. 15(5): prompt-injection in retrieved content is an
+# integrity attack and is refused.
+pii = "redact"
+injection = "block"
+
+[egress]
+# Art. 15(5) cybersecurity (GL #676): secrets/PII must not leave via agent
+# writes/actions; the write/action rate is bounded.
+block_secrets = true
+max_writes_per_min = 120

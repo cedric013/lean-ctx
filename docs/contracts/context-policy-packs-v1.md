@@ -5,12 +5,14 @@ pins a team's context-governance expectations in reviewable TOML: default read
 mode, allowed/denied tools, redaction patterns, an audit-retention expectation
 and a context-budget cap. The reduced, solo-viable slice of #377/#403/#404.
 
-v1 ships the **format, validation, resolution, five curated built-ins and the
+v1 ships the **format, validation, resolution, eight curated built-ins and the
 `lean-ctx policy` CLI**; **runtime enforcement is wired as of #673**,
 **inbound content filters (PII / classification / prompt-injection) as of
 #675** and **egress/output DLP on agent writes & actions as of #676** (see
-*Enforcement*). Pack signing and central org distribution remain explicit
-follow-ups (see *Out of scope*).
+*Enforcement*). **Central, signed org-policy distribution ships as of #674**
+([org-policy-v1.md](org-policy-v1.md)); `lean-ctx policy enforce` evaluates a
+single tool call against the active policy server-free (same guards, same
+audit) — the basis of the CISO compliance flow.
 
 ## Format
 
@@ -72,13 +74,21 @@ an error (`AllowDenyOverlap`) — a pack cannot both allow and deny a tool.
 |---|---|---|
 | `baseline` | — | secret redaction (PEM keys, AWS, credential assignments, bearer tokens), `auto` mode, 90-day audit expectation |
 | `strict-redaction` | baseline | + JWT/GitHub/GitLab/Slack/OpenAI/Anthropic/Stripe/DB-URL coverage, `map` mode, 180 days |
-| `finance-eu` | strict-redaction | + IBAN/payment-card/EU-VAT/SWIFT, denies `ctx_url_read`, 12 k token cap, 365 days |
-| `healthcare` | strict-redaction | + SSN/MRN/member-id/DOB/NPI (HIPAA-aligned), denies `ctx_url_read`, 12 k cap, 2 190 days |
 | `open-source` | baseline | permissive, keeps secret coverage, 30 days |
+| `finance-eu` | strict-redaction | + IBAN/payment-card/EU-VAT/SWIFT, denies `ctx_url_read`, 12 k cap, 365 days, **PII filter + egress DLP** |
+| `healthcare` | strict-redaction | + SSN/MRN/member-id/DOB/NPI (HIPAA-aligned), denies `ctx_url_read`, 12 k cap, 2 190 days, **PII filter + egress DLP** |
+| `soc2-context` | strict-redaction | SOC 2 TSC slice (CC6.1/CC6.6/C1.1), denies `ctx_url_read`, 16 k cap, 365 days, **PII filter + egress DLP** |
+| `iso42001-aligned` | strict-redaction | ISO/IEC 42001 Annex A (A.7.4/A.9.2/A.9.4), denies `ctx_url_read`, 16 k cap, 365 days, **PII filter + egress DLP** |
+| `eu-ai-act-deployer` | strict-redaction | EU AI Act deployer (Art. 10(5)/14(4)(e)/26(6)), denies `ctx_url_read`, 12 k cap, 365 days, **PII filter + egress DLP** |
 
 Built-ins are embedded at compile time (`include_str!`) and covered by tests:
 every pack must parse, validate, resolve and retain the baseline secret
-coverage; the regulated packs must deny web fetches and pin budgets.
+coverage; the regulated packs must deny web fetches and pin budgets. The five
+regulated packs additionally ship `[filters]` (PII redaction, prompt-injection
+handling) and `[egress]` (`block_secrets`, write/action rate limit) so their
+runtime DLP matches the compliance posture they advertise — additive to the
+static framework-coverage claims (the coverage assessment reads redaction /
+tool / budget / retention only, so these sections never inflate a claim).
 
 ## CLI
 
@@ -90,6 +100,11 @@ lean-ctx policy show ./custom.toml    # any pack file
 lean-ctx policy validate [path]       # lint (default .lean-ctx/policy.toml); exit 1 on INVALID
 lean-ctx policy coverage [name] [--benchmark cgb] [--json]
                                       # automated PARTIAL CGB assessment; exit 1 on any FAIL
+lean-ctx policy enforce <tool> --project-root <p> [--json '<args>'] [--as-json]
+                                      # evaluate one tool call against the active
+                                      # policy (deny/egress/redact/filter) + audit
+lean-ctx policy org <key|sign|verify|trust|install|status>
+                                      # central signed org policy (see org-policy-v1.md)
 ```
 
 `coverage` statically checks a resolved pack against the Context Governance
@@ -129,6 +144,13 @@ is gated and behavior is identical to a pack-less install.
 | `max_context_tokens` | `core::budget_tracker::check` | tightens (never loosens) the per-session token ceiling; the agent hits the normal budget warning/exhausted path |
 | `[filters]` (#675) | `call_tool_guarded`, same outbound chokepoint as `[redaction]` | each detector (`pii`/`classification`/`injection`) can `warn`/`redact`/`block`; a `block` replaces the content with a `[POLICY BLOCKED]` refusal so it never reaches the model |
 | `[egress]` (#676) | `call_tool_guarded`, **before dispatch** of `ctx_edit` writes and `ctx_shell`/`ctx_execute` actions | a forbidden pattern, a detected secret/PII (`block_secrets`) or an exceeded `max_writes_per_min` returns a `[POLICY BLOCKED]` result and is audited (`ToolDenied`) — the write never touches disk, the command never runs |
+
+The same guard sequence runs **without the MCP server** via `lean-ctx policy
+enforce <tool> --project-root <p> [--json '<args>']`: role + policy gating,
+egress DLP and output redaction/filters against the active policy (project pack
+⊕ trusted org floor), recording the identical audit entries. It is the headless
+path for policy testing and for producing enforcement evidence in CI — and what
+`scripts/demo-great-filter.sh` drives end to end.
 
 ### Inbound content filters (#675)
 
@@ -185,15 +207,18 @@ Invariants:
 
 ## Out of scope (follow-ups)
 
-1. **Central signed org policy distribution + admin** (#674) — v1 enforcement
-   (#673) reads a *project-local* pack only; org-wide rollout and tamper-evident
-   signing land next.
-2. **Signing + trust pipeline**, registry/marketplace distribution (#403/MKT).
-3. **Conformance scoring against live telemetry** — `policy coverage` (v1) is
-   static pack analysis. Runtime evidence is now *emitted* (denials audited as
-   `ToolDenied`, redaction counts logged); aggregating it into a score is the
-   follow-up.
-4. Multi-file packs, non-built-in parents (`extends` against local files).
+1. **Registry/marketplace distribution** of packs (#403/MKT) — beyond the
+   built-in registry and `extends`.
+2. **Conformance scoring against live telemetry** — `policy coverage` (v1) is
+   static pack analysis. Runtime evidence is *emitted* (denials audited as
+   `ToolDenied`, redaction/filter counts as `SecretDetected`) and aggregated by
+   `lean-ctx compliance report`; a continuous score is the follow-up.
+3. Multi-file packs, non-built-in parents (`extends` against local files).
+
+**Shipped since the initial v1 slice:** central signed org-policy distribution
+(#674, [org-policy-v1.md](org-policy-v1.md)), inbound filters (#675), egress DLP
+(#676), the server-free `policy enforce` evaluator and the signed CISO
+compliance report ([compliance-report-v1.md](compliance-report-v1.md)).
 
 ## Module map
 
@@ -208,4 +233,6 @@ Invariants:
 | Built-in registry | `rust/src/core/policy/builtin.rs` |
 | Built-in pack sources | `rust/src/core/policy/builtin/*.toml` |
 | CLI | `rust/src/cli/policy_cmd.rs` (dispatch key `policy`) |
+| Server-free enforcement evaluator (`policy enforce`) | `rust/src/cli/policy_enforce_cmd.rs` |
+| Central signed org policy (sign/trust/install/floor merge) | `rust/src/core/policy/org/`, `rust/src/cli/policy_org_cmd.rs` ([org-policy-v1.md](org-policy-v1.md)) |
 | Authoring guide | `docs/guides/policy-packs.md` |

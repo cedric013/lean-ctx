@@ -17,7 +17,9 @@
       "type": "object",
       "additionalProperties": { "type": "string", "minLength": 1 },
       "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" }
-    }
+    },
+    "filters": { "$ref": "#/$defs/filterRules" },
+    "egress": { "$ref": "#/$defs/egressRules" }
   },
   "additionalProperties": false,
   "$defs": {
@@ -35,6 +37,34 @@
         },
         "max_context_tokens": { "type": "integer", "minimum": 1 },
         "audit_retention_days": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "filterAction": { "type": "string", "enum": ["off", "warn", "redact", "block"] },
+    "filterRules": {
+      "type": "object",
+      "description": "Inbound content filters (GL #675): PII, data-classification and prompt-injection detectors run on tool output before it reaches the agent.",
+      "properties": {
+        "pii": { "$ref": "#/$defs/filterAction" },
+        "classification": { "$ref": "#/$defs/filterAction" },
+        "injection": { "$ref": "#/$defs/filterAction" },
+        "blocked_labels": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "egressRules": {
+      "type": "object",
+      "description": "Egress/output DLP (GL #676): gates agent writes & actions before they execute.",
+      "properties": {
+        "forbidden_patterns": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "block_secrets": { "type": "boolean" },
+        "max_writes_per_min": { "type": "integer", "minimum": 1 }
       },
       "additionalProperties": false
     }
