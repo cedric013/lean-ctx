@@ -133,9 +133,12 @@ fn bench_tool_descriptions_token_count() {
     // Raised 3000 -> 4000 for the #496 tool-profile reorg: a material jump that
     // enriches per-tool profile metadata on the full opt-in surface. The default
     // surface stays small (see `bench_lazy_default_vs_full_overhead`).
+    // Raised 4000 -> 5200 for #505 (@omar-mohamed-khallaf): the power tier now
+    // carries the same first-line-dense, workflow-first treatment as the other
+    // tiers (actual ~4872), with headroom for a tool or two per #290.
     assert!(
-        total < 4000,
-        "Total tool description tokens should be <4000, got {total}"
+        total < 5200,
+        "Total tool description tokens should be <5200, got {total}"
     );
 
     for (name, desc) in &descriptions {
