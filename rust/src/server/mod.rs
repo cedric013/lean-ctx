@@ -45,19 +45,19 @@ pub fn build_claude_code_instructions_for_test() -> String {
     crate::instructions::claude_code_instructions()
 }
 
+/// Deterministic STATIC Claude Code instructions (cold first-contact, no dynamic
+/// session/knowledge/gotcha payload) for the char-budget benchmark.
+pub fn build_claude_code_static_instructions_for_test() -> String {
+    crate::instructions::claude_code_static_instructions_for_test()
+}
+
 fn is_home_or_agent_dir(dir: &std::path::Path) -> bool {
     if let Some(home) = dirs::home_dir()
         && dir == home
     {
         return true;
     }
-    let dir_str = dir.to_string_lossy();
-    dir_str.ends_with("/.claude")
-        || dir_str.ends_with("/.codebuddy")
-        || dir_str.ends_with("/.codex")
-        || dir_str.contains("/.claude/")
-        || dir_str.contains("/.codebuddy/")
-        || dir_str.contains("/.codex/")
+    crate::core::pathutil::is_agent_config_dir(dir)
 }
 
 fn git_toplevel_from(dir: &std::path::Path) -> Option<String> {
