@@ -20,7 +20,9 @@ use std::path::{Path, PathBuf};
 use model_registry::{EmbeddingModel, ModelConfig, VocabSource};
 use tokenizer::{TokenizedInput, WordPieceTokenizer};
 
-#[cfg(feature = "embeddings")]
+// `embed_batch` parallelises tokenization in every build (rayon is a core, non
+// optional dependency), so this import must not be feature-gated — otherwise the
+// no-embeddings build (e.g. FreeBSD, #586) loses `par_iter`.
 use rayon::prelude::*;
 #[cfg(feature = "embeddings")]
 use std::sync::Mutex;
@@ -523,6 +525,11 @@ impl EmbeddingEngine {
 
     #[cfg(not(feature = "embeddings"))]
     fn run_inference(&self, _input: &TokenizedInput) -> anyhow::Result<Vec<f32>> {
+        anyhow::bail!("Embeddings feature not enabled")
+    }
+
+    #[cfg(not(feature = "embeddings"))]
+    fn run_inference_batch(&self, _inputs: &[TokenizedInput]) -> anyhow::Result<Vec<Vec<f32>>> {
         anyhow::bail!("Embeddings feature not enabled")
     }
 }

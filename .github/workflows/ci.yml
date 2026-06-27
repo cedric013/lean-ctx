@@ -140,6 +140,29 @@ jobs:
         working-directory: rust
         run: cargo clippy --all-features -- -D warnings
 
+  # Guards the no-ORT build (#586). The `embeddings`/`neural` features pull the
+  # `ort` crate, whose `load-dynamic` dylib resolver has no fallback arm for
+  # non-tier-1 targets (FreeBSD, etc.), so community ports build with those
+  # features off. This job catches any code that references `ort`/embeddings
+  # without a feature gate. Dead code in the reduced build is expected, so
+  # warnings are not denied here (override the workflow-wide -Dwarnings).
+  build-minimal:
+    name: Build (no embeddings / no ORT)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: rust -> target
+      - name: Check build without ORT-backed features
+        working-directory: rust
+        run: cargo check --no-default-features --features "tree-sitter,http-server,team-server,secure-update,jemalloc"
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
@@ -533,6 +556,7 @@ jobs:
     needs:
       - test
       - clippy
+      - build-minimal
       - fmt
       - cookbook
       - rust-sdk
