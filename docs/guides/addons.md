@@ -88,6 +88,36 @@ scripts. Installing an addon enables the MCP gateway (`gateway.enabled = true`);
 its tools become reachable via `ctx_tools` (find/call) — restart your MCP client
 to pick them up.
 
+### Install on add — ephemeral runners
+
+`add` only writes the `[[gateway.servers]]` entry; nothing is fetched at install
+time. When the `[mcp]` command is an ephemeral runner — `npx` (Node) or `uvx`
+(uv/Python) — the package is downloaded and run **lazily on the first tool
+call**, then cached. For those tools *adding is installing* (no bootstrap),
+provided the runner is on your `PATH`. Every installable entry pins an exact
+version; an unpinned runner is a warn-level finding the registry validator
+rejects, so upstream can't change under you silently.
+
+| Tool | Add = install? | Wiring / bootstrap | Secrets |
+|---|---|---|---|
+| `repomix` | **yes** | `npx -y repomix@1.15.0 --mcp` | — |
+| `serena` | **yes** | `uvx --from serena-agent==1.5.3 serena start-mcp-server` | — |
+| `sequential-thinking` | **yes** | `npx -y @modelcontextprotocol/server-sequential-thinking@…` | — |
+| `everything` | **yes** | `npx -y @modelcontextprotocol/server-everything@…` | — |
+| `headroom` | listed | `uv tool install "headroom-ai[all]"` → `headroom mcp serve` | — |
+| `graphify` | listed | `uv tool install "graphifyy[mcp]"` + a built `graph.json` | — |
+| `cognee` | listed | clone + `uv sync`, run its MCP server | — |
+| `letta` | listed | `npm i -g` + a running Letta server | — |
+| `mem0` | listed | official MCP server (hosted) | `MEM0_API_KEY` |
+| `claude-context` | listed | `npx @zilliz/claude-context-mcp` | `OPENAI_API_KEY` + Milvus |
+| `rtk` | listed | shell-output hook; MCP via the `rtk-mcp` bridge | — |
+| `lmd` | listed | Markdown directive layer — no MCP endpoint | — |
+
+*Listed* tools need a one-time manual bootstrap today; a future `[install]`
+manifest block (idempotent, with an uninstall path) will let `addon add` run it
+for you — see the
+[bootstrap-engine design](../dev/addon-bootstrap-engine.md).
+
 ## Build your own addon
 
 An addon is just an MCP server plus a manifest. Four steps:

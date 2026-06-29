@@ -11,6 +11,7 @@
         "homepage": "https://github.com/dasTholo/lean-ctx/tree/feat-lmd-v1",
         "license": "Apache-2.0",
         "categories": ["plans", "workflow"],
+        "integration": "none",
         "keywords": ["markdown", "plans", "macros", "directives", "phase-isolation", "subagents"],
         "min_lean_ctx": "3.8.0"
       }
@@ -24,6 +25,7 @@
         "homepage": "https://github.com/chopratejas/headroom",
         "license": "Apache-2.0",
         "categories": ["compression"],
+        "integration": "compression",
         "keywords": ["compression", "tokens", "rag", "reversible", "ccr", "competitor", "mcp"],
         "min_lean_ctx": "3.8.0"
       }
@@ -36,6 +38,7 @@
         "author": "rtk-ai",
         "homepage": "https://github.com/rtk-ai/rtk",
         "categories": ["compression"],
+        "integration": "compression",
         "keywords": ["compression", "shell", "cli", "tokens", "competitor", "mcp"],
         "min_lean_ctx": "3.8.0"
       }
@@ -49,6 +52,7 @@
         "homepage": "https://graphifylabs.ai/",
         "license": "MIT",
         "categories": ["code-intelligence", "memory"],
+        "integration": "code-graph",
         "keywords": ["knowledge-graph", "code", "graphrag", "ast", "memory", "competitor", "mcp"],
         "min_lean_ctx": "3.8.0"
       }
@@ -62,8 +66,14 @@
         "homepage": "https://repomix.com",
         "license": "MIT",
         "categories": ["code-intelligence"],
+        "integration": "codebase-pack",
         "keywords": ["codebase", "packing", "context", "repo", "competitor", "mcp"],
         "min_lean_ctx": "3.8.0"
+      },
+      "mcp": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "repomix@1.15.0", "--mcp"]
       }
     },
     {
@@ -75,8 +85,14 @@
         "homepage": "https://github.com/oraios/serena",
         "license": "MIT",
         "categories": ["code-intelligence"],
+        "integration": "code-symbols",
         "keywords": ["lsp", "symbols", "refactor", "navigation", "semantic", "competitor", "mcp"],
         "min_lean_ctx": "3.8.0"
+      },
+      "mcp": {
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["--from", "serena-agent==1.5.3", "serena", "start-mcp-server", "--context", "ide"]
       }
     },
     {
@@ -88,6 +104,7 @@
         "homepage": "https://github.com/zilliztech/claude-context",
         "license": "MIT",
         "categories": ["code-intelligence"],
+        "integration": "none",
         "keywords": ["semantic-search", "codebase", "embeddings", "retrieval", "competitor", "mcp"],
         "min_lean_ctx": "3.8.0"
       }
@@ -101,6 +118,7 @@
         "homepage": "https://github.com/mem0ai/mem0",
         "license": "Apache-2.0",
         "categories": ["memory"],
+        "integration": "memory",
         "keywords": ["memory", "personalization", "recall", "vector", "competitor", "mcp"],
         "min_lean_ctx": "3.8.0"
       }
@@ -114,6 +132,7 @@
         "homepage": "https://github.com/topoteretes/cognee",
         "license": "Apache-2.0",
         "categories": ["memory"],
+        "integration": "memory",
         "keywords": ["memory", "knowledge-graph", "graphrag", "recall", "competitor", "mcp"],
         "min_lean_ctx": "3.8.0"
       }
@@ -127,6 +146,7 @@
         "homepage": "https://github.com/letta-ai/letta",
         "license": "Apache-2.0",
         "categories": ["memory"],
+        "integration": "memory",
         "keywords": ["memory", "agent-runtime", "stateful", "memgpt", "competitor", "mcp"],
         "min_lean_ctx": "3.8.0"
       }
@@ -140,6 +160,7 @@
         "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
         "license": "MIT",
         "categories": ["reasoning", "workflow"],
+        "integration": "none",
         "keywords": ["thinking", "reasoning", "planning", "chain-of-thought"],
         "min_lean_ctx": "3.8.0"
       },
@@ -158,6 +179,7 @@
         "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/everything",
         "license": "MIT",
         "categories": ["testing"],
+        "integration": "none",
         "keywords": ["test", "reference", "diagnostics", "gateway"],
         "min_lean_ctx": "3.8.0"
       },
