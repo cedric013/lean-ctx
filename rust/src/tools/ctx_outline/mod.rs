@@ -90,6 +90,10 @@ fn outline_file(path: &str, opts: &OutlineOpts) -> (String, usize) {
             outline = format!("{legend}\n{outline}");
         }
     }
+    // Located symbols are addressable as stable handles (#607): one self-
+    // describing hint, not a per-line handle that would just repeat name+span.
+    outline.push('\n');
+    outline.push_str(crate::core::handle::USAGE_HINT);
 
     let sent = count_tokens(&outline);
     let savings = crate::core::protocol::format_savings(full_tokens, sent);

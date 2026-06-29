@@ -21,3 +21,13 @@ if git diff --cached --name-only | grep -qE '^rust/src/(tools|tool_defs|core/con
         exit 1
     fi
 fi
+
+# The committed testbench recording must match the fixtures + assembly/judge framing —
+# the CI Documentation job runs the same check (#611).
+if git diff --cached --name-only | grep -qE '^rust/(eval/testbench/|src/core/eval_ab/)'; then
+    if ! cargo run --quiet --example gen_testbench_recording --features dev-tools -- --check 2>/dev/null; then
+        echo "pre-commit: testbench recording out of date. Run: cd rust && cargo run --example gen_testbench_recording --features dev-tools"
+        exit 1
+    fi
+fi
+

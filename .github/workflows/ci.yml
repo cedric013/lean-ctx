@@ -524,6 +524,33 @@ jobs:
           name: eval-ab-report
           path: rust/ab-report.json
           if-no-files-found: ignore
+      # Off-vs-on answer-quality testbench across pinned repos (#611). The committed
+      # local-fixture subset replays with a recorded model → byte-stable, no secrets,
+      # and BLOCKS on any per-repo regression. Refresh with:
+      #   lean-ctx eval testbench --lock eval/testbench/testbench.lock.json --record eval/testbench/recording.json
+      - name: Run deterministic testbench gate (off vs on)
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN=./target/debug/lean-ctx
+          LOCK=eval/testbench/testbench.lock.json
+          REC=eval/testbench/recording.json
+          if [ -f "$REC" ]; then
+            echo "Replaying committed testbench subset (deterministic, no secrets)…"
+            "$BIN" eval testbench --lock "$LOCK" --replay "$REC" --out testbench-out --gate
+          else
+            echo "::notice::Testbench gate skipped — commit rust/eval/testbench/recording.json."
+          fi
+      - name: Upload testbench FINDINGS
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: testbench-findings
+          path: |
+            rust/testbench-out/FINDINGS.md
+            rust/testbench-out/regressions.json
+          if-no-files-found: ignore
 
   doc:
     name: Documentation
@@ -544,6 +571,9 @@ jobs:
       - name: Check generated reference docs are current
         working-directory: rust
         run: cargo run --example gen_docs --features dev-tools -- --check
+      - name: Check committed testbench recording is current
+        working-directory: rust
+        run: cargo run --example gen_testbench_recording --features dev-tools -- --check
 
   # Single aggregating gate. Point branch protection at THIS one job ("CI Green")
   # instead of every matrix leg — it stays correct when jobs are added/removed and
@@ -589,3 +619,4 @@ jobs:
           PY
 
   # Security audit runs in security-check.yml workflow
+

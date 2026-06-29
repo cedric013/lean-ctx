@@ -7,15 +7,17 @@ const INSTRUCTION_CAP_TOKENS: usize = 800;
 
 /// Token budget for the static instruction skeleton (no session/knowledge
 /// state).  Asserted in CI so instruction creep cannot silently tax every
-/// session. Raised (520→540 default, 600→640 TDD) as a deliberate, reviewed
-/// bump for the sharpened ctx_* redirects (#1030): the skeleton stays far under
-/// the 800-token runtime cap (`INSTRUCTION_CAP_TOKENS`), so the stronger nudge
-/// ships in full without truncating anything live — trimming it back would only
-/// weaken adoption.
+/// session. Measured at compression `Off` (the test pins `LEAN_CTX_COMPRESSION=off`)
+/// so the budget is deterministic across dev machines, not just clean CI (#498).
+/// Raised in reviewed steps: 520→540 / 600→640 for the sharpened ctx_* redirects
+/// (#1030), then 540→590 / 640→680 for the v3 agent-loop + navigation-paradox
+/// one-liner now carried in the COMPACT profile (#609). Both stay far under the
+/// 800-token runtime cap (`INSTRUCTION_CAP_TOKENS`), so the guidance ships in
+/// full without truncating anything live.
 #[cfg(test)]
-const STATIC_INSTRUCTION_BUDGET_TOKENS: usize = 540;
+const STATIC_INSTRUCTION_BUDGET_TOKENS: usize = 590;
 #[cfg(test)]
-const STATIC_INSTRUCTION_BUDGET_TDD_TOKENS: usize = 640;
+const STATIC_INSTRUCTION_BUDGET_TDD_TOKENS: usize = 680;
 /// Windows carries a one-line SHELL hint inside the skeleton.
 #[cfg(all(test, windows))]
 const STATIC_INSTRUCTION_SHELL_HINT_TOKENS: usize = 25;
@@ -474,6 +476,9 @@ mod tests {
     #[test]
     fn static_skeleton_stays_within_budget() {
         let _iso = crate::core::data_dir::isolated_data_dir();
+        // Pin compression Off so the measured skeleton — and thus this budget —
+        // is deterministic regardless of the dev's local compression_level (#498).
+        crate::test_env::set_var("LEAN_CTX_COMPRESSION", "off");
         for (mode, base_budget) in [
             (CrpMode::Off, STATIC_INSTRUCTION_BUDGET_TOKENS),
             (CrpMode::Compact, STATIC_INSTRUCTION_BUDGET_TOKENS),
@@ -487,5 +492,6 @@ mod tests {
                 "static instructions for {mode:?} = {tokens} tok, budget {budget}\n---\n{out}\n---"
             );
         }
+        crate::test_env::remove_var("LEAN_CTX_COMPRESSION");
     }
 }

@@ -53,7 +53,7 @@ proves it never changed the answer.
 | **Determinism** | Pure function, no drift (#498) | Per (model version, setting) |
 | Prompt-cache preserving | **Cache-aware pruning + `cache_preservation_ratio`** (#732) | Assistant passthrough |
 | **Code intelligence** | | |
-| Tree-sitter AST | 18–21 languages | — |
+| Tree-sitter AST | 18–26 languages | — |
 | Call graph / impact / repo-map | Yes | — |
 | Semantic search | Hybrid BM25 + vector + graph | — |
 | **Infrastructure** | | |
@@ -177,3 +177,4 @@ Numbers attributed to TTC are as reported on their site/docs (June 2026) and not
 independently verified.*
 
 [The Token Company →](https://thetokencompany.com/) · [lean-ctx docs →](https://leanctx.com/docs)
+

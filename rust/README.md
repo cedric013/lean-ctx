@@ -1,6 +1,6 @@
 # lean-ctx
 
-**Context Engineering for AI Agents with CCP + TDD. Shell Hook + MCP Server. 81 MCP tools, 10 read modes, 95+ shell patterns, cross-session memory (CCP), LITM-aware positioning, tree-sitter AST for 18 languages. Single Rust binary.**
+**Context Engineering for AI Agents with CCP + TDD. Shell Hook + MCP Server. 81 MCP tools, 10 read modes, 95+ shell patterns, cross-session memory (CCP), LITM-aware positioning, tree-sitter AST for 26 languages. Single Rust binary.**
 
 [![CI](https://github.com/yvgude/lean-ctx/actions/workflows/ci.yml/badge.svg)](https://github.com/yvgude/lean-ctx/actions/workflows/ci.yml)
 [![Security Check](https://github.com/yvgude/lean-ctx/actions/workflows/security-check.yml/badge.svg)](https://github.com/yvgude/lean-ctx/actions/workflows/security-check.yml)
@@ -726,7 +726,7 @@ Opens `http://localhost:3333` with:
 | **CLI compression** | ~50 commands | **95+ patterns** (git, npm, cargo, docker, gh, kubectl, pip, ruff, eslint, prettier, tsc, go, terraform, make, maven, gradle, dotnet, flutter, dart, poetry, uv, playwright, rubocop, bundle, vitest, aws, psql, mysql, prisma, helm, bun, deno, swift, zig, cmake, ansible, composer, mix, bazel, systemd, curl, wget, JSON, logs...) |
 | **File reading** | `rtk read` (signatures mode) | **Modes: full (cached), map, signatures, diff, aggressive, entropy, lines:N-M** |
 | **File caching** | ✗ | ✓ MD5 session cache (re-reads = ~13 tokens) |
-| **Signature engine** | Line-by-line regex | **tree-sitter AST (18 languages)** |
+| **Signature engine** | Line-by-line regex | **tree-sitter AST (26 languages)** |
 | **Dependency maps** | ✗ | ✓ import/export extraction (18 languages via tree-sitter) |
 | **Context checkpoints** | ✗ | ✓ `ctx_compress` for long conversations |
 | **Token counting** | Estimated | tiktoken-exact (o200k_base) |
@@ -752,7 +752,7 @@ Opens `http://localhost:3333` with:
 
 Since v1.5.0, lean-ctx uses [tree-sitter](https://tree-sitter.github.io/tree-sitter/) for AST-based signature extraction (enabled by default). This replaces the previous regex-based extractor with accurate parsing of multi-line signatures, arrow functions, and nested definitions.
 
-**18 languages supported**: TypeScript, JavaScript, Rust, Python, Go, Java, C, C++, Ruby, C#, Kotlin, Swift, PHP, Bash, Dart, Scala, Elixir, Zig
+**26 languages supported**: TypeScript, JavaScript, Rust, Python, Go, Java, C, C++, Ruby, C#, Kotlin, Swift, PHP, Bash, Dart, Scala, Elixir, Zig, GDScript, Lua, Luau, OCaml, Haskell, Julia, Solidity, Nix — plus signature extraction from embedded Vue/Svelte `<script>` blocks.
 
 | Capability | Regex (old) | tree-sitter (new) |
 |---|---|---|
@@ -802,3 +802,5 @@ lean-ctx is a **privacy-first** tool — no tracking, no analytics, no PII colle
 ## License
 
 Apache-2.0 — see [LICENSE](../LICENSE) for details.
+
+

@@ -232,6 +232,41 @@ void cleanup(struct Config* cfg) {
     }
 
     #[test]
+    fn test_cpp_signatures() {
+        // Regression: a bad `namespace_definition` node name used to make the
+        // whole C++ query fail to compile, dropping every `.cpp` file to the
+        // regex fallback. `extract_signatures_ts` is the tree-sitter path, so a
+        // non-empty result here proves the query compiles and matches.
+        let src = r"
+namespace net {
+
+class Socket {
+public:
+    int connect(const char* host, int port);
+};
+
+struct Packet {
+    int len;
+};
+
+enum Mode { Sync, Async };
+
+int send_all(Socket& s, const Packet& p) {
+    return 0;
+}
+
+}
+";
+        let sigs = extract_signatures_ts(src, "cpp").unwrap();
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"net"), "namespace, got {names:?}");
+        assert!(names.contains(&"Socket"), "class, got {names:?}");
+        assert!(names.contains(&"Packet"), "struct, got {names:?}");
+        assert!(names.contains(&"Mode"), "enum, got {names:?}");
+        assert!(names.contains(&"send_all"), "function, got {names:?}");
+    }
+
+    #[test]
     fn test_ruby_signatures() {
         let src = r"
 module Authentication
@@ -777,5 +812,226 @@ end
         let helper = sigs.iter().find(|s| s.name == "helper").unwrap();
         assert!(!helper.is_exported);
         assert_eq!(helper.return_type, "number", "Luau return type captured");
+    }
+
+    /// Every extension the signature engine advertises must resolve to a
+    /// grammar *and* a query that compiles into a usable cache entry. This is
+    /// the coverage guard for the language count claimed in tool descriptions
+    /// and docs: if a new grammar/query is wired up incorrectly (bad node name,
+    /// missing arm), the ext drops out of the cache and this test fails.
+    #[test]
+    fn every_supported_ext_has_a_compiling_query() {
+        use tree_sitter::Query;
+        // One representative extension per distinct language (canonical alias).
+        let langs: &[&str] = &[
+            "rs", "ts", "js", "py", "go", "java", "c", "cpp", "rb", "cs", "kt", "swift", "php",
+            "sh", "dart", "scala", "ex", "zig", "gd", "lua", "luau", "ml", "mli", "hs", "jl",
+            "sol", "nix",
+        ];
+        let mut failures = Vec::new();
+        for ext in langs {
+            match (
+                super::queries::get_language(ext),
+                super::queries::get_query(ext),
+            ) {
+                (Some(lang), Some(src)) => {
+                    if let Err(e) = Query::new(&lang, src) {
+                        failures.push(format!(".{ext}: {e:?}"));
+                    }
+                }
+                _ => failures.push(format!(".{ext}: no language/query mapping")),
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "signature queries failed to compile:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn test_ocaml_signatures() {
+        let src = r#"
+let add x y = x + y
+
+let pi = 3.14
+
+type color = Red | Green | Blue
+
+module Auth = struct
+  let token = "secret"
+end
+
+module type Service = sig
+  val run : unit -> unit
+end
+
+external identity : 'a -> 'a = "%identity"
+"#;
+        let sigs = extract_signatures_ts(src, "ml").unwrap();
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"add"), "got {names:?}");
+        assert!(names.contains(&"color"), "got {names:?}");
+        assert!(names.contains(&"Auth"), "got {names:?}");
+        assert!(names.contains(&"Service"), "got {names:?}");
+        assert!(names.contains(&"identity"), "got {names:?}");
+
+        let auth = sigs.iter().find(|s| s.name == "Auth").unwrap();
+        assert_eq!(auth.kind, "module");
+        let color = sigs.iter().find(|s| s.name == "color").unwrap();
+        assert_eq!(color.kind, "type");
+    }
+
+    #[test]
+    fn test_ocaml_interface_signatures() {
+        let src = r"
+val connect : string -> int -> unit
+
+type connection
+
+module Pool : sig
+  val acquire : unit -> connection
+end
+";
+        let sigs = extract_signatures_ts(src, "mli").unwrap();
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"connect"), "got {names:?}");
+        assert!(names.contains(&"connection"), "got {names:?}");
+        assert!(names.contains(&"Pool"), "got {names:?}");
+    }
+
+    #[test]
+    fn test_haskell_signatures() {
+        let src = r#"
+module Demo where
+
+add :: Int -> Int -> Int
+add x y = x + y
+
+main :: IO ()
+main = putStrLn "hello"
+
+data Color = Red | Green | Blue
+
+newtype Wrapper = Wrapper Int
+
+type Name = String
+
+class Greet a where
+  greet :: a -> String
+"#;
+        let sigs = extract_signatures_ts(src, "hs").unwrap();
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"add"), "got {names:?}");
+        assert!(names.contains(&"main"), "got {names:?}");
+        assert!(names.contains(&"Color"), "got {names:?}");
+        assert!(names.contains(&"Wrapper"), "got {names:?}");
+        assert!(names.contains(&"Name"), "got {names:?}");
+        assert!(names.contains(&"Greet"), "got {names:?}");
+    }
+
+    #[test]
+    fn test_julia_signatures() {
+        let src = r"
+function add(x, y)
+    x + y
+end
+
+square(x) = x * x
+
+struct Point
+    x::Int
+    y::Int
+end
+
+abstract type Shape end
+
+module Geometry
+end
+
+macro sayhello(name)
+    return :(println($name))
+end
+";
+        let sigs = extract_signatures_ts(src, "jl").unwrap();
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"add"), "got {names:?}");
+        assert!(names.contains(&"square"), "got {names:?}");
+        assert!(names.contains(&"Point"), "got {names:?}");
+        assert!(names.contains(&"Shape"), "got {names:?}");
+        assert!(names.contains(&"Geometry"), "got {names:?}");
+
+        let point = sigs.iter().find(|s| s.name == "Point").unwrap();
+        assert_eq!(point.kind, "struct");
+    }
+
+    #[test]
+    fn test_solidity_signatures() {
+        let src = r"
+contract Token {
+    event Transfer(address indexed to, uint value);
+
+    struct Account {
+        uint balance;
+    }
+
+    enum Status { Active, Frozen }
+
+    modifier onlyOwner() {
+        _;
+    }
+
+    function transfer(address to, uint amount) public returns (bool) {
+        return true;
+    }
+}
+
+interface IERC20 {
+    function totalSupply() external view returns (uint);
+}
+
+library SafeMath {
+    function add(uint a, uint b) internal pure returns (uint) {
+        return a + b;
+    }
+}
+";
+        let sigs = extract_signatures_ts(src, "sol").unwrap();
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Token"), "got {names:?}");
+        assert!(names.contains(&"transfer"), "got {names:?}");
+        assert!(names.contains(&"onlyOwner"), "got {names:?}");
+        assert!(names.contains(&"Transfer"), "got {names:?}");
+        assert!(names.contains(&"Account"), "got {names:?}");
+        assert!(names.contains(&"Status"), "got {names:?}");
+        assert!(names.contains(&"IERC20"), "got {names:?}");
+        assert!(names.contains(&"SafeMath"), "got {names:?}");
+
+        let token = sigs.iter().find(|s| s.name == "Token").unwrap();
+        assert_eq!(token.kind, "class");
+    }
+
+    #[test]
+    fn test_nix_signatures() {
+        let src = r"
+{
+  mkService = name: port: {
+    inherit name port;
+  };
+
+  greet = who: ''Hello ${who}'';
+
+  plainValue = 42;
+}
+";
+        let sigs = extract_signatures_ts(src, "nix").unwrap();
+        let names: Vec<&str> = sigs.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"mkService"), "got {names:?}");
+        assert!(names.contains(&"greet"), "got {names:?}");
+        // `plainValue` is a non-function binding → not a navigable symbol.
+        assert!(
+            !names.contains(&"plainValue"),
+            "non-function binding must be skipped; got {names:?}"
+        );
     }
 }

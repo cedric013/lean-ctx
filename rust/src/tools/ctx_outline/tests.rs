@@ -96,6 +96,17 @@ fn file_outline_includes_line_spans() {
 }
 
 #[test]
+fn file_outline_emits_handle_hint() {
+    // Located symbols are addressable as stable handles (#607): the outline
+    // carries one self-describing usage hint.
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "a.rs", "pub fn alpha() {}\n");
+    let path = tmp.path().join("a.rs");
+    let (out, _) = run(path.to_str().unwrap(), &OutlineOpts::default());
+    assert!(out.contains("handle=\"path#name@Lstart\""), "{out}");
+}
+
+#[test]
 fn rust_impl_has_impl_kind_not_class() {
     let tmp = tempfile::tempdir().unwrap();
     write(

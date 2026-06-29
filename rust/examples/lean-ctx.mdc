@@ -21,7 +21,7 @@ Always use lean-ctx MCP tools. Never use the standard equivalents.
 
 - `full` — default, cached read (use for files you will edit)
 - `map` — dependency graph + exports + API signatures (use for context-only files)
-- `signatures` — API surface only (tree-sitter AST for 14 languages)
+- `signatures` — API surface only (tree-sitter AST for 26 languages)
 - `diff` — changed lines only (use after edits)
 - `aggressive` — syntax stripped
 - `entropy` — Shannon + Jaccard filtering
@@ -97,3 +97,5 @@ Every token costs money. This applies to input, output, AND thinking tokens.
 - Grep/search/explore → `model: "fast"`
 - Simple edits (rename, add field, fix typo) → `model: "fast"`
 - Multi-file refactors, architecture → default model
+
+

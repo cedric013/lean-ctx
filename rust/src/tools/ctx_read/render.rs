@@ -294,6 +294,8 @@ pub(crate) fn process_mode_tuned(
                 output.push_str(&format!(
                     "\n  ↳ expand a symbol: ctx_read(\"{file_path}\", mode=\"lines:N-M\") using the spans above"
                 ));
+                // Located symbols are addressable as stable handles (#607).
+                output.push_str(&format!("\n  {}", crate::core::handle::USAGE_HINT));
             }
             let sent = count_tokens(&output);
             (
@@ -398,6 +400,14 @@ pub(crate) fn process_mode_tuned(
             if let Some(body) = task_relevant_body(content, file_path, ext, task) {
                 output.push('\n');
                 output.push_str(&body);
+            }
+            // Located symbols are addressable as stable handles (#607).
+            if crate::core::profiles::active_profile()
+                .output_hints
+                .compressed_hint()
+                && !key_sigs.is_empty()
+            {
+                output.push_str(&format!("\n  {}", crate::core::handle::USAGE_HINT));
             }
 
             let sent = count_tokens(&output);

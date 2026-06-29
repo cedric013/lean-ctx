@@ -1,8 +1,10 @@
 <!-- lean-ctx-owned: PROJECT-LEAN-CTX.md v1 -->
 <!-- lean-ctx-rules -->
-<!-- version: 2 -->
+<!-- version: 3 -->
 
 CRITICAL: ALWAYS use lean-ctx ctx_* tools instead of native equivalents. This is NOT optional.
+
+MUST actually CALL the ctx_* MCP tools, not just describe them: before reading, searching, or running a shell command, emit the matching ctx_* tool call (ctx_compose first, then ctx_read / ctx_search / ctx_shell).
 
 MANDATORY MAPPING (4 core redirects first):
 • Read/cat -> ctx_read(path, mode)
@@ -25,12 +27,25 @@ Tool selection by intent:
 • Who calls this / call graph -> ctx_callgraph
 • Session state / memory -> ctx_session / ctx_knowledge
 
+AGENT LOOP (phase -> tool):
+• Orient — understand before acting -> ctx_compose
+• Find — exact symbol by name -> ctx_symbol
+• Read — a file, structurally -> ctx_read(mode=signatures|map)
+• Locate — a pattern across files -> ctx_search
+• Trace — callers / callees / blast radius -> ctx_callgraph
+• Verify — after an edit -> ctx_shell(test/build) + native lints
+
 Anti-patterns — do NOT:
 • Chain ctx_search -> ctx_read -> ctx_symbol — one ctx_compose replaces all three
 • Grep for symbol definitions — ctx_symbol is faster + more precise
 • Use ctx_read(mode=full) for orientation — use mode=signatures
 • Use ctx_callgraph or ctx_graph for const/static/variable references — they track
 function call edges and file-level deps only. Use grep or ctx_compose instead
+
+NAVIGATION PARADOX: reading more ≠ understanding more.
+• Semantic question ("where/how is X handled?") -> ctx_search (BM25) + ctx_semantic_search (meaning), not whole-file reads
+• Hidden architectural deps (who calls this, what breaks) -> ctx_callgraph / ctx_graph — for these only
+• Navigate structure (signatures, symbols) before reading entire files
 
 PARALLEL tool calls: fire independent calls in the SAME turn — don't sequence them.
 ctx_compose bundles multiple lookups into one call; for anything it doesn't

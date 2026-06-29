@@ -68,6 +68,41 @@ pub fn best_symbol_snippet(name: &str, project_root: &str) -> Option<(String, us
     Some(render_single(&sym, gp, project_root))
 }
 
+/// Render one symbol resolved from a stable handle (`path#name@Lline`),
+/// bypassing the fuzzy name lookup and the `>5 matches, narrow with file=/kind=`
+/// disambiguation entirely. Returns `(rendered, full_file_tokens)`, or a clear,
+/// actionable message (tokens = 0) when the handle is malformed, the graph is
+/// unavailable, or nothing resolves.
+pub fn render_by_handle(handle: &str, project_root: &str) -> (String, usize) {
+    let Some(parsed) = crate::core::handle::SymbolHandle::parse(handle) else {
+        return (
+            format!(
+                "Invalid handle '{handle}'. Expected path#name@Lline, \
+                 e.g. src/lib.rs#Config::load@L22."
+            ),
+            0,
+        );
+    };
+    let Some(open) = graph_provider::open_or_build(project_root) else {
+        return (
+            format!("Handle '{handle}' not resolvable (no graph available)."),
+            0,
+        );
+    };
+    let gp = &open.provider;
+    match gp.find_symbol_by_handle(&parsed) {
+        Some(sym) => render_single(&sym, gp, project_root),
+        None => (
+            format!(
+                "No symbol for handle '{handle}'. \
+                 Try ctx_search(action=\"symbol\", name=\"{}\").",
+                parsed.name
+            ),
+            0,
+        ),
+    }
+}
+
 fn render_single(sym: &SymbolInfo, gp: &GraphProvider, project_root: &str) -> (String, usize) {
     let abs_path = resolve_file_path(&sym.file, project_root);
 
@@ -106,9 +141,12 @@ fn render_single(sym: &SymbolInfo, gp: &GraphProvider, project_root: &str) -> (S
 
     let vis = if sym.is_exported { "+" } else { "-" };
     let cc_note = symbol_cc_note(&content, &sym.file, &sym.name, sym.start_line);
+    // Lead with the stable handle (`path#name@Lline`) so the agent can re-target
+    // this exact symbol next turn via ctx_search(action="symbol", handle=…).
+    let handle = crate::core::handle::emit(&sym.file, &sym.name, sym.start_line);
     let header = format!(
-        "{}::{} ({} {}, L{}-{}){cc_note}",
-        sym.file, sym.name, vis, sym.kind, sym.start_line, sym.end_line
+        "{handle}  ({vis} {}, L{}-{}){cc_note}",
+        sym.kind, sym.start_line, sym.end_line
     );
 
     let file_info: Option<FileInfo> = gp.get_file_entry(&sym.file);
@@ -253,5 +291,46 @@ mod tests {
         let gp = test_provider();
         let results = gp.find_symbols("nonexistent", None, None);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn render_single_header_carries_handle() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("mkdir");
+        std::fs::write(
+            tmp.path().join("src/lib.rs"),
+            "struct Config;\nimpl Config { fn load() {} }\n",
+        )
+        .expect("write");
+        let mut idx = ProjectIndex::new(tmp.path().to_str().unwrap());
+        idx.symbols.insert(
+            "src/lib.rs::Config".to_string(),
+            SymbolEntry {
+                file: "src/lib.rs".to_string(),
+                name: "Config".to_string(),
+                kind: "struct".to_string(),
+                start_line: 1,
+                end_line: 1,
+                is_exported: true,
+            },
+        );
+        let gp = GraphProvider::GraphIndex(idx);
+        let sym = gp
+            .find_symbols("Config", None, None)
+            .into_iter()
+            .next()
+            .unwrap();
+        let (out, _) = render_single(&sym, &gp, tmp.path().to_str().unwrap());
+        assert!(
+            out.contains("src/lib.rs#Config@L1"),
+            "header must carry the stable handle, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_by_handle_rejects_malformed() {
+        let (out, tok) = render_by_handle("not-a-handle", "/tmp/does-not-exist");
+        assert!(out.contains("Invalid handle"), "got: {out}");
+        assert_eq!(tok, 0);
     }
 }

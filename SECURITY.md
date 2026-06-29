@@ -141,7 +141,7 @@ Key dependencies and their purpose:
 |-------|---------|-----------|
 | `rmcp` | MCP protocol (stdio transport only) | Rust MCP reference impl |
 | `tiktoken-rs` | Token counting (o200k_base) | OpenAI's tokenizer |
-| `tree-sitter` + grammars | AST parsing for 18 languages | Mozilla's parser |
+| `tree-sitter` + grammars | AST parsing for 26 languages | Mozilla's parser |
 | `tokio` | Async runtime (for MCP server) | 200M+ downloads |
 | `serde` / `serde_json` | JSON serialization | 400M+ downloads |
 | `similar` | Myers diff algorithm | Well-established |
@@ -368,3 +368,5 @@ When running the team server (`lean-ctx team-server`):
 ---
 
 **Last updated**: 2026-06-21
+
+

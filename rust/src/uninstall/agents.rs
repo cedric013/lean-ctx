@@ -17,7 +17,7 @@ pub(super) fn remove_project_agent_files(dry_run: bool) -> bool {
 
     const START: &str = crate::core::rules_canonical::START_MARK;
     const END: &str = crate::core::rules_canonical::END_MARK;
-    const OWNED: &str = "<!-- lean-ctx-owned: PROJECT-LEAN-CTX.md v1 -->";
+    const OWNED: &str = crate::core::rules_canonical::PROJECT_LEAN_CTX_OWNED_MARKER;
 
     let mut removed = false;
 

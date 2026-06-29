@@ -13,11 +13,9 @@
 
 use std::path::PathBuf;
 
+use lean_ctx::core::reference_docs::content_matches;
+use lean_ctx::core::rule_artifacts::{ARTIFACT_PATHS, artifacts};
 use lean_ctx::core::rules_canonical::{RULES_VERSION, RulesFile};
-
-/// Committed files shipping the dedicated, versioned lean-ctx rules block.
-/// Add new real rule artifacts here — not docs examples or templates.
-const RULE_ARTIFACTS: &[&str] = &["LEAN-CTX.md", "rust/LEAN-CTX.md"];
 
 fn repo_root() -> PathBuf {
     let rust_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -29,7 +27,7 @@ fn committed_rule_artifacts_are_current() {
     let root = repo_root();
     let mut checked = 0usize;
 
-    for rel in RULE_ARTIFACTS {
+    for rel in ARTIFACT_PATHS {
         let path = root.join(rel);
         // Minimal checkouts may exclude an artifact; skip what isn't present.
         let Ok(content) = std::fs::read_to_string(&path) else {
@@ -40,12 +38,14 @@ fn committed_rule_artifacts_are_current() {
         assert!(
             parsed.has_content(),
             "{rel} is listed as a rule artifact but carries no '<!-- lean-ctx-rules -->' \
-             block.\nRemove it from RULE_ARTIFACTS, or regenerate it via `lean-ctx setup --fix`."
+             block.\nRemove it from ARTIFACT_PATHS, or regenerate it via \
+             `cargo run --example gen_rules --features dev-tools`."
         );
         assert!(
             parsed.is_current(),
             "{rel} embeds an outdated lean-ctx rules block (version {} < {RULES_VERSION}).\n\
-             Regenerate committed artifacts after bumping RULES_VERSION:\n  lean-ctx setup --fix",
+             Regenerate committed artifacts after bumping RULES_VERSION:\n  \
+             cargo run --example gen_rules --features dev-tools",
             parsed.version()
         );
         checked += 1;
@@ -53,6 +53,33 @@ fn committed_rule_artifacts_are_current() {
 
     assert!(
         checked > 0,
-        "no rule artifacts found to check — RULE_ARTIFACTS is stale or the checkout is incomplete"
+        "no rule artifacts found to check — ARTIFACT_PATHS is stale or the checkout is incomplete"
+    );
+}
+
+/// Stronger than the version gate: the committed bytes must equal what the
+/// generator produces from the SSOT, so an edited canonical section (even one
+/// that keeps the version) cannot silently drift from the checked-in files.
+#[test]
+fn committed_rule_artifacts_match_generator_output() {
+    let root = repo_root();
+    let mut checked = 0usize;
+
+    for (rel, expected) in artifacts() {
+        let path = root.join(rel);
+        let Ok(on_disk) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        assert!(
+            content_matches(&on_disk, &expected),
+            "{rel} drifted from the canonical rules render.\n\
+             Regenerate: cargo run --example gen_rules --features dev-tools"
+        );
+        checked += 1;
+    }
+
+    assert!(
+        checked > 0,
+        "no rule artifacts found to check — ARTIFACT_PATHS is stale or the checkout is incomplete"
     );
 }

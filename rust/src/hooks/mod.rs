@@ -488,7 +488,8 @@ pub fn install_project_rules_for_agents(agents: &[&str]) {
     }
 }
 
-const PROJECT_LEAN_CTX_MD_MARKER: &str = "<!-- lean-ctx-owned: PROJECT-LEAN-CTX.md v1 -->";
+const PROJECT_LEAN_CTX_MD_MARKER: &str =
+    crate::core::rules_canonical::PROJECT_LEAN_CTX_OWNED_MARKER;
 const PROJECT_LEAN_CTX_MD: &str = "LEAN-CTX.md";
 const PROJECT_AGENTS_MD: &str = "AGENTS.md";
 // The AGENTS.md pointer block keeps its own marker pair, independent of the

@@ -29,7 +29,7 @@ The key distinction: Aider's repo-map is locked to Aider. lean-ctx's repo-map wo
 | Session-aware ranking | Recent files boosted, task context weighting | Chat files boosted |
 | Token budget control | `max_tokens` parameter (default 1024) | `--map-tokens` (default 1k) |
 | Binary search fitting | Yes | Yes |
-| Tree-sitter parsing | 21 languages | 40+ languages |
+| Tree-sitter parsing | 26 languages | 40+ languages |
 | Symbol extraction | Functions, classes, traits, structs | Functions, classes, methods |
 | Edge weighting | Proper casing +8, private x0.1, active session x50 | Frequency-based logarithmic |
 | Caching | mtime-based invalidation | Persistent cache |
@@ -161,3 +161,4 @@ If you're an Aider user, lean-ctx can enhance your workflow with additional comp
 *Aider is an excellent AI coding tool. We recommend trying both and choosing what fits your workflow.*
 
 [Get started with lean-ctx](https://leanctx.com/docs/getting-started) | [Aider on GitHub](https://github.com/Aider-AI/aider) | [Aider repo-map docs](https://aider.chat/docs/repomap.html)
+

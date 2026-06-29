@@ -3,7 +3,7 @@
 //! IMPORTANT for readers skimming the repo: this file is the *fallback*, not the
 //! primary engine. The default build extracts signatures with **tree-sitter** via
 //! declarative per-language queries in [`crate::core::signatures_ts`] (real ASTs,
-//! real multi-line spans, ~22 languages). [`extract_signatures`] tries that path
+//! real multi-line spans, ~26 languages). [`extract_signatures`] tries that path
 //! first and only drops to the line-oriented regex extractors here when the
 //! `tree-sitter` feature is off or a parse yields nothing usable for a file.
 //!

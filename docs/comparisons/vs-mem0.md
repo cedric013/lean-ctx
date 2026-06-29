@@ -40,7 +40,7 @@ The distinction: Mem0 remembers that "the user prefers dark mode and lives in Be
 | File read compression | 10 modes (map, signatures, diff, ...) | No |
 | Cached re-reads | ~13 tokens | No |
 | Shell output compression | 95+ patterns | No |
-| Tree-sitter AST analysis | 21 languages | No |
+| Tree-sitter AST analysis | 26 languages | No |
 | Call graph | Multi-hop BFS + risk classification | No |
 | Blast radius / impact | ctx_impact (6 actions) | No |
 | Architecture overview | ctx_architecture (9 actions) | No |
@@ -209,3 +209,4 @@ The choice comes down to your use case: general AI memory vs. coding agent conte
 *Both projects are open source under Apache 2.0.*
 
 [Get started with lean-ctx](https://leanctx.com/docs/getting-started) | [Mem0 on GitHub](https://github.com/mem0ai/mem0) | [Mem0 Docs](https://docs.mem0.ai)
+

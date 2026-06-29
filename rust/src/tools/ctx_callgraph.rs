@@ -17,9 +17,9 @@ pub fn handle(
             let Some(sym) = symbol else {
                 return "symbol is required for callers/callees action".to_string();
             };
-            handle_direction(sym, file, project_root, action, depth)
+            with_handle_hint(handle_direction(sym, file, project_root, action, depth))
         }
-        "trace" => handle_trace(from, to, project_root),
+        "trace" => with_handle_hint(handle_trace(from, to, project_root)),
         "risk" => {
             let Some(sym) = symbol else {
                 return "symbol is required for risk action".to_string();
@@ -251,6 +251,18 @@ fn format_bfs_callees(
     out
 }
 
+/// Append the stable-handle usage hint (#607) to a non-empty result so the
+/// agent can re-target any listed symbol via `ctx_search(action="symbol",
+/// handle=…)`. Skips error/empty messages (which start with "No ") so failures
+/// stay clean.
+fn with_handle_hint(out: String) -> String {
+    if out.starts_with("No ") || out.trim().is_empty() {
+        out
+    } else {
+        format!("{out}{}\n", crate::core::handle::USAGE_HINT)
+    }
+}
+
 fn graph_file_filter(file: &str, project_root: &str) -> String {
     let rel = index_paths::graph_relative_key(file, project_root);
     let rel_key = index_paths::graph_match_key(&rel);
@@ -305,5 +317,20 @@ mod tests {
     fn risk_without_symbol_returns_error() {
         let output = super::handle("risk", None, None, "/tmp", 1, None, None);
         assert!(output.contains("symbol is required"));
+    }
+
+    #[test]
+    fn handle_hint_appended_to_results_only() {
+        use super::with_handle_hint;
+        let ok = with_handle_hint("1 caller(s) of 'x':\n  a → b  (L1)\n".to_string());
+        assert!(
+            ok.contains("handle=\""),
+            "success output gets the hint: {ok}"
+        );
+        let empty = with_handle_hint("No callers found for 'x' (0 edges in graph)".to_string());
+        assert!(
+            !empty.contains("handle=\""),
+            "empty result stays clean: {empty}"
+        );
     }
 }

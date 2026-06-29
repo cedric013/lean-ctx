@@ -98,7 +98,10 @@ fn node_to_signature(node: &Node, name: &str, ext: &str, source: &[u8]) -> Optio
         }
         "protocol_function_declaration" => Some(swift_protocol_function(node, name, source)),
         "function_definition" => Some(match ext {
-            "sh" | "bash" => simple_def(name, "fn"),
+            // Bash plus Julia/Solidity: grammar-specific param shapes, so surface
+            // name + kind honestly rather than mis-parsing them through the
+            // C/Python param extractor.
+            "sh" | "bash" | "jl" | "sol" => simple_def(name, "fn"),
             "scala" | "sc" => scala_function(node, name, source),
             "gd" => gdscript_function(node, name, source),
             _ => py_or_c_function(node, name, ext, start_col, source),
@@ -201,11 +204,42 @@ fn node_to_signature(node: &Node, name: &str, ext: &str, source: &[u8]) -> Optio
 
         "call" if ext == "ex" || ext == "exs" => elixir_call(node, name, source),
 
-        _ => None,
+        // OCaml / Haskell / Julia / Solidity / Nix declaration nodes that have no
+        // language-specific shaping beyond name + kind. Kept in one small helper
+        // so the dispatch above stays focused on richer per-language handlers.
+        _ => functional_signature(kind_str, name),
     }?;
 
     sig.start_line = Some(node.start_position().row + 1);
     sig.end_line = Some(node.end_position().row + 1);
 
     Some(sig)
+}
+
+/// Map the declaration nodes of the functional / contract languages
+/// (OCaml, Haskell, Julia, Solidity, Nix) to a `kind` label. These produce a
+/// plain `name + kind` signature — the query already isolated the declaration,
+/// so no further AST shaping is needed. Returns `None` for unrelated nodes so
+/// the caller can drop non-definition matches.
+fn functional_signature(kind: &str, name: &str) -> Option<Signature> {
+    // Arms are grouped by emitted kind (clippy::match_same_arms forbids
+    // duplicate bodies); the trailing comment notes each pattern's language.
+    // `type_synomym` is spelled as the Haskell grammar defines it (upstream typo).
+    let label = match kind {
+        "value_definition" | "value_specification" | "external" // OCaml
+        | "function" | "bind"                                   // Haskell
+        | "assignment"                                          // Julia short-form `f(x) = …`
+        | "modifier_definition"                                 // Solidity
+        | "binding" => "fn",                                    // Nix function binding
+        "data_type" | "newtype" | "type_synomym"                // Haskell
+        | "abstract_definition" => "type",                      // Julia `abstract type`
+        "contract_declaration" | "library_declaration" => "class", // Solidity
+        "module_definition" => "module",                        // OCaml / Julia
+        "module_type_definition" => "interface",                // OCaml signature
+        "struct_definition" => "struct",                        // Julia
+        "macro_definition" => "macro",                          // Julia
+        "event_definition" => "event",                          // Solidity
+        _ => return None,
+    };
+    Some(simple_def(name, label))
 }

@@ -32,6 +32,13 @@ pub const AGENTS_BLOCK_START: &str = "<!-- lean-ctx -->";
 /// End marker for AGENTS.md/CODEBUDDY.md/CLAUDE.md pointer blocks.
 pub const AGENTS_BLOCK_END: &str = "<!-- /lean-ctx -->";
 
+/// Owner banner placed as the first line of the project-level `LEAN-CTX.md`
+/// artifact (`<repo>/LEAN-CTX.md`, `rust/LEAN-CTX.md`). Marks the whole file as
+/// lean-ctx-owned so uninstall can remove it wholesale; the writer
+/// (`hooks::ensure_project_agents_integration`), the regenerator
+/// (`gen_rules` example) and the drift gate all share this one literal.
+pub const PROJECT_LEAN_CTX_OWNED_MARKER: &str = "<!-- lean-ctx-owned: PROJECT-LEAN-CTX.md v1 -->";
+
 /// Closing marker that ends a lean-ctx rule section.
 pub const END_MARK: &str = "<!-- /lean-ctx-rules -->";
 
@@ -55,7 +62,11 @@ pub const COMPRESSION_BLOCK_END: &str = "<!-- /lean-ctx-compression -->";
 /// Current rules version (monotonically increasing integer).  Embedded as
 /// `<!-- version: {RULES_VERSION} -->` right after `START_MARK` so the
 /// injection layer can parse it and decide whether a file is up-to-date.
-pub const RULES_VERSION: usize = 2;
+///
+/// History: v3 (#609) adds the `AGENT_LOOP` taxonomy + `NAV_PARADOX` guidance to
+/// the FULL profile and a compact one-liner to COMPACT; bumping it forces every
+/// committed `LEAN-CTX.md` artifact to be regenerated (see `tests/rules_drift.rs`).
+pub const RULES_VERSION: usize = 3;
 
 /// Banner placed at the top of dedicated rule files (non-shadow only).
 pub const CRITICAL: &str = "CRITICAL: ALWAYS use lean-ctx ctx_* tools instead of native equivalents. \
@@ -118,6 +129,36 @@ pub const PARALLEL: &str = "\
 PARALLEL tool calls: fire independent calls in the SAME turn — don't sequence them.\n\
 ctx_compose bundles multiple lookups into one call; for anything it doesn't\n\
 cover, batch independent reads/searches together.";
+
+/// Agent-loop tool taxonomy (#609). Names each phase of the gather → act →
+/// verify loop an agent actually runs in and the one lean-ctx tool that serves
+/// it, so the agent maps its *current* intent to a call instead of defaulting to
+/// a full-file read. Complements `INTENT` (lookup framing) with loop framing.
+pub const AGENT_LOOP: &str = "\
+AGENT LOOP (phase -> tool):\n\
+• Orient — understand before acting -> ctx_compose\n\
+• Find — exact symbol by name -> ctx_symbol\n\
+• Read — a file, structurally -> ctx_read(mode=signatures|map)\n\
+• Locate — a pattern across files -> ctx_search\n\
+• Trace — callers / callees / blast radius -> ctx_callgraph\n\
+• Verify — after an edit -> ctx_shell(test/build) + native lints";
+
+/// Navigation-paradox guidance (#609): reading more is not understanding more.
+/// Steers semantic questions to BM25 + meaning search and reserves the call/dep
+/// graph for genuinely hidden architectural edges, so agents stop paging whole
+/// files just to "get context".
+pub const NAV_PARADOX: &str = "\
+NAVIGATION PARADOX: reading more ≠ understanding more.\n\
+• Semantic question (\"where/how is X handled?\") -> ctx_search (BM25) + ctx_semantic_search (meaning), not whole-file reads\n\
+• Hidden architectural deps (who calls this, what breaks) -> ctx_callgraph / ctx_graph — for these only\n\
+• Navigate structure (signatures, symbols) before reading entire files";
+
+/// One-line condensation of `AGENT_LOOP` + `NAV_PARADOX` for the COMPACT profile
+/// (shared files + the per-session Bare/MCP channel). Deliberately terse so the
+/// Bare skeleton stays within `instructions::INSTRUCTION_CAP_TOKENS`.
+pub const LOOP_NAV_COMPACT: &str = "\
+AGENT LOOP: Orient(ctx_compose) → Find(ctx_symbol) → Read(ctx_read) → Locate(ctx_search) → Trace(ctx_callgraph) → Verify(ctx_shell). \
+Reading more ≠ understanding more: semantic Qs -> ctx_search/ctx_semantic_search; hidden deps -> ctx_callgraph/ctx_graph only.";
 
 /// One-line automation reminder.
 pub const AUTO: &str = "Auto: preload/dedup/compress run in background. \
@@ -191,7 +232,9 @@ const FULL_NON_SHADOW: &[&str] = &[
     BULLETS,
     NEVER,
     INTENT,
+    AGENT_LOOP,
     ANTI,
+    NAV_PARADOX,
     PARALLEL,
     AUTO,
     CEP,
@@ -205,7 +248,15 @@ const FULL_NON_SHADOW: &[&str] = &[
 // style survive. Footprint reduction is provable via the #959 delta harness.
 const FULL_SHADOW: &[&str] = &[SHADOW_MINIMAL, INTELLIGENCE];
 
-const COMPACT_NON_SHADOW: &[&str] = &[CRITICAL, BULLETS, NEVER, INTENT, ANTI, PARALLEL];
+const COMPACT_NON_SHADOW: &[&str] = &[
+    CRITICAL,
+    BULLETS,
+    NEVER,
+    INTENT,
+    LOOP_NAV_COMPACT,
+    ANTI,
+    PARALLEL,
+];
 
 const COMPACT_SHADOW: &[&str] = &[SHADOW_MINIMAL];
 
@@ -489,6 +540,72 @@ mod tests {
     #[test]
     fn parallel_contains_parallel() {
         assert!(PARALLEL.contains("PARALLEL"));
+    }
+
+    // --- Agent loop + navigation paradox (#609) ---
+
+    #[test]
+    fn agent_loop_names_every_phase() {
+        for phase in ["Orient", "Find", "Read", "Locate", "Trace", "Verify"] {
+            assert!(AGENT_LOOP.contains(phase), "AGENT_LOOP must name {phase}");
+        }
+        assert!(AGENT_LOOP.contains("ctx_compose") && AGENT_LOOP.contains("ctx_callgraph"));
+    }
+
+    #[test]
+    fn nav_paradox_steers_semantic_vs_graph() {
+        assert!(
+            NAV_PARADOX.contains("ctx_semantic_search"),
+            "semantic route"
+        );
+        assert!(NAV_PARADOX.contains("ctx_callgraph"), "graph route");
+        assert!(
+            NAV_PARADOX.contains("≠"),
+            "must carry the reading≠understanding thesis"
+        );
+    }
+
+    #[test]
+    fn full_profile_carries_loop_and_paradox() {
+        let out = render(false, Wrapper::Dedicated, CompressionLevel::Off);
+        assert!(out.contains("AGENT LOOP"), "FULL must carry AGENT_LOOP");
+        assert!(
+            out.contains("NAVIGATION PARADOX"),
+            "FULL must carry NAV_PARADOX"
+        );
+    }
+
+    #[test]
+    fn compact_profile_uses_one_liner_not_full_sections() {
+        // COMPACT (shared + Bare) carries the condensed one-liner, never the
+        // multi-line FULL sections — that keeps the per-session channel lean.
+        let out = render(false, Wrapper::Shared, CompressionLevel::Off);
+        assert!(
+            out.contains(LOOP_NAV_COMPACT),
+            "COMPACT must carry one-liner"
+        );
+        assert!(
+            !out.contains("AGENT LOOP (phase -> tool):"),
+            "COMPACT must not inline the multi-line AGENT_LOOP block"
+        );
+        assert!(
+            !out.contains("NAVIGATION PARADOX: reading"),
+            "COMPACT must not inline the multi-line NAV_PARADOX block"
+        );
+    }
+
+    #[test]
+    fn shadow_omits_loop_and_paradox() {
+        // #963: shadow collapses to the irreducible minimum — the routing
+        // taxonomy is redundant once native calls are intercepted.
+        for wrapper in [Wrapper::Dedicated, Wrapper::Shared] {
+            let out = render(true, wrapper, CompressionLevel::Off);
+            assert!(!out.contains("AGENT LOOP"), "{wrapper:?} shadow drops loop");
+            assert!(
+                !out.contains("NAVIGATION PARADOX"),
+                "{wrapper:?} shadow drops paradox"
+            );
+        }
     }
 
     // --- render() — Dedicated ---

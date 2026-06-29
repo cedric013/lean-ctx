@@ -36,7 +36,7 @@
 | Repo-map (PageRank) | ctx_repomap (session-aware) | No |
 | Code packing | ctx_pack (.ctxpkg, PR packs) | No |
 | Incremental indexing | Git-diff based updates | Merkle-tree auto-sync |
-| AST-based chunking | Tree-sitter (21 languages) | Tree-sitter (14 languages) |
+| AST-based chunking | Tree-sitter (26 languages) | Tree-sitter (14 languages) |
 | Embedding providers | Built-in ONNX (local) | OpenAI, VoyageAI, Ollama, Gemini |
 | Observability dashboard | Real-time token tracking | No |
 | VS Code extension | Planned | Available |
@@ -202,3 +202,4 @@ If privacy and local-first operation matter to you — or if you want more than 
 *Both projects are open source and under active development.*
 
 [Get started with lean-ctx](https://leanctx.com/docs/getting-started) | [claude-context on GitHub](https://github.com/zilliztech/claude-context)
+

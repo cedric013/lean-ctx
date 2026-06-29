@@ -180,14 +180,15 @@ mod tests {
         // (no rules block) must keep the fixed per-turn prefix tiny. This is the
         // regression guard for the "~3K tokens/turn injected" critique — if any
         // knob silently stops applying, the total balloons and this fails.
-        // macOS/Linux baseline is ~1720 after the sharpened ctx_* redirects
-        // (#1030). Windows additionally carries `build_shell_hint()` — a ~5-tok
-        // PowerShell-cmdlet warning that is empty on POSIX — so the per-turn
-        // prefix is legitimately a few tokens larger there. The budget covers the
-        // Windows surface plus a small margin for `shell_name()` variance (#1051),
-        // not silent creep; this guard exists to catch a balloon to ~3K, not to
-        // pin the figure to the byte.
-        const MINIMAL_ARM_PREFIX_BUDGET_TOKENS: usize = 1740;
+        // macOS/Linux baseline is ~1774 after two reviewed navigation additions:
+        // the v3 agent-loop + navigation-paradox one-liner (#609, always-on in the
+        // COMPACT skeleton) and the ctx_search `handle` param (#608) — together
+        // ~+47 tok over the prior ~1727. Windows additionally carries
+        // `build_shell_hint()` — a ~5-tok PowerShell-cmdlet warning that is empty on
+        // POSIX. The budget covers that surface plus a small margin for
+        // `shell_name()` variance (#1051), and still sits ~1.2K under the ~3K balloon
+        // this guard exists to catch — it is not a license for silent creep.
+        const MINIMAL_ARM_PREFIX_BUDGET_TOKENS: usize = 1790;
 
         let _iso = crate::core::data_dir::isolated_data_dir();
         crate::test_env::set_var("LEAN_CTX_TOOL_PROFILE", "minimal");

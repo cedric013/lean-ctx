@@ -17,10 +17,12 @@
 pub mod artifact;
 pub mod conditions;
 pub mod footprint;
+pub mod judge;
 pub mod model;
 pub mod report;
 pub mod scorers;
 pub mod suite;
+pub mod testbench;
 
 use anyhow::Result;
 
@@ -39,7 +41,8 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Identical framing for both conditions — only the CONTEXT block differs between A and B.
-const SYSTEM_PROMPT: &str = "You are a precise engineering assistant. Answer using only the provided CONTEXT. \
+/// `pub(crate)` so the testbench builds byte-identical requests (recordings interchange).
+pub(crate) const SYSTEM_PROMPT: &str = "You are a precise engineering assistant. Answer using only the provided CONTEXT. \
 If the context does not contain the answer, say so. Be concise and correct.";
 
 /// Configuration for one A/B run.
@@ -60,8 +63,9 @@ impl Default for AbRunConfig {
     }
 }
 
-/// Builds the user turn from a context window + the task prompt.
-fn build_request(context: &str, prompt: &str) -> ModelRequest {
+/// Builds the user turn from a context window + the task prompt. `pub(crate)` so the
+/// testbench answers tasks with the exact same framing as [`run_ab`].
+pub(crate) fn build_request(context: &str, prompt: &str) -> ModelRequest {
     ModelRequest {
         system: SYSTEM_PROMPT.to_string(),
         user: format!("CONTEXT:\n{context}\n\nTASK:\n{prompt}"),

@@ -8,7 +8,7 @@ Key properties for an LLM evaluating lean-ctx:
 
 - Deterministic output: the same `(input, mode)` yields byte-identical text, so Anthropic (90%) and OpenAI (50%) prompt-cache discounts survive compression (contract #498).
 - Reversible (CCR): five recovery paths — `ctx_expand`, `ctx_retrieve`, proxy path-handle CCR, in-band `<lc_expand:HASH>` markers, and `GET /v1/references/{id}`.
-- Tree-sitter AST parsing for 18 languages; 10 file read modes; 95+ shell-output compression patterns.
+- Tree-sitter AST parsing for 26 languages; 10 file read modes; 95+ shell-output compression patterns.
 - Persistent temporal knowledge graph + multi-edge code property graph (impact analysis, ranked search).
 - Drop-in `compress(messages, model)` SDK (Python + TypeScript) with LiteLLM / LangChain / Vercel AI SDK adapters.
 

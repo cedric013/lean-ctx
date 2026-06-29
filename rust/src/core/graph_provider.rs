@@ -30,6 +30,16 @@ fn index_edge_kind(pg_kind: &str) -> String {
     }
 }
 
+/// Absolute distance from a symbol's `start` line to a handle's hint `line`.
+/// A missing hint contributes zero distance, so handles without an `@Lline`
+/// suffix neither help nor hurt the tiebreak (all candidates rank equal here).
+fn line_distance(start: usize, target: Option<usize>) -> usize {
+    match target {
+        Some(t) => start.abs_diff(t),
+        None => 0,
+    }
+}
+
 /// Convert a property-graph symbol [`Node`] into a backend-agnostic
 /// [`SymbolInfo`], recovering the precise source `kind` and export flag from the
 /// node metadata (the `Node` itself only carries a coarse `NodeKind`). Single
@@ -243,6 +253,58 @@ impl GraphProvider {
                 is_exported: s.is_exported,
             }),
         }
+    }
+
+    /// Resolve a stable [`SymbolHandle`](crate::core::handle::SymbolHandle) to
+    /// its current [`SymbolInfo`], robust to line drift. Resolution order:
+    ///
+    /// 1. Exact `(path, name)` — the unique `{file}::{name}` index key, so the
+    ///    common case is a single `O(1)` lookup that ignores the `@Lline` hint
+    ///    entirely (the symbol may have moved since the handle was emitted).
+    /// 2. Otherwise, same-file candidates whose name matches exactly or by its
+    ///    unqualified tail (`Config::load` ↔ `load`), ranked by exact-name
+    ///    first, then nearest line to the handle hint, then lowest line, then
+    ///    name — a total, deterministic order (#498).
+    ///
+    /// Returns `None` only when no symbol in that file plausibly matches. The
+    /// `@Lline` is never a hard requirement, so this is strictly more robust
+    /// than a brittle line-only reference.
+    pub fn find_symbol_by_handle(
+        &self,
+        handle: &crate::core::handle::SymbolHandle,
+    ) -> Option<SymbolInfo> {
+        let key = format!("{}::{}", handle.path, handle.name);
+        if let Some(sym) = self.get_symbol(&key) {
+            return Some(sym);
+        }
+
+        let tail = handle
+            .name
+            .rsplit("::")
+            .next()
+            .unwrap_or(handle.name.as_str());
+        let mut candidates: Vec<SymbolInfo> = self
+            .all_symbols()
+            .into_iter()
+            .filter(|s| s.file == handle.path)
+            .filter(|s| s.name == handle.name || s.name.rsplit("::").next() == Some(tail))
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        candidates.sort_by(|a, b| {
+            let exact_a = u8::from(a.name != handle.name);
+            let exact_b = u8::from(b.name != handle.name);
+            exact_a
+                .cmp(&exact_b)
+                .then_with(|| {
+                    line_distance(a.start_line, handle.line)
+                        .cmp(&line_distance(b.start_line, handle.line))
+                })
+                .then_with(|| a.start_line.cmp(&b.start_line))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        candidates.into_iter().next()
     }
 
     pub fn edges(&self) -> Vec<EdgeInfo> {
@@ -647,6 +709,80 @@ mod tests {
         assert!(open.is_none());
 
         crate::test_env::remove_var("LEAN_CTX_DATA_DIR");
+    }
+
+    fn handle_provider() -> GraphProvider {
+        let mut idx = ProjectIndex::new("/test");
+        for (key, file, name, kind, start, end) in [
+            (
+                "src/lib.rs::Config",
+                "src/lib.rs",
+                "Config",
+                "struct",
+                5usize,
+                20usize,
+            ),
+            (
+                "src/lib.rs::Config::load",
+                "src/lib.rs",
+                "Config::load",
+                "method",
+                22,
+                35,
+            ),
+            ("src/main.rs::main", "src/main.rs", "main", "fn", 1, 10),
+        ] {
+            idx.symbols.insert(
+                key.to_string(),
+                graph_index::SymbolEntry {
+                    file: file.to_string(),
+                    name: name.to_string(),
+                    kind: kind.to_string(),
+                    start_line: start,
+                    end_line: end,
+                    is_exported: true,
+                },
+            );
+        }
+        GraphProvider::GraphIndex(idx)
+    }
+
+    #[test]
+    fn handle_resolves_exact_file_and_name() {
+        let gp = handle_provider();
+        let h = crate::core::handle::SymbolHandle::new("src/lib.rs", "Config::load", 22);
+        let sym = gp.find_symbol_by_handle(&h).expect("resolves");
+        assert_eq!(sym.name, "Config::load");
+        assert_eq!(sym.start_line, 22);
+    }
+
+    #[test]
+    fn handle_resolves_after_line_drift() {
+        // Same (path, name) but a stale, drifted line — must still resolve to
+        // the current symbol at its real line (robust beyond line-only refs).
+        let gp = handle_provider();
+        let h = crate::core::handle::SymbolHandle::new("src/lib.rs", "Config::load", 999);
+        let sym = gp
+            .find_symbol_by_handle(&h)
+            .expect("resolves despite drift");
+        assert_eq!(sym.start_line, 22);
+    }
+
+    #[test]
+    fn handle_resolves_by_unqualified_tail() {
+        // Handle carries only the unqualified tail `load`; the exact key misses,
+        // so the same-file tail match + line tiebreak recovers `Config::load`.
+        let gp = handle_provider();
+        let h = crate::core::handle::SymbolHandle::new("src/lib.rs", "load", 22);
+        let sym = gp.find_symbol_by_handle(&h).expect("resolves by tail");
+        assert_eq!(sym.name, "Config::load");
+    }
+
+    #[test]
+    fn handle_unknown_file_returns_none() {
+        let gp = handle_provider();
+        let h = crate::core::handle::SymbolHandle::new("src/nope.rs", "Config::load", 22);
+        assert!(gp.find_symbol_by_handle(&h).is_none());
     }
 
     #[test]

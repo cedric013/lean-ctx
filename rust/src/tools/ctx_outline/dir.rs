@@ -41,6 +41,10 @@ pub(super) fn outline_dir(dir: &str, opts: &OutlineOpts) -> (String, usize) {
             "[truncated at {MAX_FILES} files — narrow the path for the rest]\n"
         ));
     }
+    // Located symbols are addressable as stable handles (#607): one self-
+    // describing hint for the whole listing (path is each file's group header).
+    out.push_str(crate::core::handle::USAGE_HINT);
+    out.push('\n');
 
     let sent = count_tokens(&out);
     let savings = crate::core::protocol::format_savings(total_tokens, sent);

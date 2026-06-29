@@ -401,7 +401,7 @@ Parameters: `action`*, `alias`, `max_results`, `path`, `query`, `roots`
 
 WORKFLOW: call BEFORE ctx_read to map code structure (a syntax-aware table of contents).
 Accepts a FILE or a DIRECTORY (folder surface — per-file symbols). Symbols come from
-tree-sitter (22 languages, real line spans); a conservative regex fallback covers the rest.
+tree-sitter (26 languages, real line spans); a conservative regex fallback covers the rest.
 kind=fn|struct|class|trait|enum|impl|all filters by kind; match=<substr> filters by name
 (case-insensitive); format=json emits deterministic JSON labelling the backend per file.
 ANTIPATTERN: NOT for file content (use ctx_read) or deep understanding (use ctx_compose).
@@ -608,14 +608,9 @@ Parameters: `action`*, `agent`
 
 ## `ctx_search`
 
-Search code; `action` picks the engine. regex (default): exact pattern, `pattern`
-required, include='*.rs', paths=[..] multi-root. semantic: by meaning (BM25+embeddings),
-`query`, mode=bm25|dense|hybrid.              symbol: one symbol's body by `name` (AST-precise),
-file/kind narrow. reindex / find_related(file_path,line).
-anchored=true tags hits path:line:hh for ctx_patch. For end-to-end understanding,
-use ctx_compose FIRST.
+Search code; `action` picks the engine. regex (default): `pattern` exact, include='*.rs', paths=[..] multi-root. semantic: by meaning (BM25+embeddings), `query`, mode=bm25|dense|hybrid. symbol: one body by `name` (AST), file/kind narrow, or `handle`=path#name@Lline (exact, stable). reindex / find_related(file_path,line). anchored=true tags hits path:line:hh for ctx_patch. Run ctx_compose FIRST.
 
-Parameters: `action`, `anchored`, `file`, `file_path`, `include`, `kind`, `line`, `max_results`, `mode`, `name`, `path`, `paths`, `pattern`, `query`, `top_k`
+Parameters: `action`, `anchored`, `file`, `file_path`, `handle`, `include`, `kind`, `line`, `max_results`, `mode`, `name`, `path`, `paths`, `pattern`, `query`, `top_k`
 
 ## `ctx_semantic_search`
 

@@ -37,7 +37,7 @@ flowchart TB
         GraphAwareRead["Graph-Aware Read — related files hint in every read"]
         EditSafety["Edit Safety — ctx_edit, TOCTOU guard, path jail"]
         BounceTracker["Bounce Tracker — per-file read events, bounce detection, adjusted savings"]
-        TreeSitter["Tree-sitter AST — 18 languages, signature extraction"]
+        TreeSitter["Tree-sitter AST — 26 languages, signature extraction"]
         RegexSig["Regex Signatures — fallback for unsupported languages"]
     end
 
@@ -625,7 +625,7 @@ flowchart LR
 |:---|:---|
 | `core/cache.rs` | Content-addressed file cache with compressed output cache for map/signatures |
 | `core/tokens.rs` | Multi-tokenizer counting (o200k_base, cl100k_base, Gemini correction, Llama) |
-| `core/signatures.rs` | Signature extraction (regex + tree-sitter AST for 18 languages) |
+| `core/signatures.rs` | Signature extraction (regex + tree-sitter AST for 26 languages) |
 | `core/compressor.rs` | Multi-strategy compression (entropy, attention, TF-IDF codebook) |
 | `core/entropy.rs` | Shannon entropy analysis per line |
 | `core/attention_model.rs` | U-curve positional weighting for LLM attention |
@@ -1055,7 +1055,7 @@ The frontend (`cockpit-context.js`) renders these as a unified control panel wit
 
 3. **Pattern-based compression** — Each CLI tool (git, cargo, npm, ...) has a dedicated pattern module in `core/patterns/` (56 modules, versioned). Patterns are handcrafted per subcommand for maximum fidelity.
 
-4. **tree-sitter for signatures** — AST-based extraction handles multi-line signatures, nested scopes, and arrow functions correctly across 18 languages. Falls back to regex for unsupported languages.
+4. **tree-sitter for signatures** — AST-based extraction handles multi-line signatures, nested scopes, and arrow functions correctly across 26 languages. Falls back to regex for unsupported languages.
 
 5. **Content-addressed caching** — Files are hashed on first read. Subsequent reads return a compact stub (~13 tokens) unless the file changed on disk.
 

@@ -129,7 +129,7 @@ Your AI agent reads files and runs commands. LeanCTX compresses both automatical
 - **Target density** (`density:0.4`): SDE-style budget compression — keeps the highest-entropy lines until ~40% of the original tokens remain, deterministic
 - **JIT disclosure**: `signatures` carries line spans and points at `lines:N-M` for targeted expansion — outline first, bodies on demand
 - **Shell output**: 95+ shell-output patterns compress git, npm, cargo, docker, kubectl, terraform and more (270 passthrough rules)
-- **Tree-sitter AST**: structural understanding for 18 languages — not just text compression
+- **Tree-sitter AST**: structural understanding for 26 languages — not just text compression
 - **Reversible by design (CCR)**: compression never *discards* content — pruned or truncated payloads move to a content-addressed store with a deterministic handle, so the model can pull the original bytes back on demand via `ctx_expand`, `ctx_retrieve`, an in-band marker, or `GET /v1/references/{id}`. [Five recovery paths →](docs/comparisons/vs-headroom.md#reversibility)
 
 ### 2. Routing — the right fidelity per read
@@ -559,7 +559,12 @@ guessed.
 Accuracy isn't a vibe: the lossy stages are **CI-gated**. A model-free A/B gate
 proves the JSON crusher keeps *every* gold answer while cutting tokens, and proxy
 rewrites are byte-stable by contract, so Anthropic (90%) / OpenAI (50%) prompt-cache
-discounts survive compression.
+discounts survive compression. A deterministic **off-vs-on testbench**
+(`lean-ctx eval testbench`) extends the proof to *answers*: it runs pinned real repos
+through a raw-dump baseline and through lean-ctx at an identical token budget, grades
+free-form QA with an LLM judge and code with each repo's own tests, and emits
+`FINDINGS.md` (tokens / turns / walltime / quality) plus a regressions file — with a
+committed recorded subset that blocks CI on any regression.
 
 - **Latest snapshot**: [BENCHMARKS.md](BENCHMARKS.md)
 - **Reproduce**: `lean-ctx benchmark report .`
@@ -646,3 +651,5 @@ Start with [CONTRIBUTING.md](CONTRIBUTING.md). Easy first PR: propose a new CLI 
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
+
+

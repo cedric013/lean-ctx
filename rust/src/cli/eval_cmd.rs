@@ -14,6 +14,8 @@ use crate::core::eval_ab::footprint::{
 use crate::core::eval_ab::model::{ModelRunner, OpenAiRunner, RecordedRunner, RecordingRunner};
 use crate::core::eval_ab::report::ReportConfig;
 use crate::core::eval_ab::suite::EvalSuite;
+use crate::core::eval_ab::testbench::lockfile::TestbenchLock;
+use crate::core::eval_ab::testbench::{self, TestbenchConfig, TestbenchReport, findings};
 use crate::core::eval_ab::{AbRunConfig, run_ab};
 
 /// Entry point dispatched from `cli::dispatch`.
@@ -26,6 +28,7 @@ pub fn cmd_eval(args: &[String]) {
     match args.first().map(String::as_str) {
         Some("ab") => cmd_ab(&args[1..]),
         Some("footprint" | "delta") => cmd_footprint(&args[1..]),
+        Some("testbench") => cmd_testbench(&args[1..]),
         Some("verify") => cmd_verify(&args[1..]),
         Some("init") => cmd_init(&args[1..]),
         Some("-h" | "--help") | None => print_help(),
@@ -44,6 +47,7 @@ USAGE:\n\
   lean-ctx eval init <dir>                 Scaffold a runnable starter suite\n\
   lean-ctx eval ab --suite <file> [opts]   Run the A/B quality comparison\n\
   lean-ctx eval footprint --suite <f> [o]  Ablate lean-ctx's OWN injected context (#959)\n\
+  lean-ctx eval testbench --lock <f> [o]   Off-vs-on across pinned real repos (#611)\n\
   lean-ctx eval verify <artifact.json>     Verify signature + determinism digest\n\n\
 ab OPTIONS:\n\
   --suite <file>     NDJSON suite (required)\n\
@@ -60,6 +64,14 @@ footprint OPTIONS (also: `eval --delta`):\n\
   --replay <file>    Replay a recording (deterministic); --record to capture live\n\
   --json             Emit the full JSON report instead of the side-by-side table\n\
   --gate             Exit non-zero if any injected element is actively harmful\n\n\
+testbench OPTIONS:\n\
+  --lock <file>      Pinned-repo lockfile (default eval/testbench/testbench.lock.json)\n\
+  --out <dir>        Output dir for FINDINGS.md + regressions.json (default testbench-out)\n\
+  --cache <dir>      Clone cache for remote repos (default <out>/cache)\n\
+  --budget <n>       Token budget per condition (default 4000)\n\
+  --margin <f>       Non-inferiority margin for the per-repo gate (default 0.0)\n\
+  --replay <file>    Replay a recording (deterministic CI); --record to capture live\n\
+  --gate             Exit non-zero if any repo regressed\n\n\
 LIVE MODEL (when not replaying) is read from the environment:\n\
   LEAN_CTX_EVAL_MODEL_URL   OpenAI-compatible base URL (e.g. https://api.openai.com/v1)\n\
   LEAN_CTX_EVAL_MODEL       Model id (e.g. gpt-4o-mini)\n\
@@ -321,6 +333,104 @@ fn default_footprint_path() -> Result<PathBuf, String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir eval: {e}"))?;
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     Ok(dir.join(format!("footprint-report-v1_{stamp}.json")))
+}
+
+/// `eval testbench`: run the off-vs-on answer-quality benchmark across every pinned
+/// repo in a lockfile, write `FINDINGS.md` + `regressions.json`, and (with `--gate`)
+/// fail the build if any repo regressed (#611).
+fn cmd_testbench(args: &[String]) {
+    let lock_path = flag_value(args, "--lock").map_or_else(
+        || PathBuf::from("eval/testbench/testbench.lock.json"),
+        PathBuf::from,
+    );
+    let lock = match TestbenchLock::load(&lock_path) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("eval testbench: {e:#}\n(use --lock <file> to point at a lockfile)");
+            std::process::exit(1);
+        }
+    };
+
+    let out_dir =
+        flag_value(args, "--out").map_or_else(|| PathBuf::from("testbench-out"), PathBuf::from);
+    let cache_dir =
+        flag_value(args, "--cache").map_or_else(|| out_dir.join("cache"), PathBuf::from);
+
+    let mut cfg = TestbenchConfig::default();
+    if let Some(b) = flag_value(args, "--budget").and_then(|v| v.parse().ok()) {
+        cfg.run.budget_tokens = b;
+    }
+    cfg.run.report = ReportConfig {
+        noninferiority_margin: flag_value(args, "--margin")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0),
+        ..ReportConfig::default()
+    };
+
+    let report = if let Some(replay) = flag_value(args, "--replay") {
+        let runner = match RecordedRunner::from_file(Path::new(replay)) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("eval testbench: {e:#}");
+                std::process::exit(1);
+            }
+        };
+        run_testbench_or_exit(&lock, &cache_dir, &runner, &cfg)
+    } else {
+        let live = match OpenAiRunner::from_env() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "eval testbench: no live model configured: {e:#}\n(use --replay <file> for an offline run)"
+                );
+                std::process::exit(1);
+            }
+        };
+        if let Some(record_path) = flag_value(args, "--record") {
+            let recorder = RecordingRunner::new(live);
+            let report = run_testbench_or_exit(&lock, &cache_dir, &recorder, &cfg);
+            if let Err(e) = recorder.into_recording().save(Path::new(record_path)) {
+                eprintln!("eval testbench: failed to save recording: {e:#}");
+                std::process::exit(1);
+            }
+            println!("Recording saved → {record_path}");
+            report
+        } else {
+            run_testbench_or_exit(&lock, &cache_dir, &live, &cfg)
+        }
+    };
+
+    let (findings_path, regressions_path) = match findings::write(&report, &out_dir) {
+        Ok(paths) => paths,
+        Err(e) => {
+            eprintln!("eval testbench: {e:#}");
+            std::process::exit(1);
+        }
+    };
+
+    print!("{}", findings::render_findings(&report));
+    println!("\nFINDINGS:     {}", findings_path.display());
+    println!("regressions:  {}", regressions_path.display());
+
+    if has_flag(args, "--gate") && !report.gate_passes() {
+        eprintln!("\ntestbench gate FAILED: {}", report.verdict.label());
+        std::process::exit(1);
+    }
+}
+
+fn run_testbench_or_exit(
+    lock: &TestbenchLock,
+    cache_dir: &Path,
+    runner: &dyn ModelRunner,
+    cfg: &TestbenchConfig,
+) -> TestbenchReport {
+    match testbench::run_testbench(lock, cache_dir, runner, cfg) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("eval testbench: run failed: {e:#}");
+            std::process::exit(1);
+        }
+    }
 }
 
 fn cmd_verify(args: &[String]) {
