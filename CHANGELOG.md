@@ -6,6 +6,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Agent navigation upgrades for coding agents (#607–#611).** A cohesive set of
+  cross-turn navigation primitives that cut wasted re-discovery:
+  - **Stable symbol handles (#607).** Symbols carry a resolvable, cross-turn
+    handle (`path#name@Lline`); `ctx_search action=symbol handle=…` returns the
+    exact body deterministically, so an agent can re-open a symbol next turn
+    without re-searching.
+  - **Search hits tagged with their enclosing symbol (#608).** Every
+    `ctx_search` match now reports the function/class it lives in (plus that
+    symbol's handle), turning a bare line hit into navigable context.
+  - **Agent-loop taxonomy + navigation-paradox guidance (#609).** The canonical
+    rules (now v3) name the act→observe→navigate loop and warn against the
+    "more reads ≠ more understanding" paradox, surfaced as a compact per-turn
+    one-liner.
+  - **`signatures` coverage for 5 more languages (#610).** OCaml, Haskell,
+    Julia, Solidity and Nix gain tree-sitter signature extraction (−68 %…−90 %
+    tokens vs. full source) via statically linked grammars (no dynamic WASM).
+  - **Off-vs-on answer-quality testbench (#611).** `lean-ctx eval testbench`
+    measures answer quality, tokens, turns and walltime across pinned real
+    repos, with a deterministic recorded subset that gates CI and a
+    `FINDINGS.md` + regressions report.
 - **Managed Connectors — hosted continuous source sync (#281).** The team server
   runs a scheduled, in-process sync of configured GitLab/GitHub sources into a
   workspace's BM25/graph/knowledge stores, so every seat's `ctx_semantic_search` /
