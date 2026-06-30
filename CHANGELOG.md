@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [3.8.18] — 2026-06-30
+
 ### Added
 - **Compressed output is now visibly reversible — a first-class recovery layer on
   every surface (#625).** Agents (Codex especially) were re-reading compressed
