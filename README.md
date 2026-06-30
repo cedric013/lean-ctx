@@ -174,6 +174,28 @@ Performance is accuracy, not just speed. You stay in control of the window.
 
 </details>
 
+## Addons — run the ecosystem through one gateway
+
+You don't have to choose between LeanCTX and the other context tools you already
+like. An **addon** wraps any MCP server in a tiny `lean-ctx-addon.toml` manifest;
+LeanCTX runs it behind its gateway with one command, then treats what it returns
+like your own reads instead of just proxying it.
+
+```bash
+lean-ctx addon search memory   # browse the registry by category
+lean-ctx addon add headroom    # installs the upstream package + wires the MCP server, on add
+lean-ctx addon list            # what's wired into your gateway
+```
+
+- **One command to add** — `addon add <name>` installs the upstream package via its native manager (uv, pip, cargo, npm, brew, dotnet) and wires the MCP server into your gateway. No fork, no recompile.
+- **Folded in, not just proxied** — opt-in post-processing runs addon output through the same pipeline as your code: compress to a budget, spill oversized blobs to a `ctx_expand` handle, index into BM25 / graph / knowledge. Typed adapters route specific tools straight into `ctx_expand`, `ctx_callgraph` and `ctx_knowledge`.
+- **Untrusted by default** — every addon's output is scrubbed for secrets and tagged untrusted before it reaches the model. Always on, not a flag.
+- **You stay in control** — pin a machine or fleet to verified-only, an allowlist, or off entirely via one `[addons]` policy a single repo can't override.
+
+The registry spans compression (Headroom, Sophon), code intelligence (Repomix,
+Serena), memory (Mem0, Cognee, Letta) and reasoning (Sequential Thinking). See the
+**[addon guide](docs/guides/addons.md)** or [browse them all](https://leanctx.com/addons/).
+
 ## Where it's going
 
 LeanCTX is growing from a single context *layer* into a full **cognitive context
