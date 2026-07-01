@@ -3,7 +3,9 @@
 #[allow(clippy::wildcard_imports)]
 use super::common::*;
 use super::{BOLD, DIM, GREEN, Outcome, RED, RST, YELLOW};
-use std::net::TcpListener;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::time::Duration;
 
 /// Reports the shell allowlist exactly as the MCP tools enforce it — and, crucially,
 /// flags when `config.toml` fails to parse (the silent-default trap behind #341,
@@ -473,11 +475,57 @@ pub(super) fn port_3333_outcome() -> Outcome {
             ok: true,
             line: format!("{BOLD}Dashboard port 3333{RST}  {GREEN}available on 127.0.0.1{RST}"),
         },
+        Err(_) if dashboard_responding_on_port(3333) => Outcome {
+            ok: true,
+            line: format!(
+                "{BOLD}Dashboard port 3333{RST}  {GREEN}already serving lean-ctx dashboard{RST}  {DIM}(http://localhost:3333){RST}"
+            ),
+        },
         Err(e) => Outcome {
             ok: false,
             line: format!("{BOLD}Dashboard port 3333{RST}  {RED}not available: {e}{RST}"),
         },
     }
+}
+fn dashboard_responding_on_port(port: u16) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(150),
+    ) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(150)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(150)));
+
+    let auth_header = saved_dashboard_token()
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
+    let req = format!(
+        "GET /api/version HTTP/1.1\r\nHost: localhost:{port}\r\n{auth_header}Connection: close\r\n\r\n"
+    );
+    if stream.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut buf = [0u8; 1024];
+    let Ok(n) = stream.read(&mut buf) else {
+        return false;
+    };
+    let response = String::from_utf8_lossy(&buf[..n]);
+    (response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"))
+        && response.contains(r#""current":"#)
+        && response.contains(r#""latest":"#)
+        && response.contains(r#""update_available":"#)
+}
+
+fn saved_dashboard_token() -> Option<String> {
+    let path = crate::core::paths::state_dir()
+        .ok()?
+        .join("dashboard.token");
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 pub(super) fn pi_outcome() -> Option<Outcome> {

@@ -1,5 +1,7 @@
 use super::*;
 use crate::core::config::{RulesInjection, RulesScope};
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::Path;
 
 fn write(home: &Path, rel: &str, content: &str) {
@@ -25,6 +27,41 @@ fn capacity_hint_is_actionable_for_both_states() {
     assert!(crit.contains("memory.*"));
 
     assert_ne!(warn, crit);
+}
+#[test]
+fn dashboard_probe_recognizes_lean_ctx_version_endpoint() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut req = [0u8; 512];
+        let n = stream.read(&mut req).unwrap();
+        let req = String::from_utf8_lossy(&req[..n]);
+        assert!(req.starts_with("GET /api/version HTTP/1.1"));
+        let body = r#"{"current":"3.8.18","latest":"3.8.18","update_available":false,"checked_age_secs":null}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+    });
+
+    assert!(dashboard_responding_on_port(port));
+    handle.join().unwrap();
+}
+
+#[test]
+fn dashboard_probe_rejects_non_dashboard_http_service() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+        stream.write_all(response.as_bytes()).unwrap();
+    });
+
+    assert!(!dashboard_responding_on_port(port));
+    handle.join().unwrap();
 }
 
 #[test]
