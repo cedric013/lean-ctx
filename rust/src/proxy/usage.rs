@@ -62,6 +62,40 @@ pub struct RealUsage {
     /// no holdout is active. Stamped from the request, not parsed from the
     /// response — it identifies whether this turn was output-shaped.
     pub cohort: Option<super::holdout::Arm>,
+    /// Request-side gateway context (enterprise#11/#17/#18): identity tags,
+    /// compression savings and baseline inputs, stamped from the request before
+    /// it left for the upstream. `None` outside the forward path (e.g. tests
+    /// that only parse response bodies).
+    pub wire: Option<Box<WireContext>>,
+}
+
+/// Request-side context the forward path knows and the response scanner does
+/// not: who sent the request (gateway identity, enterprise#11), what the proxy
+/// saved on the wire, and the counterfactual-baseline inputs (enterprise#18).
+/// Travels inside [`RealUsage`] so `usage_meter::record` stays the single
+/// choke-point through which every measured turn flows.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WireContext {
+    /// Provider label (`Anthropic|OpenAI|ChatGPT|Gemini`) of the serving route.
+    pub provider: String,
+    /// Person tag from the gateway key (enterprise#11).
+    pub person: Option<String>,
+    /// Team tag from the gateway key.
+    pub team: Option<String>,
+    /// Project: `x-leanctx-project` header wins over the key's default project.
+    pub project: Option<String>,
+    /// Estimated tokens this request saved through wire compression
+    /// (bytes/4 heuristic, same basis as the proxy stats).
+    pub saved_tokens: u64,
+    /// Estimated request tokens BEFORE lean-ctx compression (bytes/4) — the
+    /// SEE-attribution input of the avoided-cost baseline (enterprise#18).
+    pub uncompressed_input_tokens: u64,
+    /// True when the serving upstream is a local/loopback endpoint — billed via
+    /// the transparent `local_shadow_rate`, never 0 (enterprise#15/#18).
+    pub is_local: bool,
+    /// Originally requested model when the router downgraded/aliased it
+    /// (enterprise#13); `None` for passthrough.
+    pub routed_from: Option<String>,
 }
 
 impl RealUsage {
@@ -91,6 +125,8 @@ pub struct Scanner {
     url_model: Option<String>,
     /// Output-savings arm (#895), stamped onto the usage at finalize.
     cohort: Option<super::holdout::Arm>,
+    /// Request-side gateway context (enterprise#11/#18), stamped at finalize.
+    wire: Option<Box<WireContext>>,
     buf: Vec<u8>,
     usage: RealUsage,
 }
@@ -101,6 +137,7 @@ impl Scanner {
             provider,
             url_model,
             cohort: None,
+            wire: None,
             buf: Vec::new(),
             usage: RealUsage::default(),
         }
@@ -110,6 +147,14 @@ impl Scanner {
     #[must_use]
     pub fn with_cohort(mut self, cohort: Option<super::holdout::Arm>) -> Self {
         self.cohort = cohort;
+        self
+    }
+
+    /// Attaches the request-side gateway context (identity tags, wire savings,
+    /// baseline inputs — enterprise#11/#17/#18) stamped onto the usage record.
+    #[must_use]
+    pub fn with_wire_context(mut self, wire: Option<Box<WireContext>>) -> Self {
+        self.wire = wire;
         self
     }
 
@@ -145,6 +190,7 @@ impl Scanner {
         }
         if self.usage.is_meaningful() {
             self.usage.cohort = self.cohort;
+            self.usage.wire = self.wire;
             Some(self.usage)
         } else {
             None
@@ -428,6 +474,28 @@ mod tests {
         assert_eq!(u.model, "claude-sonnet-4-5");
         assert_eq!(u.input_tokens, 24);
         assert_eq!(u.output_tokens, 18);
+    }
+
+    #[test]
+    fn scanner_stamps_wire_context_onto_usage() {
+        // enterprise#11/#17: the request-side context must survive scanning and
+        // arrive on the finalized record that usage_meter/store consume.
+        let wire = Box::new(WireContext {
+            provider: "Anthropic".into(),
+            person: Some("yves".into()),
+            team: None,
+            project: Some("billing".into()),
+            saved_tokens: 42,
+            uncompressed_input_tokens: 500,
+            is_local: false,
+            routed_from: None,
+        });
+        let mut s = Scanner::new(Provider::Anthropic, None).with_wire_context(Some(wire.clone()));
+        s.feed_body(
+            br#"{"model":"claude-sonnet-4-5","usage":{"input_tokens":24,"output_tokens":18}}"#,
+        );
+        let u = s.finalize().expect("usage");
+        assert_eq!(u.wire, Some(wire));
     }
 
     #[test]

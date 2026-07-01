@@ -107,14 +107,73 @@ pub async fn forward_request(
         None
     };
 
+    // Gateway context (enterprise#11/#17/#18): identity tags from the auth
+    // guard + wire savings + baseline inputs, stamped onto the usage record.
+    let wire = Some(wire_context(
+        &parts,
+        provider_label,
+        upstream_base,
+        tokens_saved,
+        original_size,
+    ));
+
     build_response(
         response,
         extra_stream_types,
         usage_provider,
         url_model,
         cohort,
+        wire,
     )
     .await
+}
+
+/// Builds the request-side [`WireContext`](super::usage::WireContext) stamped
+/// onto this turn's usage record: identity tags (inserted as a request
+/// extension by the auth guard, enterprise#11), the per-request compression
+/// saving, the pre-compression token estimate (baseline input, enterprise#18)
+/// and whether the serving upstream is local.
+fn wire_context(
+    parts: &Parts,
+    provider_label: &str,
+    upstream_base: &str,
+    tokens_saved: u64,
+    original_size: usize,
+) -> Box<super::usage::WireContext> {
+    let tags = parts
+        .extensions
+        .get::<super::gateway_identity::GatewayTags>()
+        .cloned()
+        .unwrap_or_default();
+    Box::new(super::usage::WireContext {
+        provider: provider_label.to_string(),
+        person: tags.person,
+        team: tags.team,
+        project: tags.project,
+        saved_tokens: tokens_saved,
+        // bytes/4 — the same estimation basis the proxy stats use throughout.
+        uncompressed_input_tokens: original_size as u64 / 4,
+        is_local: upstream_is_local(upstream_base),
+        routed_from: None, // populated by the routing hook (wave 3)
+    })
+}
+
+/// True when the upstream base URL points at a loopback/local endpoint (an
+/// Ollama/vLLM-style local model): billed with the transparent
+/// `local_shadow_rate` instead of provider list prices (enterprise#15/#18).
+fn upstream_is_local(upstream_base: &str) -> bool {
+    let rest = upstream_base
+        .strip_prefix("https://")
+        .or_else(|| upstream_base.strip_prefix("http://"))
+        .unwrap_or(upstream_base);
+    let host_port = rest.split(['/', '?']).next().unwrap_or(rest);
+    // Split off the port; bracketed IPv6 hosts keep their brackets.
+    let host = if let Some(b) = host_port.strip_prefix('[') {
+        b.split(']').next().unwrap_or(b)
+    } else {
+        host_port.split(':').next().unwrap_or(host_port)
+    };
+    matches!(host, "127.0.0.1" | "localhost" | "::1" | "0.0.0.0")
 }
 
 /// Output-savings arm (#895) for a request body, or `None` when no holdout is
@@ -410,6 +469,7 @@ async fn build_response(
     usage_provider: super::usage::Provider,
     url_model: Option<String>,
     cohort: Option<super::holdout::Arm>,
+    wire: Option<Box<super::usage::WireContext>>,
 ) -> Result<Response, StatusCode> {
     let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::OK);
     let resp_headers = response.headers().clone();
@@ -425,7 +485,9 @@ async fn build_response(
         // Tee the stream through a usage Scanner: each chunk is forwarded
         // byte-for-byte while the real model + billed tokens are extracted from
         // the final event and recorded when the stream ends.
-        let scanner = super::usage::Scanner::new(usage_provider, url_model).with_cohort(cohort);
+        let scanner = super::usage::Scanner::new(usage_provider, url_model)
+            .with_cohort(cohort)
+            .with_wire_context(wire);
         let inner = Box::pin(response.bytes_stream());
         let body = Body::from_stream(super::usage::tee_stream(inner, scanner));
         let mut resp = Response::builder().status(status);
@@ -446,7 +508,9 @@ async fn build_response(
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
 
     // Non-streaming: the whole body is one JSON object carrying `usage`.
-    let mut scanner = super::usage::Scanner::new(usage_provider, url_model).with_cohort(cohort);
+    let mut scanner = super::usage::Scanner::new(usage_provider, url_model)
+        .with_cohort(cohort)
+        .with_wire_context(wire);
     scanner.feed_body(&resp_bytes);
     if let Some(usage) = scanner.finalize() {
         super::usage_meter::record(&usage);
@@ -479,6 +543,60 @@ mod tests {
         let out = serde_json::to_vec(&value).unwrap();
         let compressed_size = out.len();
         (out, original_size, compressed_size)
+    }
+
+    // --- enterprise#11/#18: wire context (identity + baseline inputs) ---
+
+    #[test]
+    fn upstream_is_local_detects_loopback_hosts() {
+        for local in [
+            "http://127.0.0.1:11434",
+            "http://localhost:8080/v1",
+            "http://[::1]:9999",
+            "http://0.0.0.0:4000",
+        ] {
+            assert!(upstream_is_local(local), "{local} must count as local");
+        }
+        for remote in [
+            "https://api.anthropic.com",
+            "https://acme.services.ai.azure.com/openai",
+            "https://localhost.evil.example.com", // subdomain trick ≠ local
+        ] {
+            assert!(!upstream_is_local(remote), "{remote} must not be local");
+        }
+    }
+
+    #[test]
+    fn wire_context_carries_identity_tags_and_baseline() {
+        let mut parts = parts_for("/v1/messages");
+        parts
+            .extensions
+            .insert(super::super::gateway_identity::GatewayTags {
+                person: Some("yves".into()),
+                team: Some("platform".into()),
+                project: Some("billing".into()),
+            });
+        let wire = wire_context(&parts, "Anthropic", "https://api.anthropic.com", 750, 4000);
+        assert_eq!(wire.provider, "Anthropic");
+        assert_eq!(wire.person.as_deref(), Some("yves"));
+        assert_eq!(wire.team.as_deref(), Some("platform"));
+        assert_eq!(wire.project.as_deref(), Some("billing"));
+        assert_eq!(wire.saved_tokens, 750);
+        // bytes/4 estimate, same basis as the proxy stats (enterprise#18).
+        assert_eq!(wire.uncompressed_input_tokens, 1000);
+        assert!(!wire.is_local);
+        assert_eq!(wire.routed_from, None);
+    }
+
+    #[test]
+    fn wire_context_without_tags_still_carries_baseline() {
+        // Local solo mode: no identity, but savings + baseline are still real.
+        let parts = parts_for("/v1/chat/completions");
+        let wire = wire_context(&parts, "OpenAI", "http://127.0.0.1:11434", 0, 400);
+        assert_eq!(wire.person, None);
+        assert_eq!(wire.project, None);
+        assert_eq!(wire.uncompressed_input_tokens, 100);
+        assert!(wire.is_local);
     }
 
     #[test]

@@ -174,6 +174,10 @@ pub fn resume_from_disk() {
 /// Records one turn's measured usage against its model bucket (and its
 /// output-savings cohort, when tagged) and persists.
 pub fn record(u: &super::usage::RealUsage) {
+    // Gateway store subscription (enterprise#17): forward the full record to
+    // the installed sink (no-op locally). Never blocks the request path.
+    super::usage_sink::push(u);
+
     let key = normalize_key(&u.model);
     {
         let mut map = store()
@@ -352,9 +356,7 @@ mod tests {
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: cache_read,
-            cache_write_tokens: 0,
-            reasoning_tokens: 0,
-            cohort: None,
+            ..Default::default()
         }
     }
 

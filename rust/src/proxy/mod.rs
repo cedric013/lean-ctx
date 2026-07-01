@@ -16,6 +16,7 @@ pub mod compress_api;
 pub mod cost;
 pub mod effort;
 pub mod forward;
+pub mod gateway_identity;
 pub mod google;
 pub mod history_prune;
 pub mod holdout;
@@ -32,6 +33,7 @@ pub mod tool_kind;
 pub mod tool_output;
 pub mod usage;
 pub mod usage_meter;
+pub mod usage_sink;
 pub mod verbosity;
 
 use std::net::SocketAddr;
@@ -559,11 +561,30 @@ pub async fn start_proxy_with_token(port: u16, auth_token: Option<String>) -> an
         }))
         .with_state(state);
 
+    // Per-person gateway keys (enterprise#11): sha256(bearer) → person/team/
+    // default_project. Loaded once at startup; rotation = restart (the standard
+    // secret-mount flow). A malformed file fails the start loudly.
+    let gateway_keys = match gateway_identity::GatewayKeys::load_default() {
+        Ok(keys) => {
+            if !keys.is_empty() {
+                println!(
+                    "  Identity:  {} gateway key(s) loaded ({})",
+                    keys.len(),
+                    gateway_identity::GatewayKeys::default_path().display()
+                );
+            }
+            Arc::new(keys)
+        }
+        Err(e) => anyhow::bail!("gateway-keys.toml: {e}"),
+    };
+
     {
         let expected = auth_token.clone();
+        let keys = gateway_keys.clone();
         app = app.layer(axum::middleware::from_fn(move |req, next| {
             let expected = expected.clone();
-            proxy_auth_guard(req, next, expected, require_token)
+            let keys = keys.clone();
+            proxy_auth_guard(req, next, expected, require_token, keys)
         }));
     }
 
@@ -751,23 +772,38 @@ async fn status_handler(State(state): State<ProxyState>) -> impl IntoResponse {
 
 #[allow(clippy::result_large_err)]
 async fn proxy_auth_guard(
-    req: axum::extract::Request,
+    mut req: axum::extract::Request,
     next: axum::middleware::Next,
     expected_token: String,
     require_token: bool,
+    gateway_keys: Arc<gateway_identity::GatewayKeys>,
 ) -> Result<Response, Response> {
     let path = req.uri().path();
     if path == "/health" {
         return Ok(next.run(req).await);
     }
 
-    if let Some(auth) = req
+    let bearer = req
         .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        && let Some(token) = auth.strip_prefix("Bearer ")
+        .and_then(|auth| auth.strip_prefix("Bearer "))
+        .map(str::to_string);
+
+    if let Some(token) = bearer.as_deref()
         && constant_time_eq(token.as_bytes(), expected_token.as_bytes())
     {
+        attach_gateway_tags(&mut req, gateway_identity::GatewayTags::default());
+        return Ok(next.run(req).await);
+    }
+
+    // Per-person gateway keys (enterprise#11): a bearer key whose SHA-256 is in
+    // gateway-keys.toml authenticates AND identifies — its person/team/project
+    // tags travel with the request and end up on the usage record.
+    if let Some(token) = bearer.as_deref()
+        && let Some(tags) = gateway_keys.lookup(token)
+    {
+        attach_gateway_tags(&mut req, tags);
         return Ok(next.run(req).await);
     }
 
@@ -781,6 +817,7 @@ async fn proxy_auth_guard(
         has_provider_api_key(&req),
         is_provider_route(path),
     ) {
+        attach_gateway_tags(&mut req, gateway_identity::GatewayTags::default());
         return Ok(next.run(req).await);
     }
 
@@ -804,6 +841,29 @@ async fn proxy_auth_guard(
     });
 
     Err((StatusCode::UNAUTHORIZED, axum::Json(body)).into_response())
+}
+
+/// Resolves the final identity tags for an authenticated request and inserts
+/// them as a request extension (read by `forward.rs::wire_context`).
+///
+/// Project resolution (enterprise#11): the `x-leanctx-project` header wins over
+/// the key's `default_project` — one person books work onto different projects
+/// per request. The header also works without a gateway key (solo/local mode:
+/// project tagging without identity). It is an internal gateway header, not on
+/// `ALLOWED_REQUEST_HEADERS`, so it never reaches the upstream.
+fn attach_gateway_tags(req: &mut axum::extract::Request, mut tags: gateway_identity::GatewayTags) {
+    if let Some(project) = req
+        .headers()
+        .get("x-leanctx-project")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && p.len() <= 128)
+    {
+        tags.project = Some(project.to_string());
+    }
+    if !tags.is_empty() {
+        req.extensions_mut().insert(tags);
+    }
 }
 
 fn has_provider_api_key(req: &axum::extract::Request) -> bool {
@@ -1238,6 +1298,89 @@ mod auth_tests {
         // behavior so existing local setups (Claude Code, OpenCode, Codex) keep
         // working without a token.
         assert!(!crate::core::config::Config::default().proxy_require_token);
+    }
+
+    // --- enterprise#11: identity tags + x-leanctx-project header ---
+
+    #[test]
+    fn attach_gateway_tags_header_overrides_default_project() {
+        // The per-request header wins over the key's default_project: one
+        // person books work onto different projects request by request.
+        let mut req = build_request(&[("x-leanctx-project", "billing")], "/v1/messages");
+        attach_gateway_tags(
+            &mut req,
+            gateway_identity::GatewayTags {
+                person: Some("yves".into()),
+                team: Some("platform".into()),
+                project: Some("ai-gateway".into()),
+            },
+        );
+        let tags = req
+            .extensions()
+            .get::<gateway_identity::GatewayTags>()
+            .expect("tags attached");
+        assert_eq!(tags.person.as_deref(), Some("yves"));
+        assert_eq!(tags.project.as_deref(), Some("billing"));
+    }
+
+    #[test]
+    fn attach_gateway_tags_header_works_without_key_identity() {
+        // Solo/local mode: project tagging must not require a gateway key.
+        let mut req = build_request(&[("x-leanctx-project", "side-quest")], "/v1/messages");
+        attach_gateway_tags(&mut req, gateway_identity::GatewayTags::default());
+        let tags = req
+            .extensions()
+            .get::<gateway_identity::GatewayTags>()
+            .expect("tags attached");
+        assert_eq!(tags.person, None);
+        assert_eq!(tags.project.as_deref(), Some("side-quest"));
+    }
+
+    #[test]
+    fn attach_gateway_tags_empty_leaves_no_extension() {
+        // No identity, no header: nothing to stamp — the extension stays absent
+        // so downstream code can treat its presence as "gateway context exists".
+        let mut req = build_request(&[], "/v1/messages");
+        attach_gateway_tags(&mut req, gateway_identity::GatewayTags::default());
+        assert!(
+            req.extensions()
+                .get::<gateway_identity::GatewayTags>()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn attach_gateway_tags_rejects_oversized_or_blank_header() {
+        // Defensive bound: a blank or absurdly long project header is ignored,
+        // the key's default project stays authoritative.
+        let long = "p".repeat(200);
+        for bad in ["", "   ", long.as_str()] {
+            let mut req = build_request(&[("x-leanctx-project", bad)], "/v1/messages");
+            attach_gateway_tags(
+                &mut req,
+                gateway_identity::GatewayTags {
+                    person: Some("yves".into()),
+                    team: None,
+                    project: Some("default-proj".into()),
+                },
+            );
+            let tags = req
+                .extensions()
+                .get::<gateway_identity::GatewayTags>()
+                .expect("tags attached");
+            assert_eq!(
+                tags.project.as_deref(),
+                Some("default-proj"),
+                "bad header {bad:?} must not override"
+            );
+        }
+    }
+
+    #[test]
+    fn x_leanctx_project_never_forwarded_upstream() {
+        // Internal gateway header: it must NOT be on the upstream allowlist,
+        // otherwise org-internal project names leak to the provider.
+        assert!(!forward::is_allowed_request_header("x-leanctx-project"));
     }
 
     // --- #353: bare provider endpoints (OpenCode / @ai-sdk/openai) ---

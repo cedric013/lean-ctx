@@ -208,6 +208,30 @@ proxy_max_rps = 100                               # optional; gateway default: 5
 - An unparseable bind value falls back to `127.0.0.1` — a typo can only ever
   narrow exposure, never open the listener.
 
+**Per-person gateway keys — metering identity** (`gateway-keys.toml`). An org
+gateway can issue one bearer key per person instead of sharing the proxy token.
+The file lives at `<config_dir>/gateway-keys.toml` (override:
+`LEAN_CTX_GATEWAY_KEYS`), holds **only SHA-256 hashes** of the keys, and is
+loaded at proxy startup (rotation = restart, the standard secret-mount flow; a
+malformed file fails the start loudly):
+
+```toml
+[[keys]]
+sha256_hex = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+person     = "alice@example.com"
+team       = "platform"          # optional
+default_project = "billing"      # optional
+```
+
+- A request whose `Authorization: Bearer <key>` hash matches an entry
+  authenticates **and** tags the turn's measured usage with
+  `person`/`team`/`project` — the basis for per-person/per-project metering.
+- The `x-leanctx-project: <name>` request header overrides the key's
+  `default_project` per request (also works without a key, for solo setups). It
+  is an internal gateway header and is never forwarded upstream.
+- Compute a key's hash with `shasum -a 256` (or `sha256sum`):
+  `printf '%s' "gk-alice-secret" | shasum -a 256`.
+
 **Live upstream — `config.toml` is the source of truth for a running proxy**
 ([#449](https://github.com/yvgude/lean-ctx/issues/449)). A long-lived proxy
 (LaunchAgent / systemd / IDE-spawned) re-reads its upstreams from `config.toml`

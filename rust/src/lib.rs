@@ -26,6 +26,8 @@ pub mod dashboard;
 pub mod doctor;
 pub mod dropin;
 pub mod engine;
+#[cfg(feature = "gateway-server")]
+pub mod gateway_server;
 pub mod heatmap;
 pub mod hook_handlers;
 pub mod hooks;
