@@ -218,6 +218,8 @@ pub fn contract_docs() -> Vec<ContractDoc> {
         doc("org-sso-oidc", "org-sso-oidc-v1.md", 1, Experimental),
         // Quality loop (GL #494): edit-failure feedback into mode selection.
         doc("quality-loop", "quality-loop-v1.md", 1, Experimental),
+        // Edit metering (GL #1144): anchored-vs-str_replace efficiency channel.
+        doc("edit-metering", "edit-metering-v1.md", 1, Experimental),
         // Hosted ctxpkg registry (GL #406): fresh server surface.
         doc("ctxpkg-registry", "ctxpkg-registry-v1.md", 1, Experimental),
         // Context Time Machine (GL #1022/#1023): git-anchored, signed temporal
