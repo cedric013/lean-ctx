@@ -557,18 +557,16 @@ class CockpitCommander extends HTMLElement {
     if (value !== undefined) body.value = value;
 
     try {
-      await fetch('/api/context-overlay', {
+      await fetchJson('/api/context-overlay', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + (window.__LEAN_CTX_TOKEN__ || ''),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        timeoutMs: 15000,
       });
       toast(action + ': ' + shortenPath(path), 'success');
       this.loadData();
     } catch (e) {
-      toast('Failed: ' + String(e), 'error');
+      toast('Failed: ' + (e?.error || String(e)), 'error');
     }
   }
 }
