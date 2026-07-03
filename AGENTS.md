@@ -89,12 +89,9 @@ any timestamp, counter or random element in tool output bodies defeats it.
 <!-- lean-ctx -->
 ## lean-ctx
 
-Prefer lean-ctx MCP tools over native equivalents for token savings:
-`ctx_read` > Read/cat, `ctx_search` > Grep/rg, `ctx_shell` > bash, `ctx_tree` > ls/find.
-Native Edit/Write/Glob stay as-is; use `ctx_edit` only when Edit needs an unavailable Read.
+lean-ctx is active — the MCP tools replace native equivalents.
 Full rules: LEAN-CTX.md (open on demand — do not auto-load).
 <!-- /lean-ctx -->
-
 <!-- lean-ctx-compression -->
 OUTPUT STYLE: concise
 - Bullet points over paragraphs
