@@ -654,7 +654,7 @@ mod windows_swap_tests {
         fs::write(&src, b"new-binary").unwrap();
         fs::write(&dst, b"old-binary").unwrap();
 
-        let _holder = fs::OpenOptions::new()
+        let holder = fs::OpenOptions::new()
             .read(true)
             .share_mode(0)
             .open(&dst)
@@ -663,6 +663,9 @@ mod windows_swap_tests {
         let err = atomic_install_binary(&src, &dst).unwrap_err();
         assert!(err.contains("atomic rename failed"), "got: {err}");
         assert!(err.contains("re-run the install"), "hint missing: {err}");
+        // The zero-sharing lock blocks our own verification read too — release
+        // it first, then prove the old binary survived untouched.
+        drop(holder);
         assert_eq!(fs::read(&dst).unwrap(), b"old-binary");
     }
 }
