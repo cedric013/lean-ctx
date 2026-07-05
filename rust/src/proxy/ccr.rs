@@ -256,6 +256,37 @@ fn recover(hash: &str) -> Option<String> {
     std::fs::read_to_string(resolve_tee(hash)?).ok()
 }
 
+/// Length of a LiteLLM gateway retrieval hash (#702): LiteLLM's headroom
+/// guardrail scans compressed text with `hash=([a-f0-9]{24})`
+/// (BerriAI/litellm#31681), so the marker must carry exactly 24 lowercase hex.
+pub(crate) const LITELLM_HASH_LEN: usize = 24;
+
+/// The 24-hex gateway retrieval hash for `content` (#702): the first 24 chars
+/// of the full blake3 hex. A strict extension of the 16-hex tee name
+/// ([`crate::core::hasher::hash_short`] is the same digest truncated to 16),
+/// so `hash[..16]` resolves the tee file while the extra 8 chars keep the
+/// marker collision-resistant on the gateway side. Pure — the marker embedding
+/// it stays byte-stable per content (#498).
+pub(crate) fn litellm_hash(content: &str) -> String {
+    blake3::hash(content.as_bytes()).to_hex()[..LITELLM_HASH_LEN].to_string()
+}
+
+/// Resolve a LiteLLM `hash=<24hex>` retrieval id (#702) back to the verbatim
+/// original in the tee store, for `GET /v1/retrieve/{hash}`. Shape-locked to
+/// LiteLLM's own regex (24 lowercase hex — uppercase or any other length is
+/// rejected, never coerced) so only a string the guardrail could actually have
+/// captured resolves; the first 16 chars are the `proxy_` tee content-address.
+pub(crate) fn retrieve_litellm(hash: &str) -> Option<String> {
+    if hash.len() != LITELLM_HASH_LEN
+        || !hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return None;
+    }
+    std::fs::read_to_string(resolve_tee(&hash[..TEE_HASH_LEN])?).ok()
+}
+
 /// Replace every `<lc_expand:HASH>` marker in `s` with the verbatim original
 /// recovered from the local tee store. Returns `Some(spliced)` only when at
 /// least one marker resolved, else `None` (so the caller leaves the string —
@@ -549,6 +580,62 @@ mod tests {
         assert!(resolve_tee("ref_deadbeefcafef00d").is_none());
         // A bare 16-hex archive id with no backing tee file also stays None.
         assert!(resolve_tee("0123456789abcdef").is_none());
+    }
+
+    #[test]
+    fn litellm_hash_is_24_lowercase_hex_and_extends_tee_hash() {
+        let content = big("gateway retrieval body");
+        let hash = litellm_hash(&content);
+        assert_eq!(hash.len(), LITELLM_HASH_LEN);
+        assert!(
+            hash.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "must match LiteLLM's [a-f0-9]{{24}} class: {hash}"
+        );
+        // Same blake3 digest as the tee name, longer prefix: the first 16 chars
+        // ARE the tee content-address, which is what makes retrieval work.
+        assert_eq!(hash[..16], crate::core::hasher::hash_short(&content));
+        // Pure function of content (#498): stable across calls.
+        assert_eq!(hash, litellm_hash(&content));
+    }
+
+    #[test]
+    fn retrieve_litellm_resolves_persisted_content() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let content = big("litellm retrievable original");
+        persist(&content).expect("persisted");
+        let recovered =
+            retrieve_litellm(&litellm_hash(&content)).expect("24-hex hash must resolve");
+        assert!(recovered.contains("litellm retrievable original"));
+    }
+
+    #[test]
+    fn retrieve_litellm_is_shape_locked_to_the_guardrail_regex() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let content = big("shape locked body");
+        persist(&content).expect("persisted");
+        let hash = litellm_hash(&content);
+
+        // 16-hex (our tee id), truncated, extended, uppercased, non-hex: all
+        // rejected — only the exact shape LiteLLM's regex captures resolves.
+        assert!(retrieve_litellm(&hash[..16]).is_none(), "16-hex rejected");
+        assert!(retrieve_litellm(&hash[..23]).is_none(), "23-hex rejected");
+        assert!(
+            retrieve_litellm(&format!("{hash}0")).is_none(),
+            "25-hex rejected"
+        );
+        assert!(
+            retrieve_litellm(&hash.to_uppercase()).is_none(),
+            "uppercase rejected (regex class is [a-f0-9])"
+        );
+        assert!(
+            retrieve_litellm("zzzzzzzzzzzzzzzzzzzzzzzz").is_none(),
+            "non-hex rejected"
+        );
+        // Traversal attempts die in resolve_tee's name canonicalization.
+        assert!(retrieve_litellm("../../etc/passwd00000000").is_none());
+        // Right shape, unknown content.
+        assert!(retrieve_litellm("0123456789abcdef01234567").is_none());
     }
 
     #[test]

@@ -29,7 +29,30 @@ fn research_prose_cap() -> usize {
 ///    the pattern engine gets the same routing as the CLI and MCP paths.
 pub fn compress_tool_result(content: &str, tool_name: Option<&str>) -> String {
     let compressed = compress_inner(content, tool_name);
-    attach_ccr(content, compressed)
+    attach_ccr(content, compressed, CcrAudience::Local)
+}
+
+/// [`compress_tool_result`] for the `/v1/compress` gateway contract (#702):
+/// identical compression, but a lossy result advertises its retrieval hash in
+/// LiteLLM's regex-locked `hash=<24hex>` form, so a gateway running the
+/// headroom-guardrail CCR loop (BerriAI/litellm#31681) can inject its retrieve
+/// tool and resolve the original via `GET /v1/retrieve/{hash}`.
+///
+/// Any ambient savings footer is stripped *before* the marker is attached:
+/// savings figures belong in the caller's structured `stats` (#498), while the
+/// marker is functional content that must survive as the last line.
+pub fn compress_tool_result_gateway(content: &str, tool_name: Option<&str>) -> String {
+    let compressed = compress_inner(content, tool_name);
+    let clean = crate::core::protocol::strip_trailing_savings_footer(&compressed).to_string();
+    attach_ccr(content, clean, CcrAudience::Gateway)
+}
+
+/// Who reads a CCR stub: a local agent (path handle / in-band marker) or a
+/// remote gateway whose agentic loop scans for `hash=<24hex>` (#702).
+#[derive(Clone, Copy, PartialEq)]
+enum CcrAudience {
+    Local,
+    Gateway,
 }
 
 /// Make a live-compressed `tool_result` non-lossy (#482): when compression
@@ -38,13 +61,27 @@ pub fn compress_tool_result(content: &str, tool_name: Option<&str>) -> String {
 /// handle is a pure function of the content hash, so the rewritten result is
 /// byte-stable across turns and never invalidates the provider cache prefix
 /// (#448). Passthrough / verbatim results (no real shrink) keep their bytes.
-fn attach_ccr(original: &str, result: String) -> String {
+fn attach_ccr(original: &str, result: String, audience: CcrAudience) -> String {
     if original.len() < ccr::MIN_TEE_BYTES
         || original.len().saturating_sub(result.len()) < ccr::MIN_TEE_BYTES
     {
         return result;
     }
     match ccr::persist(original) {
+        // Gateway (#702): the reader is a model behind a LiteLLM-style gateway.
+        // A local path is useless there; advertise the 24-hex retrieval hash in
+        // the exact shape the guardrail's marker regex captures. The hash is a
+        // pure function of the content, so the stub stays byte-stable (#498).
+        // The `[lean-ctx CCR:` prefix is deliberately NOT the savings-footer
+        // shape (`[lean-ctx: `): this line is functional content — a footer
+        // strip must never eat it.
+        Some(handle) if audience == CcrAudience::Gateway => {
+            let hash = ccr::litellm_hash(original);
+            format!(
+                "{result}\n[lean-ctx CCR: full original elided to save tokens — call the \
+                 retrieve tool with hash={hash}, or read {handle} locally]"
+            )
+        }
         Some(handle) => match ccr::inband_locator(&handle) {
             // In-band (#493): a remote agent can't read the local tee path, so
             // advertise the echo-able marker instead — echoing it splices the
@@ -496,6 +533,63 @@ mod tests {
             "the CCR handle is content-addressed, so the rewritten result must be \
              byte-identical across turns (provider cache prefix stays valid, #448)"
         );
+    }
+
+    /// Contract test for #702, pinned to LiteLLM's marker regex: the headroom
+    /// guardrail scans compressed text with `hash=([a-f0-9]{24})`
+    /// (BerriAI/litellm#31681). If our gateway stub ever drifts from that
+    /// shape, the CCR agentic loop silently stops firing — this test fails
+    /// first.
+    #[test]
+    fn gateway_stub_matches_litellm_marker_regex_and_retrieves() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        let log = big_compressible_log();
+        let out = compress_tool_result_gateway(&log, Some("bash"));
+        assert!(out.len() < log.len(), "gateway funnel must still compress");
+
+        // Exactly the pattern LiteLLM compiles (`_HASH_PATTERN`).
+        let litellm_regex = regex::Regex::new(r"hash=([a-f0-9]{24})").unwrap();
+        let captured = litellm_regex
+            .captures(&out)
+            .unwrap_or_else(|| panic!("gateway stub must carry a hash= marker: {out}"))
+            .get(1)
+            .unwrap()
+            .as_str();
+        assert_eq!(captured, ccr::litellm_hash(&log));
+
+        // The captured hash resolves through the /v1/retrieve/{hash} resolver
+        // to the verbatim original — the full guardrail round-trip.
+        let recovered = ccr::retrieve_litellm(captured).expect("captured hash must resolve");
+        assert!(
+            recovered.contains("processed item 0007 ok")
+                && recovered.contains("processed item 0400 ok"),
+            "retrieve must return the verbatim original"
+        );
+
+        // Byte-stable across calls (#498): the marker is content-addressed.
+        assert_eq!(out, compress_tool_result_gateway(&log, Some("bash")));
+
+        // The functional CCR line must survive the savings-footer strip that
+        // /v1/compress applies to every payload.
+        assert_eq!(
+            crate::core::protocol::strip_trailing_savings_footer(&out),
+            out
+        );
+    }
+
+    #[test]
+    fn gateway_stub_absent_for_passthrough_and_ctx_output() {
+        let _lock = crate::core::data_dir::test_env_lock();
+        // Below the compress floor: no marker.
+        assert!(!compress_tool_result_gateway("short output", Some("bash")).contains("hash="));
+        // lean-ctx tool output passes through verbatim — a gateway must never
+        // see a retrieval marker for content that was not rewritten.
+        let raw = (1..=120)
+            .map(|i| format!("Line {i:04}: lorem ipsum dolor sit amet consectetur"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let out = compress_tool_result_gateway(&raw, Some("ctx_shell"));
+        assert_eq!(out, raw);
     }
 
     #[test]

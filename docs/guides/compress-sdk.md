@@ -114,8 +114,18 @@ guardrails:
       guardrail: headroom          # LiteLLM's generic compress-sidecar hook
       mode: pre_call
       api_base: http://127.0.0.1:<lean-ctx-proxy-port>
+      api_key: <lean-ctx proxy token>   # sent as Bearer; see `lean-ctx proxy token`
       default_on: true
 ```
+
+The guardrail's **CCR agentic loop** works against lean-ctx too (#702): when a
+rewrite is lossy, the compressed text carries a `hash=<24-hex>` retrieval
+marker (the exact `hash=([a-f0-9]{24})` shape LiteLLM scans for). LiteLLM then
+injects its retrieve tool, and when the model asks for the original, LiteLLM
+calls `GET {api_base}/v1/retrieve/{hash}` — lean-ctx resolves the hash against
+the same content-addressed tee store that backs `ctx_expand`, and returns
+`{"original_content": "..."}`. Compression stays reversible end-to-end through
+the gateway, with no lean-ctx-specific client code.
 
 Because lean-ctx's output is deterministic (#498), the compressed prefix stays
 byte-stable across turns — provider prompt caching keeps working even behind

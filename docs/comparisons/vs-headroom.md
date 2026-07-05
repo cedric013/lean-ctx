@@ -54,6 +54,7 @@ stateless library has nothing to anchor such a timeline to.
 | Vercel AI SDK middleware | `leanCtxMiddleware` / `withLeanCtx` | `headroomMiddleware` / `withHeadroom` |
 | LiteLLM hook | `LeanCtxLiteLLMHandler` | `HeadroomCallback` |
 | LiteLLM proxy guardrail (`pre_call` sidecar) | Yes — `/v1/compress` speaks the guardrail wire contract (#700) | Yes — native `guardrail: headroom` (July 2026) |
+| LiteLLM CCR agentic loop (`hash=` markers + `/v1/retrieve/{hash}`) | Yes — regex-locked contract test (#702) | Yes (native) |
 | LangChain | `compress_messages` + retriever | wrap model |
 | ML / learned compression | No (deterministic by design) | Yes (Kompress, torch) |
 | JSON array crusher (row dedup) | `json_crush` — lossless + opt-in lossy with CCR, deterministic (#935) | Smart Crusher (statistical) |
@@ -156,10 +157,6 @@ agent case — compress far more. See [`bench/compress/`](../../bench/compress/R
   ships in LiteLLM ≥ v1.92, giving Headroom first-mover distribution on every
   LiteLLM gateway. (lean-ctx speaks the same sidecar wire contract — see below —
   so the channel is open to both; the mindshare is theirs.)
-- **CCR through the gateway** — LiteLLM's agentic loop natively understands
-  Headroom's `hash=<24-hex>` markers and `GET /v1/retrieve/{hash}`, so Headroom's
-  reversible path round-trips through LiteLLM today. lean-ctx's CCR markers
-  (`<lc_expand:HASH>`) are not yet mapped onto that contract (#700 follow-up).
 - **Learned compression** — the ML (Kompress) path can beat rule-based squeezing
   on free-form prose.
 - **More framework wrappers out of the box** — Agno, Strands, agent-wrap commands.
@@ -191,7 +188,6 @@ agent case — compress far more. See [`bench/compress/`](../../bench/compress/R
 - Want a pure-Python (or Node) library with no separate daemon for the inline path
 - Need learned/ML prose compression and accept a `torch` dependency
 - Use Agno / Strands or want the widest set of prebuilt framework wrappers
-- Need gateway-side CCR retrieval through LiteLLM's agentic loop today
 
 Running a LiteLLM gateway is **not** by itself a reason to pick either: the
 guardrail's `api_base` can point at a lean-ctx daemon just as well (deterministic,

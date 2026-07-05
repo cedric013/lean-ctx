@@ -31,6 +31,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   LiteLLM gateway is compressed deterministically (prompt-cache-safe, #498) —
   no client change, including Claude Code via `ANTHROPIC_BASE_URL`. Cookbook:
   `docs/guides/compress-sdk.md`.
+- **CCR round-trips through LiteLLM's agentic loop (GH #702).** A lossy
+  `/v1/compress` rewrite now advertises its retrieval hash in the guardrail's
+  regex-locked `hash=<24-hex>` form, and the new `GET /v1/retrieve/{hash}`
+  endpoint resolves it from the content-addressed tee store
+  (`{"original_content": …}`). LiteLLM (BerriAI/litellm#31681) injects its
+  retrieve tool on seeing the marker, validates the hash per call id, and
+  replays the model with the verbatim original — compression behind a LiteLLM
+  gateway is reversible end-to-end, with zero lean-ctx-specific client code.
+  The marker shape is pinned by a contract test so drift fails CI; the hash is
+  a pure function of the content, so stubs stay byte-stable (#498). The
+  existing local handles (`<lc_expand:…>`, tee paths, `/v1/references/{id}`)
+  are unchanged.
 - **Persistent per-extension grammar telemetry (GH #690 Phase 2 groundwork).**
   The tiering cut needs to know which of the ~27 static tree-sitter grammars
   actually earn their binary bytes, but the only signal was a pair of
