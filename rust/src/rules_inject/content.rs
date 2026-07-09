@@ -17,8 +17,11 @@ use crate::core::rules_canonical::{self as rc, Wrapper};
 /// homes and the real `~/.cursor` behave identically.
 pub(super) fn cursor_wrapper_for_mdc(mdc_path: &Path) -> Wrapper {
     let covered = mdc_path
-        .parent()
-        .and_then(Path::parent)
+        .ancestors()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name == std::ffi::OsStr::new(".cursor"))
+        })
         .is_some_and(|cursor_dir| {
             crate::core::rules_channel::cursor_hooks_json_covers(&cursor_dir.join("hooks.json"))
         });
