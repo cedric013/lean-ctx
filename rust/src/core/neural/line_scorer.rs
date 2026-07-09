@@ -294,7 +294,10 @@ impl NeuralLineScorer {
                 return 0.5;
             }
         };
-        let mut _guard = self.session.lock().unwrap();
+        let mut _guard = self
+            .session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let outputs = match _guard.run(ort::inputs![self.input_name.as_str() => tensor]) {
             Ok(o) => o,
             Err(e) => {

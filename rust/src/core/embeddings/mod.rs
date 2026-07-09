@@ -366,7 +366,10 @@ impl EmbeddingEngine {
                         input.token_type_ids.iter().map(|&x| x as i64).collect();
                     let type_array = ndarray::Array2::from_shape_vec((1, seq_len), type_vec)?;
                     let type_tensor = ort::value::Tensor::from_array(type_array)?;
-                    let mut _guard = self.session.lock().unwrap();
+                    let mut _guard = self
+                        .session
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let outputs = _guard.run(ort::inputs![
                         input_ids.as_str() => ids_tensor,
                         attention_mask.as_str() => mask_tensor,
@@ -376,7 +379,10 @@ impl EmbeddingEngine {
                         outputs[self.output_name.as_str()].try_extract_tensor::<f32>()?;
                     data.to_vec()
                 } else {
-                    let mut _guard = self.session.lock().unwrap();
+                    let mut _guard = self
+                        .session
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let outputs = _guard.run(ort::inputs![
                         input_ids.as_str() => ids_tensor,
                         attention_mask.as_str() => mask_tensor,
@@ -396,7 +402,10 @@ impl EmbeddingEngine {
                 let offsets_array = ndarray::Array1::from_shape_vec(1, vec![0i64])?;
                 let ids_tensor = ort::value::Tensor::from_array(ids_array)?;
                 let offsets_tensor = ort::value::Tensor::from_array(offsets_array)?;
-                let mut _guard = self.session.lock().unwrap();
+                let mut _guard = self
+                    .session
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let outputs = _guard.run(ort::inputs![
                     input_ids.as_str() => ids_tensor,
                     offsets.as_str() => offsets_tensor,
@@ -460,7 +469,10 @@ impl EmbeddingEngine {
                 let hidden = if let Some(type_id) = token_type_ids {
                     let type_array = ndarray::Array2::from_shape_vec((batch, max_len), type_data)?;
                     let type_tensor = ort::value::Tensor::from_array(type_array)?;
-                    let mut _guard = self.session.lock().unwrap();
+                    let mut _guard = self
+                        .session
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let outputs = _guard.run(ort::inputs![
                         input_id.as_str() => ids_tensor,
                         mask_id.as_str() => mask_tensor,
@@ -470,7 +482,10 @@ impl EmbeddingEngine {
                         outputs[self.output_name.as_str()].try_extract_tensor::<f32>()?;
                     data.to_vec()
                 } else {
-                    let mut _guard = self.session.lock().unwrap();
+                    let mut _guard = self
+                        .session
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     let outputs = _guard.run(ort::inputs![
                         input_id.as_str() => ids_tensor,
                         mask_id.as_str() => mask_tensor,
@@ -510,7 +525,10 @@ impl EmbeddingEngine {
                 let ids_tensor = ort::value::Tensor::from_array(ids_array)?;
                 let offsets_tensor = ort::value::Tensor::from_array(offsets_array)?;
 
-                let mut _guard = self.session.lock().unwrap();
+                let mut _guard = self
+                    .session
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let outputs = _guard.run(ort::inputs![
                     input_ids.as_str() => ids_tensor,
                     offsets.as_str() => offsets_tensor,
