@@ -239,7 +239,7 @@ toml = "1.1"
 toml_edit = "0.25"
 similar = "3.1"
 flate2 = "1.1"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 tree-sitter = { version = "0.26", optional = true }
 tree-sitter-rust = { version = "0.24", optional = true }
 tree-sitter-typescript = { version = "0.23", optional = true }
@@ -437,6 +437,9 @@ implicit_hasher = "allow"
 # Set `debug = 2` in a local profile override if you need to step-debug.
 [profile.dev]
 debug = "line-tables-only"
+# Keeps DWARF in per-object files instead of merging into the linked binary
+# on every rebuild — cuts incremental link time on Linux.
+split-debuginfo = "unpacked"
 
 [profile.release]
 opt-level = "z"
