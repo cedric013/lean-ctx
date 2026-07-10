@@ -845,8 +845,9 @@ fn record_parse_error(err: Option<String>) {
 ///
 /// Sensitive = anything that can widen lean-ctx's own boundaries or steer the
 /// agent: the shell allowlist, path-jail roots, proxy upstreams, command
-/// aliases, network passthrough, rules scope/injection, tool disabling and
-/// permission inheritance. Comfort/perf knobs are intentionally NOT listed.
+/// aliases, network passthrough, rules scope/injection, tool surface control
+/// (profile/enabled-list/categories, disabling) and permission inheritance.
+/// Comfort/perf knobs are intentionally NOT listed.
 fn strip_sensitive_overrides(local: &mut Config) -> Vec<&'static str> {
     let mut withheld: Vec<&'static str> = Vec::new();
 
@@ -904,6 +905,18 @@ fn strip_sensitive_overrides(local: &mut Config) -> Vec<&'static str> {
     if !local.disabled_tools.is_empty() {
         local.disabled_tools.clear();
         withheld.push("disabled_tools");
+    }
+    if local.tool_profile.is_some() {
+        local.tool_profile = None;
+        withheld.push("tool_profile");
+    }
+    if !local.tools_enabled.is_empty() {
+        local.tools_enabled.clear();
+        withheld.push("tools_enabled");
+    }
+    if !local.default_tool_categories.is_empty() {
+        local.default_tool_categories.clear();
+        withheld.push("default_tool_categories");
     }
 
     withheld

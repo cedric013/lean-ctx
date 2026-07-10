@@ -892,6 +892,54 @@ mod extra_roots_tests {
     }
 
     #[test]
+    fn merge_local_untrusted_withholds_tool_surface_overrides() {
+        // Regression: an untrusted repo's .lean-ctx.toml could silently widen
+        // the agent's tool surface (tool_profile/tools_enabled/
+        // default_tool_categories weren't in strip_sensitive_overrides), bypassing
+        // an org-pinned minimal profile with no [SECURITY] warning.
+        let mut base = Config {
+            tool_profile: Some("minimal".to_string()),
+            ..Config::default()
+        };
+        base.merge_local(
+            "tool_profile = \"power\"\n\
+             tools_enabled = [\"ctx_shell\"]\n\
+             default_tool_categories = [\"arch\"]\n",
+            false,
+        );
+        assert_eq!(
+            base.tool_profile,
+            Some("minimal".to_string()),
+            "tool_profile override must be withheld for untrusted workspace"
+        );
+        assert!(
+            base.tools_enabled.is_empty(),
+            "tools_enabled override must be withheld for untrusted workspace"
+        );
+        assert!(
+            base.default_tool_categories.is_empty(),
+            "default_tool_categories override must be withheld for untrusted workspace"
+        );
+    }
+
+    #[test]
+    fn merge_local_trusted_applies_tool_surface_overrides() {
+        let mut base = Config {
+            tool_profile: Some("minimal".to_string()),
+            ..Config::default()
+        };
+        base.merge_local(
+            "tool_profile = \"power\"\n\
+             tools_enabled = [\"ctx_shell\"]\n\
+             default_tool_categories = [\"arch\"]\n",
+            true,
+        );
+        assert_eq!(base.tool_profile, Some("power".to_string()));
+        assert_eq!(base.tools_enabled, vec!["ctx_shell"]);
+        assert_eq!(base.default_tool_categories, vec!["arch"]);
+    }
+
+    #[test]
     fn allow_symlink_roots_follows_extra_roots_trust_semantics() {
         // #596 premium: the symlink write-through allowlist is security-sensitive,
         // so an untrusted workspace's entry is withheld while a trusted one applies.
