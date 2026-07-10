@@ -121,10 +121,16 @@ mod tests {
             root,
         )
         .expect("expands");
-        assert_eq!(
-            out["LEAN_MD_SKILLS_DIR"],
-            "/store/skills/@dasTholo__lean-md-skills/0.2.0"
-        );
+        // Segment names are explicit here (only the separator comes from the
+        // platform): `Path::join` is production's own separator, so this
+        // asserts the real invariant instead of duplicating the code under test.
+        let expected = Path::new("/store")
+            .join("skills")
+            .join("@dasTholo__lean-md-skills")
+            .join("0.2.0")
+            .display()
+            .to_string();
+        assert_eq!(out["LEAN_MD_SKILLS_DIR"], expected);
     }
 
     #[test]
@@ -140,8 +146,20 @@ mod tests {
             root,
         )
         .expect("expands");
-        assert_eq!(out["ONE_DIR"], "/store/skills/@ns__one/1.0.0");
-        assert_eq!(out["TWO_DIR"], "/store/skills/@ns__two/2.3.4");
+        let expected_one = Path::new("/store")
+            .join("skills")
+            .join("@ns__one")
+            .join("1.0.0")
+            .display()
+            .to_string();
+        let expected_two = Path::new("/store")
+            .join("skills")
+            .join("@ns__two")
+            .join("2.3.4")
+            .display()
+            .to_string();
+        assert_eq!(out["ONE_DIR"], expected_one);
+        assert_eq!(out["TWO_DIR"], expected_two);
     }
 
     #[test]

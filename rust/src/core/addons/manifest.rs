@@ -654,9 +654,15 @@ version_req = "^0.2"
             std::path::Path::new("/store"),
         )
         .expect("expands against manifest.dependencies");
-        assert_eq!(
-            out["LEAN_MD_SKILLS_DIR"],
-            "/store/skills/@dasTholo__lean-md-skills/0.2.0"
-        );
+        // Segment names are explicit here (only the separator comes from the
+        // platform): `Path::join` is production's own separator, so this
+        // asserts the real invariant instead of duplicating the code under test.
+        let expected = std::path::Path::new("/store")
+            .join("skills")
+            .join("@dasTholo__lean-md-skills")
+            .join("0.2.0")
+            .display()
+            .to_string();
+        assert_eq!(out["LEAN_MD_SKILLS_DIR"], expected);
     }
 }
