@@ -23,9 +23,11 @@ fn repo_root() -> PathBuf {
 ///   - `rust/src/core/addons/publish.rs`             — addon-pack publish tests use "lean-md" as example addon name
 ///   - `rust/src/core/context_package/skills.rs`     — skills-pack test uses "@das-tholo/lean-md-skills" example name
 ///   - `rust/src/core/context_package/verify.rs`     — package-verify fixtures use "lean-md" as example addon name
+///   - `rust/src/cli/addon_deps.rs`               — self-dependency guard tests use "@dasTholo/lean-md" as scoped addon slug
+///   - `rust/src/core/addons/pack_env.rs`         — {pack_dir:} expander tests use "@dasTholo/lean-md-skills" example pack
 ///
 /// The reverse-cut removed the in-tree lmd ENGINE (was entirely in src/lmd/, now deleted).
-/// Only addon-name/slug references remain, in exactly these seven survivor paths.
+/// Only addon-name/slug references remain, in exactly these nine survivor paths.
 /// `ctx_read.rs` is deliberately NOT among them: after the reverse-cut it carries
 /// no lmd knowledge at all, so the gate scans it like any other file.
 /// Any NEW lmd code line in any other file will be caught by this gate.
@@ -52,6 +54,8 @@ fn no_lmd_symbols_outside_docs_and_hook() {
             ":!rust/src/core/addons/publish.rs",
             ":!rust/src/core/context_package/skills.rs",
             ":!rust/src/core/context_package/verify.rs",
+            ":!rust/src/cli/addon_deps.rs",
+            ":!rust/src/core/addons/pack_env.rs",
         ])
         .output()
         .expect("git grep failed to run");
