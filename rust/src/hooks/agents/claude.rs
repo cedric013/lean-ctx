@@ -123,7 +123,9 @@ pub(crate) fn install_claude_permissions_deny_replace(home: &std::path::Path) {
         return;
     };
 
-    let deny_tools = ["Read", "Grep", "Glob", "Bash"];
+    // Bash intentionally NOT denied: permissions.deny blocks globally including
+    // plugin commands (codex-companion etc.). PreToolUse hook handles agent Bash. (GH #799)
+    let deny_tools = ["Read", "Grep", "Glob"];
     let mut changed = false;
     for tool in deny_tools {
         let val = serde_json::Value::String(tool.to_string());
@@ -133,13 +135,20 @@ pub(crate) fn install_claude_permissions_deny_replace(home: &std::path::Path) {
         }
     }
 
+    // Remove stale "Bash" entry left by older versions (GH #799).
+    let bash_val = serde_json::Value::String("Bash".to_string());
+    if let Some(pos) = arr.iter().position(|v| v == &bash_val) {
+        arr.remove(pos);
+        changed = true;
+    }
+
     if changed {
         if let Ok(out) = serde_json::to_string_pretty(&json) {
             let _ = std::fs::write(&settings_path, out);
         }
         if !mcp_server_quiet_mode() {
             eprintln!(
-                "  \x1b[32m✓\x1b[0m Claude Code: denied native Read/Grep/Glob/Bash (Replace mode)"
+                "  \x1b[32m✓\x1b[0m Claude Code: denied native Read/Grep/Glob (Replace mode)"
             );
         }
     }
@@ -1043,7 +1052,8 @@ mod tests {
         assert!(deny.contains(&serde_json::json!("Read")));
         assert!(deny.contains(&serde_json::json!("Grep")));
         assert!(deny.contains(&serde_json::json!("Glob")));
-        assert!(deny.contains(&serde_json::json!("Bash")));
+        // Bash must NOT be in permissions.deny — it blocks plugins (GH #799)
+        assert!(!deny.contains(&serde_json::json!("Bash")));
         // Original content preserved
         assert!(json.get("hooks").is_some());
     }
@@ -1070,5 +1080,37 @@ mod tests {
         // Each tool should appear exactly once
         let read_count = deny.iter().filter(|v| v.as_str() == Some("Read")).count();
         assert_eq!(read_count, 1, "idempotent: Read must appear exactly once");
+    }
+
+    #[test]
+    fn replace_mode_removes_stale_bash_deny() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join(".claude")).unwrap();
+
+        // Simulate a settings.json left by an older lean-ctx version
+        let settings = home.join(".claude").join("settings.json");
+        std::fs::write(
+            &settings,
+            r#"{"permissions": {"deny": ["Read", "Grep", "Glob", "Bash"]}}"#,
+        )
+        .unwrap();
+
+        install_claude_permissions_deny_replace(home);
+
+        let content = std::fs::read_to_string(&settings).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&content).unwrap();
+        let deny = json
+            .pointer("/permissions/deny")
+            .and_then(|d| d.as_array())
+            .unwrap();
+
+        assert!(deny.contains(&serde_json::json!("Read")));
+        assert!(deny.contains(&serde_json::json!("Grep")));
+        assert!(deny.contains(&serde_json::json!("Glob")));
+        assert!(
+            !deny.contains(&serde_json::json!("Bash")),
+            "stale Bash must be removed (GH #799)"
+        );
     }
 }

@@ -20,9 +20,8 @@ fn apply_harden(level: &str) {
     println!();
 
     if level == "hard" {
-        println!("  Hard mode = Replace mode: denying native Read/Grep/Glob/Bash across all IDEs.");
+        println!("  Hard mode = Replace mode: denying native Read/Grep/Glob across all IDEs.");
         println!();
-        // Trigger a full Replace-mode setup for all detected agents
         let opts = crate::setup::SetupOptions {
             non_interactive: true,
             yes: true,
@@ -44,9 +43,8 @@ fn apply_harden(level: &str) {
         applied.push("Set LEAN_CTX_HARDEN=1 in MCP configs");
     }
 
-    if let Some(msg) = apply_claude_permissions_deny() {
-        applied.push("Claude Code: added Bash to permissions.deny");
-        println!("  {msg}");
+    if cleanup_claude_stale_bash_deny() {
+        applied.push("Claude Code: removed stale Bash from permissions.deny (GH #799)");
     }
 
     if applied.is_empty() {
@@ -128,37 +126,43 @@ fn remove_env_from_mcp_configs() {
     }
 }
 
-fn apply_claude_permissions_deny() -> Option<&'static str> {
-    let home = dirs::home_dir()?;
-    let settings_path = home.join(".claude").join("settings.json");
-
-    let mut json = if settings_path.exists() {
-        let content = std::fs::read_to_string(&settings_path).ok()?;
-        crate::core::jsonc::parse_jsonc(&content).ok()?
-    } else {
-        serde_json::json!({})
+/// Remove stale "Bash" from Claude Code's `permissions.deny` (GH #799).
+///
+/// Older versions added "Bash" here, which blocks ALL bash usage globally —
+/// including plugin commands (e.g. codex-companion). The PreToolUse hook
+/// (`lean-ctx hook deny`) already blocks agent-level native Bash, so the
+/// permissions.deny entry is unnecessary and harmful.
+fn cleanup_claude_stale_bash_deny() -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
     };
-
-    let obj = json.as_object_mut()?;
-
-    let permissions = obj
-        .entry("permissions")
-        .or_insert_with(|| serde_json::json!({}));
-    let deny = permissions
-        .as_object_mut()?
-        .entry("deny")
-        .or_insert_with(|| serde_json::json!([]));
-
-    if let Some(arr) = deny.as_array_mut() {
-        let bash_str = serde_json::Value::String("Bash".to_string());
-        if !arr.contains(&bash_str) {
-            arr.push(bash_str);
-        }
+    let settings_path = home.join(".claude").join("settings.json");
+    if !settings_path.exists() {
+        return false;
     }
 
-    let out = serde_json::to_string_pretty(&json).ok()?;
-    std::fs::write(&settings_path, out).ok()?;
-    Some("Added 'Bash' to ~/.claude/settings.json permissions.deny")
+    let Ok(content) = std::fs::read_to_string(&settings_path) else {
+        return false;
+    };
+    let Ok(mut json) = crate::core::jsonc::parse_jsonc(&content) else {
+        return false;
+    };
+
+    let removed = if let Some(deny) = json
+        .pointer_mut("/permissions/deny")
+        .and_then(|d| d.as_array_mut())
+    {
+        let before = deny.len();
+        deny.retain(|v| v.as_str() != Some("Bash"));
+        deny.len() < before
+    } else {
+        false
+    };
+
+    if removed && let Ok(out) = serde_json::to_string_pretty(&json) {
+        let _ = std::fs::write(&settings_path, out);
+    }
+    removed
 }
 
 fn remove_claude_permissions_deny() {
