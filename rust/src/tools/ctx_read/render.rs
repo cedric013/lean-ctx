@@ -137,25 +137,14 @@ pub(crate) fn format_anchored_output(
 pub(crate) fn format_anchored_output_window(
     file_ref: &str,
     short: &str,
-    content: &str,
+    body: &str,
     line_count: usize,
     window: Option<(usize, usize)>,
 ) -> (String, usize) {
     let _mode_guard = crate::core::savings_footer::ModeGuard::new("anchored");
-    let (body, start_line, range_suffix) = match window {
-        Some((start, end)) => {
-            let lines: Vec<&str> = content.lines().collect();
-            let total = lines.len();
-            let start = start.max(1).min(total.max(1));
-            let end = end.min(total);
-            let body = if total > 0 && end >= start {
-                lines[start - 1..end].join("\n")
-            } else {
-                String::new()
-            };
-            (body, start, format!(" lines:{start}-{end}"))
-        }
-        None => (content.to_string(), 1, String::new()),
+    let (start_line, range_suffix) = match window {
+        Some((start, end)) => (start, format!(" lines:{start}-{end}")),
+        None => (1, String::new()),
     };
     let header = if crate::core::protocol::meta_visible() && !file_ref.is_empty() {
         format!(
@@ -166,7 +155,7 @@ pub(crate) fn format_anchored_output_window(
             "{short} {line_count}L{range_suffix} [anchored: N:hh|line → edit via ctx_patch]"
         )
     };
-    let annotated = crate::core::anchor::annotate(&body, start_line);
+    let annotated = crate::core::anchor::annotate(body, start_line);
     let output = format!("{header}\n{annotated}");
     let sent = count_tokens(&output);
     (output, sent)
@@ -305,7 +294,8 @@ pub(crate) fn process_mode_tuned(
         mode if mode.starts_with("anchored:") => {
             let range_str = &mode[9..];
             let (start, end) = parse_anchored_range(range_str, line_count);
-            format_anchored_output_window(file_ref, short, content, line_count, Some((start, end)))
+            let (body, start, end) = slice_window(content, start, end);
+            format_anchored_output_window(file_ref, short, &body, line_count, Some((start, end)))
         }
         "signatures" => render_signatures(content, ctx),
         "map" => render_map(content, ctx),
@@ -533,6 +523,22 @@ fn parse_anchored_range(range_str: &str, total: usize) -> (usize, usize) {
         let start = range_str.trim().parse::<usize>().unwrap_or(1).max(1);
         (start, total)
     }
+}
+
+/// Slices `content` to 1-based inclusive `[start, end]`, clamped to the
+/// file's real bounds. Returns the joined body and the clamped `(start, end)`
+/// actually served — shared by the in-memory `anchored:N-M` render path.
+fn slice_window(content: &str, start: usize, end: usize) -> (String, usize, usize) {
+    let lines: Vec<&str> = content.lines().collect();
+    let total = lines.len();
+    let start = start.max(1).min(total.max(1));
+    let end = end.min(total);
+    let body = if total > 0 && end >= start {
+        lines[start - 1..end].join("\n")
+    } else {
+        String::new()
+    };
+    (body, start, end)
 }
 
 #[cfg(test)]
