@@ -78,6 +78,13 @@ impl Unwrapped {
 /// Returns `None` for anything that is not unmistakably host-generated
 /// scaffolding (see the module docs for why detection is tight).
 pub(crate) fn unwrap_agent_wrapper(command: &str) -> Option<Unwrapped> {
+    // #745 v4: sandbox-exec wraps the whole inner command in
+    // `/bin/{zsh,bash} -c '<inner>'`. Strip this outer shell invocation
+    // before detection so the trailing quote does not break pwd detection.
+    if let Some(inner) = strip_outer_shell_invocation(command) {
+        return unwrap_agent_wrapper(&inner);
+    }
+
     // Path A: redirect-based cwd snapshot (existing #595 fix, unchanged).
     let cwd_snapshot = find_cwd_snapshot(command);
     if cwd_snapshot.is_some() {
@@ -243,6 +250,34 @@ fn decode_shell_word(s: &str) -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Strip an outer `/bin/{zsh,bash,sh} -c '<inner>'` invocation that
+/// `sandbox-exec` may wrap around the real command (#745 v4). Returns the
+/// extracted inner command, or `None` if the command is not this shape.
+fn strip_outer_shell_invocation(command: &str) -> Option<String> {
+    let trimmed = command.trim();
+    // Match common shell paths: /bin/zsh, /usr/bin/zsh, /bin/bash, /bin/sh, zsh, bash
+    let rest = trimmed
+        .strip_prefix("/bin/zsh")
+        .or_else(|| trimmed.strip_prefix("/usr/bin/zsh"))
+        .or_else(|| trimmed.strip_prefix("/bin/bash"))
+        .or_else(|| trimmed.strip_prefix("/usr/bin/bash"))
+        .or_else(|| trimmed.strip_prefix("/bin/sh"))
+        .or_else(|| trimmed.strip_prefix("/usr/bin/sh"))?;
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix("-c")?;
+    let rest = rest.trim_start();
+    // The argument must be a single-quoted or double-quoted string
+    let quote = rest.as_bytes().first().copied();
+    if matches!(quote, Some(b'\'' | b'"'))
+        && rest.len() >= 2
+        && rest.as_bytes().last().copied() == quote
+    {
+        Some(rest[1..rest.len() - 1].to_string())
+    } else {
+        None
+    }
 }
 
 /// True when the command prefix (before any `eval`) contains agent-host scaffold
@@ -561,5 +596,49 @@ mod tests {
         let u = unwrap_agent_wrapper(cmd).expect("must detect unquoted eval + pwd -");
         assert_eq!(u.inner, "pwd");
         assert!(u.stdout_cwd);
+    }
+
+    // --- #745 v4: sandbox-exec outer shell wrapper ---
+
+    #[test]
+    fn unwraps_sandbox_exec_zsh_bare_pwd() {
+        let cmd = "/bin/zsh -c 'setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && eval echo < /dev/null && pwd'";
+        let u = unwrap_agent_wrapper(cmd).expect("must unwrap sandbox-exec wrapper");
+        assert_eq!(u.inner, "echo");
+        assert!(u.stdout_cwd);
+        assert_eq!(u.rebuild(), "echo && pwd");
+    }
+
+    #[test]
+    fn unwraps_sandbox_exec_zsh_pwd_dash_p() {
+        let cmd = "/bin/zsh -c 'setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && eval 'echo hi' < /dev/null && pwd -P'";
+        let u = unwrap_agent_wrapper(cmd).expect("must unwrap pwd -P variant");
+        assert!(u.stdout_cwd);
+    }
+
+    #[test]
+    fn unwraps_sandbox_exec_bash_redirect() {
+        let cmd = "/bin/bash -c 'shopt -u extglob 2>/dev/null || true && eval 'git status' && pwd -P >| /tmp/claude-abcd-cwd'";
+        let u = unwrap_agent_wrapper(cmd).expect("must unwrap bash redirect variant");
+        assert_eq!(u.cwd_snapshot.as_deref(), Some("/tmp/claude-abcd-cwd"));
+    }
+
+    #[test]
+    fn unwraps_usr_bin_zsh_sandbox() {
+        let cmd =
+            "/usr/bin/zsh -c 'setopt NO_EXTENDED_GLOB 2>/dev/null || true && eval 'ls' && pwd'";
+        let u = unwrap_agent_wrapper(cmd).expect("must unwrap /usr/bin/zsh");
+        assert!(u.stdout_cwd);
+    }
+
+    #[test]
+    fn rejects_non_shell_command_c() {
+        assert!(unwrap_agent_wrapper("/bin/python3 -c 'print(1)'").is_none());
+    }
+
+    #[test]
+    fn strip_outer_does_not_recurse_infinitely() {
+        // A shell invocation wrapping a non-wrapper command must return None
+        assert!(unwrap_agent_wrapper("/bin/zsh -c 'echo hello'").is_none());
     }
 }

@@ -3,6 +3,37 @@
 All notable changes to lean-ctx are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [3.9.9] — 2026-07-14
+
+### Fixed
+- **CRITICAL: Worktree data-loss prevention for `ctx_patch replace_symbol` (#803).**
+  When both `name_path` and `path` are provided, the resolved symbol location
+  is now verified against the caller's explicit path via `canonicalize()`. A
+  mismatch (e.g. main checkout vs linked git worktree) returns
+  `ERROR: WORKTREE_MISMATCH` instead of silently writing to the wrong file.
+- **CRITICAL: Agent wrapper detection for sandbox-exec wrapped commands (#745).**
+  `strip_outer_shell_invocation` now recursively removes `/bin/{zsh,bash,sh} -c '...'`
+  wrappers before detecting the inner agent command. Fixes cases where macOS
+  `sandbox-exec` added an outer shell invocation that broke `has_trailing_bare_pwd`
+  detection due to a trailing quote character.
+- **Compression-marker guard for Write/Edit hooks (#805).**
+  `PreToolUse` deny handler now intercepts Write, Edit, StrReplace, and MultiEdit
+  payloads containing `[lean-ctx:` compression markers and blocks the operation
+  before compressed output is written to disk. Escape hatch:
+  `LEAN_CTX_ALLOW_COMPRESSED_WRITE=1`. Fixed false-positive for Markdown links
+  like `[lean-ctx docs](url)` by removing the overly broad `[lean-ctx ` pattern.
+- **Hermes rules marker-based updates (#802).**
+  `install_hermes_rules` now uses `marked_block::upsert` with `<!-- lean-ctx -->`
+  markers instead of a substring check, ensuring rules update correctly across
+  versions while preserving user content in `HERMES.md`.
+- **CODEX_THREAD_ID forwarding via parent-env probe (#800).**
+  When no captured agent runtime variables exist, `load()` now probes the parent
+  process environment (`/proc/<ppid>/environ` on Linux, `ps eww` on macOS) for
+  forwardable `CODEX_*`/`CLAUDE_*` variables. Filtered by prefix allowlist +
+  credential exclusion, persisted with 0o600 permissions and 2h TTL.
+- **Tool health hint typo (PR #804).** Config key in the "consider disabling"
+  hint corrected from `tools_disabled` to `disabled_tools`.
+
 ## [3.9.8] — 2026-07-12
 
 ### Added
