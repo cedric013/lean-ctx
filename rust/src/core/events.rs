@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 const RING_CAPACITY: usize = 1000;
 const JSONL_MAX_LINES: usize = 10_000;
+const EVENT_ID_BLOCK_SIZE: u64 = 1_024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LeanCtxEvent {
@@ -106,20 +108,18 @@ pub enum EventKind {
 }
 
 struct EventBus {
-    seq: AtomicU64,
     ring: Mutex<VecDeque<LeanCtxEvent>>,
 }
 
 impl EventBus {
     fn new() -> Self {
         Self {
-            seq: AtomicU64::new(0),
             ring: Mutex::new(VecDeque::with_capacity(RING_CAPACITY)),
         }
     }
 
     fn emit(&self, kind: EventKind) -> u64 {
-        let id = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let id = next_event_id();
         let event = LeanCtxEvent {
             id,
             timestamp: chrono::Local::now()
@@ -171,6 +171,136 @@ fn jsonl_path() -> Option<std::path::PathBuf> {
     crate::core::paths::state_dir()
         .ok()
         .map(|d| d.join("events.jsonl"))
+}
+
+fn event_sequence_path() -> Option<std::path::PathBuf> {
+    crate::core::paths::state_dir()
+        .ok()
+        .map(|d| d.join("events.seq"))
+}
+
+fn max_event_id_in_journal(path: &std::path::Path) -> u64 {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return 0;
+    };
+    content
+        .lines()
+        .filter_map(|line| serde_json::from_str::<LeanCtxEvent>(line).ok())
+        .map(|event| event.id)
+        .max()
+        .unwrap_or(0)
+}
+
+fn parse_sequence_record(record: &str) -> Option<u64> {
+    let (value, checksum) = record.trim().split_once(':')?;
+    let value = value.parse::<u64>().ok()?;
+    let checksum = checksum.parse::<u64>().ok()?;
+    (checksum == !value).then_some(value)
+}
+
+fn read_persisted_sequence(path: &std::path::Path) -> Option<u64> {
+    let content = std::fs::read_to_string(path).ok()?;
+    content.lines().rev().find_map(parse_sequence_record)
+}
+
+fn sequence_record(value: u64) -> String {
+    format!("{value}:{}", !value)
+}
+
+fn reserve_event_id_block_at(
+    sequence_path: &std::path::Path,
+    journal_path: &std::path::Path,
+    block_size: u64,
+) -> std::io::Result<(u64, u64)> {
+    use fs2::FileExt;
+
+    if block_size == 0 {
+        return Err(std::io::Error::other("event id block must not be empty"));
+    }
+    if let Some(parent) = sequence_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Lock a stable companion inode. The append-only sequence journal can be
+    // repaired without allowing another process to bypass the lock.
+    let lock_path = sequence_path.with_extension("seq.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)?;
+    lock.lock_exclusive()?;
+
+    let result = (|| {
+        let persisted = read_persisted_sequence(sequence_path);
+        let baseline = persisted.unwrap_or_else(|| {
+            max_event_id_in_journal(journal_path).max(max_event_id_in_journal(
+                &journal_path.with_extension("jsonl.old"),
+            ))
+        });
+        let first = baseline
+            .checked_add(1)
+            .ok_or_else(|| std::io::Error::other("event id space exhausted"))?;
+        let last = baseline
+            .checked_add(block_size)
+            .ok_or_else(|| std::io::Error::other("event id space exhausted"))?;
+
+        let mut sequence = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(sequence_path)?;
+        let mut record = sequence_record(last).into_bytes();
+        record.push(b'\n');
+        sequence.write_all(&record)?;
+        sequence.sync_data()?;
+        Ok((first, last))
+    })();
+
+    let _ = FileExt::unlock(&lock);
+    result
+}
+
+fn next_event_id_at(
+    sequence_path: &std::path::Path,
+    journal_path: &std::path::Path,
+) -> std::io::Result<u64> {
+    reserve_event_id_block_at(sequence_path, journal_path, 1).map(|(first, _)| first)
+}
+
+fn next_event_id() -> u64 {
+    #[derive(Default)]
+    struct LocalBlock {
+        next: u64,
+        last: u64,
+    }
+
+    static BLOCK: OnceLock<Mutex<LocalBlock>> = OnceLock::new();
+    static FALLBACK: AtomicU64 = AtomicU64::new(0);
+    if !is_test_environment()
+        && let Some((sequence, journal)) = event_sequence_path().zip(jsonl_path())
+    {
+        let mut block = BLOCK
+            .get_or_init(|| Mutex::new(LocalBlock::default()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if block.next <= block.last && block.next != 0 {
+            let id = block.next;
+            block.next = block.next.saturating_add(1);
+            return id;
+        }
+        if let Ok((first, last)) =
+            reserve_event_id_block_at(&sequence, &journal, EVENT_ID_BLOCK_SIZE)
+        {
+            block.next = first.saturating_add(1);
+            block.last = last;
+            return first;
+        }
+    }
+
+    let base = u64::try_from(chrono::Utc::now().timestamp_millis())
+        .unwrap_or_default()
+        .saturating_mul(1_000);
+    base.saturating_add(FALLBACK.fetch_add(1, Ordering::Relaxed))
 }
 
 fn is_test_environment() -> bool {
@@ -511,6 +641,17 @@ mod tests {
         }
     }
 
+    fn test_event(id: u64) -> LeanCtxEvent {
+        LeanCtxEvent {
+            id,
+            timestamp: "2026-07-15T12:00:00.000".to_string(),
+            kind: EventKind::CacheHit {
+                path: "event-id-test.rs".to_string(),
+                saved_tokens: 1,
+            },
+        }
+    }
+
     #[test]
     fn concurrent_processes_append_complete_json_lines() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -593,6 +734,105 @@ mod tests {
                 .lines()
                 .all(|line| serde_json::from_str::<LeanCtxEvent>(line).is_ok()),
             "replacement journal must contain complete JSON lines"
+        );
+    }
+
+
+    #[test]
+    fn persistent_event_id_writer_child() {
+        let Some(dir) = std::env::var_os("__LEAN_CTX_EVENT_ID_TEST_DIR") else {
+            return;
+        };
+        let writer = std::env::var("__LEAN_CTX_EVENT_ID_TEST_WRITER").expect("writer id");
+        let dir = std::path::PathBuf::from(dir);
+        let sequence = dir.join("events.seq");
+        let journal = dir.join("events.jsonl");
+        let (first, last) =
+            reserve_event_id_block_at(&sequence, &journal, 100).expect("reserve event id block");
+        let ids: Vec<String> = (first..=last).map(|id| id.to_string()).collect();
+        std::fs::write(dir.join(format!("writer-{writer}.ids")), ids.join("\n"))
+            .expect("write allocated ids");
+    }
+
+    #[test]
+    fn persistent_event_id_bootstraps_above_existing_journals() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let sequence = dir.path().join("events.seq");
+        let journal = dir.path().join("events.jsonl");
+        let old = journal.with_extension("jsonl.old");
+        std::fs::write(
+            &journal,
+            format!("{}\n", serde_json::to_string(&test_event(41)).unwrap()),
+        )
+        .unwrap();
+        std::fs::write(
+            &old,
+            format!("{}\n", serde_json::to_string(&test_event(73)).unwrap()),
+        )
+        .unwrap();
+
+        assert_eq!(next_event_id_at(&sequence, &journal).unwrap(), 74);
+        assert_eq!(next_event_id_at(&sequence, &journal).unwrap(), 75);
+    }
+
+    #[test]
+    fn corrupt_sequence_recovers_above_existing_journal() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let sequence = dir.path().join("events.seq");
+        let journal = dir.path().join("events.jsonl");
+        std::fs::write(&sequence, "76:broken").unwrap();
+        std::fs::write(
+            &journal,
+            format!("{}\n", serde_json::to_string(&test_event(80)).unwrap()),
+        )
+        .unwrap();
+
+        assert_eq!(next_event_id_at(&sequence, &journal).unwrap(), 81);
+        assert_eq!(read_persisted_sequence(&sequence), Some(81));
+    }
+
+    #[test]
+    fn concurrent_processes_allocate_unique_event_ids() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let executable = std::env::current_exe().expect("test executable");
+        let mut children = Vec::new();
+        for writer in 0..4 {
+            children.push(
+                std::process::Command::new(&executable)
+                    .args([
+                        "--exact",
+                        "core::events::tests::persistent_event_id_writer_child",
+                    ])
+                    .env("__LEAN_CTX_EVENT_ID_TEST_DIR", dir.path())
+                    .env("__LEAN_CTX_EVENT_ID_TEST_WRITER", writer.to_string())
+                    .spawn()
+                    .expect("spawn event id writer"),
+            );
+        }
+        for mut child in children {
+            assert!(child.wait().expect("wait for event id writer").success());
+        }
+
+        let mut ids = Vec::new();
+        for writer in 0..4 {
+            let content = std::fs::read_to_string(dir.path().join(format!("writer-{writer}.ids")))
+                .expect("read allocated ids");
+            ids.extend(content.lines().map(|line| line.parse::<u64>().unwrap()));
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), 400, "every process must receive unique ids");
+        assert_eq!(ids.first(), Some(&1));
+        assert_eq!(ids.last(), Some(&400));
+        let sequence_path = dir.path().join("events.seq");
+        assert_eq!(read_persisted_sequence(&sequence_path), Some(400));
+        assert_eq!(
+            std::fs::read_to_string(sequence_path)
+                .expect("read sequence journal")
+                .lines()
+                .count(),
+            4,
+            "four writers should persist four block reservations, not 400 ids"
         );
     }
 }
