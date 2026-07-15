@@ -245,11 +245,22 @@ fn reserve_event_id_block_at(
             .checked_add(block_size)
             .ok_or_else(|| std::io::Error::other("event id space exhausted"))?;
 
+        // A prior writer's record (or corruption) may leave the file without
+        // a trailing newline; appending directly would fuse onto that line
+        // and make both records unparsable. Start a fresh line first.
+        let needs_leading_newline = std::fs::read(sequence_path)
+            .ok()
+            .is_some_and(|bytes| !bytes.is_empty() && bytes.last() != Some(&b'\n'));
+
         let mut sequence = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(sequence_path)?;
-        let mut record = sequence_record(last).into_bytes();
+        let mut record = Vec::new();
+        if needs_leading_newline {
+            record.push(b'\n');
+        }
+        record.extend_from_slice(sequence_record(last).as_bytes());
         record.push(b'\n');
         sequence.write_all(&record)?;
         sequence.sync_data()?;
@@ -737,7 +748,6 @@ mod tests {
             "replacement journal must contain complete JSON lines"
         );
     }
-
 
     #[test]
     fn persistent_event_id_writer_child() {
