@@ -6,7 +6,10 @@ pub(super) fn handle(
 ) -> Option<(&'static str, &'static str, String)> {
     match path {
         "/api/stats" => {
-            let store = crate::core::stats::load();
+            // Aggregate across split data dirs (#500) so an MCP-server/CLI XDG
+            // split does not show a false `0` here while `lean-ctx gain` (which
+            // uses load_for_display) reports the real total.
+            let store = crate::core::stats::load_for_display();
             let mut value = serde_json::to_value(&store).unwrap_or_else(|_| serde_json::json!({}));
             if let Some(obj) = value.as_object_mut() {
                 let echo = crate::core::output_echo::load_stats();
