@@ -72,6 +72,7 @@ All `std::sync::Mutex` unless noted otherwise.
 | L59 | `LEDGER` | `proxy/policy_gate.rs:247` | `OnceLock<Mutex<BudgetLedger>>` | In-process person/day + project/month spend counters backing hard budget caps (enterprise#25); fed from the metering choke-point, seeded from Postgres when available; independent leaf lock, never nested |
 | L60 | `RATE` | `proxy/policy_gate.rs:281` | `OnceLock<Mutex<RateLedger>>` | Per-person accepted-request counts for the current UTC minute backing the org-policy rate limit (enterprise#66); reset on every minute roll, at most one entry per active person; independent leaf lock, never nested |
 | L61 | `CLI_OVERLAY` | `core/index_filter.rs:31` | `RwLock<Option<CliOverlay>>` | Per-run index corpus filter overlay (#735): written once by the `index` CLI dispatch before builders start, read by every index walk via `IndexFileFilter::resolve`; independent leaf lock, never nested |
+| L62 | `TARGETS` | `core/eviction_orchestrator.rs:48` | `LazyLock<Mutex<EvictionRegistry>>` | Process-wide registry of live `EvictionOrchestrator` weak refs (RAM guardian, multi-session): `register()`/`on_memory_pressure()` lock it only to clone/upgrade the target list, then drop it before calling `on_pressure()` on each target — never held while a per-target `controller` lock (or any other lock) is acquired; independent leaf lock, never nested |
 
 ### Test / Environment Locks (serialise env-var mutations)
 
