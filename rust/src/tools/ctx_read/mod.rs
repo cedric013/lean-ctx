@@ -21,11 +21,7 @@ pub(crate) use mode::ReadMode;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod tests_cold_stub;
-#[cfg(test)]
-mod tests_delta_explicit;
-#[cfg(test)]
-mod tests_gh775;
+mod tests_delta;
 #[cfg(test)]
 mod tests_windowed;
 
@@ -668,7 +664,7 @@ pub fn try_stub_hit_readonly(cache: &SessionCache, path: &str) -> Option<ReadOut
 /// Conversation-scoped core of [`try_stub_hit_readonly`]. The current
 /// conversation id is injected (not read from the global resolver) so the
 /// conversation gate can be tested deterministically without global state.
-fn try_stub_hit_readonly_scoped(
+pub(crate) fn try_stub_hit_readonly_scoped(
     cache: &SessionCache,
     path: &str,
     current_conversation: Option<&str>,

@@ -84,32 +84,3 @@ fn disk_windowed_anchored_read_serves_file_over_the_size_cap() {
         out.content
     );
 }
-
-#[test]
-fn parse_disk_anchor_range_accepts_dash_form_only() {
-    assert_eq!(parse_disk_anchor_range("5-10"), Some((5, 10)));
-    assert_eq!(parse_disk_anchor_range("1-999999"), Some((1, 999_999)));
-    // Bare "N" (meaning "to EOF") needs a known total to resolve — the
-    // streaming path doesn't have one up front, so it declines rather than
-    // guess, and the caller falls back to the full-read path.
-    assert_eq!(parse_disk_anchor_range("5"), None);
-    assert_eq!(parse_disk_anchor_range("not-a-range"), None);
-}
-
-#[test]
-fn read_line_window_streams_only_the_requested_span() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("window.txt");
-    let body = (1..=50)
-        .map(|i| format!("line {i}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    std::fs::write(&path, format!("{body}\n")).unwrap();
-    let p = path.to_string_lossy().to_string();
-
-    let window = read_line_window(&p, 10, 12).expect("streamed read must succeed");
-    assert_eq!(window.total_lines, 50);
-    assert_eq!(window.start, 10);
-    assert_eq!(window.end, 12);
-    assert_eq!(window.body, "line 10\nline 11\nline 12");
-}
