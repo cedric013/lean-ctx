@@ -498,10 +498,23 @@ impl ContextLedger {
             .count();
         let pinned_pressure = pinned_count as f64 * 0.02;
         let stale_penalty = stale_count as f64 * 0.01;
-        let effective_utilization = (utilization + pinned_pressure + stale_penalty).min(1.0);
+        // Pinned/stale entries reduce eviction flexibility, so they nudge
+        // pressure upward — but the nudge must stay bounded. Without a cap, a
+        // long session where many entries end up Pinned (e.g. via GWT
+        // ignition, #6) can alone drive utilization to 100% regardless of
+        // actual token usage.
+        const MAX_STATE_PRESSURE: f64 = 0.2;
+        let effective_utilization =
+            (utilization + (pinned_pressure + stale_penalty).min(MAX_STATE_PRESSURE)).min(1.0);
 
-        let effective_used = (effective_utilization * self.window_size as f64).round() as usize;
-        let remaining = self.window_size.saturating_sub(effective_used);
+        // `remaining_tokens` is a literal token-budget figure consumed by
+        // dashboards and the deficit-suggestion auto-loader
+        // (`context_deficit.rs`) as "how much room is actually left" — it
+        // must track real usage, not the heuristic-boosted
+        // `effective_utilization`, or a heavily-pinned/stale session reports
+        // 0 remaining (and silently starves auto-loading) while tokens of
+        // real headroom are still free.
+        let remaining = self.window_size.saturating_sub(self.total_tokens_sent);
 
         let recommendation = if effective_utilization > 0.9 {
             PressureAction::EvictLeastRelevant
@@ -1003,6 +1016,35 @@ mod tests {
             ledger.pressure().recommendation,
             PressureAction::EvictLeastRelevant
         );
+    }
+
+    /// Regression: a session where many entries are Pinned (e.g. via GWT
+    /// ignition over a long session) must not report `remaining_tokens: 0`
+    /// nor 100% utilization when actual token usage is moderate. The pinned
+    /// nudge must stay bounded, and `remaining_tokens` must track real usage.
+    #[test]
+    fn pinned_pressure_does_not_zero_out_remaining_tokens() {
+        let mut ledger = ContextLedger::with_window_size(200_000);
+        // ~59% raw utilization, matching the real-world repro.
+        ledger.record("hot.rs", "full", 118_762, 118_762);
+        for i in 0..32 {
+            let path = format!("pinned_{i}.rs");
+            ledger.record(&path, "full", 100, 100);
+            ledger.set_state(&path, ContextState::Pinned);
+        }
+
+        let pressure = ledger.pressure();
+        assert!(
+            pressure.utilization < 1.0,
+            "32 pinned entries alone must not saturate utilization to 100%, got {}",
+            pressure.utilization
+        );
+        assert!(
+            pressure.remaining_tokens > 0,
+            "real token headroom must not be reported as zero"
+        );
+        // total_tokens_sent = 118762 + 32*100 = 121962; window 200000.
+        assert_eq!(pressure.remaining_tokens, 200_000 - 121_962);
     }
 
     #[test]
