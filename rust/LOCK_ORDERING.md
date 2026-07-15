@@ -72,6 +72,7 @@ All `std::sync::Mutex` unless noted otherwise.
 | L59 | `LEDGER` | `proxy/policy_gate.rs:247` | `OnceLock<Mutex<BudgetLedger>>` | In-process person/day + project/month spend counters backing hard budget caps (enterprise#25); fed from the metering choke-point, seeded from Postgres when available; independent leaf lock, never nested |
 | L60 | `RATE` | `proxy/policy_gate.rs:281` | `OnceLock<Mutex<RateLedger>>` | Per-person accepted-request counts for the current UTC minute backing the org-policy rate limit (enterprise#66); reset on every minute roll, at most one entry per active person; independent leaf lock, never nested |
 | L61 | `CLI_OVERLAY` | `core/index_filter.rs:31` | `RwLock<Option<CliOverlay>>` | Per-run index corpus filter overlay (#735): written once by the `index` CLI dispatch before builders start, read by every index walk via `IndexFileFilter::resolve`; independent leaf lock, never nested |
+| L62 | `BLOCK` | `core/events.rs:289` | `OnceLock<Mutex<LocalBlock>>` (fn-local static) | Per-process cache of the current pre-reserved event-id block (`next`/`last`) inside `next_event_id()`: most calls just bump `next` under the lock; on exhaustion the lock is held across the refill call to `reserve_event_id_block_at`, which takes its own independent OS file lock (`events.seq.lock`, not a Rust static) to persist the next block — never nested with another *static* Rust lock |
 
 ### Test / Environment Locks (serialise env-var mutations)
 
