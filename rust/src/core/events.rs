@@ -195,30 +195,52 @@ fn append_jsonl(event: &LeanCtxEvent) {
         return;
     }
     let Some(path) = jsonl_path() else { return };
+    let _ = append_jsonl_at(&path, event);
+}
+
+fn append_jsonl_at(path: &std::path::Path, event: &LeanCtxEvent) -> std::io::Result<()> {
+    use fs2::FileExt;
+    use std::io::Write;
 
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)?;
     }
 
-    if let Ok(content) = std::fs::read_to_string(&path) {
-        let lines = content.lines().count();
-        if lines >= JSONL_MAX_LINES {
+    // Lock a stable companion inode rather than events.jsonl itself: rotation
+    // renames the data file, so locking that inode would let another process
+    // open the replacement and bypass the lock.
+    let lock_path = path.with_extension("jsonl.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)?;
+    lock.lock_exclusive()?;
+
+    let result = (|| {
+        if let Ok(content) = std::fs::read_to_string(path)
+            && content.lines().count() >= JSONL_MAX_LINES
+        {
             let old = path.with_extension("jsonl.old");
             let _ = std::fs::remove_file(&old);
-            let _ = std::fs::rename(&path, &old);
+            std::fs::rename(path, old)?;
         }
-    }
 
-    if let Ok(json) = serde_json::to_string(event) {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
+        let json = serde_json::to_string(event).map_err(std::io::Error::other)?;
+        let mut line = json.into_bytes();
+        line.push(b'\n');
+        let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&path)
-        {
-            let _ = writeln!(f, "{json}");
-        }
-    }
+            .open(path)?;
+        // One logical write while holding the interprocess lock prevents JSON
+        // objects and their trailing newlines from interleaving.
+        file.write_all(&line)
+    })();
+
+    let _ = FileExt::unlock(&lock);
+    result
 }
 
 // --- Public API ---
@@ -464,6 +486,113 @@ mod tests {
         assert!(
             second.iter().any(|e| e.id == 900_002),
             "append must invalidate the cache and surface the new event"
+        );
+    }
+
+    #[test]
+    fn events_jsonl_writer_child() {
+        let Some(path) = std::env::var_os("__LEAN_CTX_EVENTS_TEST_PATH") else {
+            return;
+        };
+        let writer = std::env::var("__LEAN_CTX_EVENTS_TEST_WRITER")
+            .expect("writer id")
+            .parse::<u64>()
+            .expect("numeric writer id");
+        for sequence in 0..100 {
+            let event = LeanCtxEvent {
+                id: writer * 100 + sequence,
+                timestamp: "2026-07-15T12:00:00.000".to_string(),
+                kind: EventKind::CacheHit {
+                    path: format!("writer-{writer}.rs"),
+                    saved_tokens: sequence,
+                },
+            };
+            append_jsonl_at(std::path::Path::new(&path), &event).expect("append event");
+        }
+    }
+
+    #[test]
+    fn concurrent_processes_append_complete_json_lines() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("events.jsonl");
+        let executable = std::env::current_exe().expect("test executable");
+
+        let mut children = Vec::new();
+        for writer in 0..4 {
+            children.push(
+                std::process::Command::new(&executable)
+                    .args([
+                        "--exact",
+                        "core::events::tests::events_jsonl_writer_child",
+                        "--nocapture",
+                    ])
+                    .env("__LEAN_CTX_EVENTS_TEST_PATH", &path)
+                    .env("__LEAN_CTX_EVENTS_TEST_WRITER", writer.to_string())
+                    .spawn()
+                    .expect("spawn writer"),
+            );
+        }
+        for mut child in children {
+            assert!(child.wait().expect("wait for writer").success());
+        }
+
+        let content = std::fs::read_to_string(&path).expect("read events");
+        let lines: Vec<_> = content.lines().collect();
+        assert_eq!(lines.len(), 400, "every append must produce one line");
+        for line in lines {
+            serde_json::from_str::<LeanCtxEvent>(line)
+                .unwrap_or_else(|error| panic!("invalid JSONL line: {error}: {line}"));
+        }
+    }
+
+    #[test]
+    fn concurrent_processes_serialize_rotation_and_append() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("events.jsonl");
+        let seed = serde_json::to_string(&LeanCtxEvent {
+            id: 1,
+            timestamp: "2026-07-15T12:00:00.000".to_string(),
+            kind: EventKind::CacheHit {
+                path: "seed.rs".to_string(),
+                saved_tokens: 1,
+            },
+        })
+        .expect("serialize seed");
+        std::fs::write(&path, format!("{seed}\n").repeat(JSONL_MAX_LINES))
+            .expect("seed rotation threshold");
+
+        let executable = std::env::current_exe().expect("test executable");
+        let mut children = Vec::new();
+        for writer in 0..4 {
+            children.push(
+                std::process::Command::new(&executable)
+                    .args(["--exact", "core::events::tests::events_jsonl_writer_child"])
+                    .env("__LEAN_CTX_EVENTS_TEST_PATH", &path)
+                    .env("__LEAN_CTX_EVENTS_TEST_WRITER", writer.to_string())
+                    .spawn()
+                    .expect("spawn writer"),
+            );
+        }
+        for mut child in children {
+            assert!(child.wait().expect("wait for writer").success());
+        }
+
+        let old =
+            std::fs::read_to_string(path.with_extension("jsonl.old")).expect("rotated journal");
+        assert_eq!(old.lines().count(), JSONL_MAX_LINES);
+        assert!(
+            old.lines()
+                .all(|line| serde_json::from_str::<LeanCtxEvent>(line).is_ok()),
+            "rotated journal must contain complete JSON lines"
+        );
+
+        let current = std::fs::read_to_string(&path).expect("current journal");
+        assert_eq!(current.lines().count(), 400);
+        assert!(
+            current
+                .lines()
+                .all(|line| serde_json::from_str::<LeanCtxEvent>(line).is_ok()),
+            "replacement journal must contain complete JSON lines"
         );
     }
 }

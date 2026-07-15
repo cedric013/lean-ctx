@@ -1607,3 +1607,49 @@ mod outcome_aware_tests {
         );
     }
 }
+/// #848: MSBuild parallel diagnostics dedup
+#[test]
+fn msbuild_parallel_dedup_removes_duplicate_diagnostics() {
+    let output = "Microsoft (R) Build Engine\n\
+Build started\n\
+src/Foo.cs(10,5): warning CS1591: Missing XML comment [node1]\n\
+src/Bar.cs(20,3): warning CS0168: Variable is declared but never used [node1]\n\
+src/Foo.cs(10,5): warning CS1591: Missing XML comment [node2]\n\
+src/Bar.cs(20,3): warning CS0168: Variable is declared but never used [node2]\n\
+src/Baz.cs(30,1): error CS1002: ; expected [node1]\n\
+Build succeeded with warnings.\n\
+    2 Warning(s)\n\
+    1 Error(s)\n";
+
+    let deduped = super::engine::dedup_build_diagnostics(output);
+    // Each diagnostic should appear only once
+    assert_eq!(
+        deduped.matches("CS1591").count(),
+        1,
+        "CS1591 should appear once after dedup: {deduped}"
+    );
+    assert_eq!(
+        deduped.matches("CS0168").count(),
+        1,
+        "CS0168 should appear once after dedup: {deduped}"
+    );
+    // Error line should still be there
+    assert!(deduped.contains("CS1002"), "error line must be preserved");
+    // Dedup note should be present
+    assert!(
+        deduped.contains("duplicate diagnostic"),
+        "dedup note missing: {deduped}"
+    );
+}
+
+/// #848: temp redirect targets are allowed
+#[test]
+fn temp_redirect_target_allowed() {
+    assert!(crate::tools::ctx_shell::is_temp_redirect_target(
+        "/tmp/build.log"
+    ));
+    assert!(crate::tools::ctx_shell::is_temp_redirect_target("/tmp"));
+    assert!(!crate::tools::ctx_shell::is_temp_redirect_target(
+        "/home/user/output.log"
+    ));
+}

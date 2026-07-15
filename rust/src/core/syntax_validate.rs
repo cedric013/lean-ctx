@@ -98,9 +98,9 @@ pub fn gate_edit(ext: &str, old_content: &str, new_content: &str) -> Option<Stri
         .map_or_else(String::new, |l| format!(" near line {l}"));
     Some(format!(
         "ERROR: edit rejected — it introduces a syntax error{loc} (.{ext}). \
-         The file parsed cleanly before this edit, so the change is malformed; \
-         no write was made. Fix the snippet and retry, or pass \
-         validate_syntax=false to override."
+         The current file on disk parses cleanly, but the proposed edit \
+         would break it. No write was made. Fix the snippet and retry, \
+         or pass validate_syntax=false to override."
     ))
 }
 

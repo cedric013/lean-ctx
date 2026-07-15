@@ -1012,16 +1012,31 @@ fn render_task_mode(content: &str, ctx: RenderCtx<'_>, tuning: &ReadTuning<'_>) 
         let sent = count_tokens(&out);
         return (out, sent);
     }
+    // #840: small files save too few tokens to justify the risk of dropping
+    // relevant content. Degrade to full — the agent gets the complete file
+    // for a negligible token cost and avoids the "had to retry with mode=full"
+    // round-trip that the issue reported.
+    const TASK_MIN_LINES: usize = 250;
+    if line_count < TASK_MIN_LINES {
+        let header = build_header(file_ref, short, ext, content, line_count, true);
+        let out = format!(
+            "{header}\n{content}\n[task mode: file below {TASK_MIN_LINES}L threshold — returned full]"
+        );
+        let sent = count_tokens(&out);
+        return (out, sent);
+    }
     // Aggressiveness tightens the IB keep-budget; default 0.3 preserved
     // when the knob is unset.
     let ib_budget = tuning.aggressiveness.map_or(0.3, |a| {
         AggressivenessProfile::from_level(a).ib_budget_ratio
     });
-    let filtered = crate::core::task_relevance::information_bottleneck_filter(
+    let is_markdown = matches!(ext, "md" | "markdown" | "mdx" | "rst");
+    let filtered = crate::core::task_relevance::information_bottleneck_filter_with_headers(
         content,
         &keywords,
         ib_budget,
         tuning.protect,
+        is_markdown,
     );
     let filtered_lines = filtered.lines().count();
     let header = if crate::core::protocol::meta_visible() && !file_ref.is_empty() {

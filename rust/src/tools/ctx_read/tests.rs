@@ -64,7 +64,8 @@ fn test_tdd_symbols_are_compact() {
 
 #[test]
 fn test_task_mode_filters_content() {
-    let content = (0..200)
+    // #840: file must exceed TASK_MIN_LINES (250) to engage filtering.
+    let content = (0..300)
         .map(|i| {
             if i % 20 == 0 {
                 format!("fn validate_token(token: &str) -> bool {{ /* line {i} */ }}")
@@ -198,7 +199,7 @@ fn try_stub_hit_readonly_none_for_uncached_and_stale() {
 #[cfg_attr(tarpaulin, ignore)]
 fn benchmark_task_conditioned_compression() {
     // Keep this reasonably small so CI coverage instrumentation stays fast.
-    let content = generate_benchmark_code(200);
+    let content = generate_benchmark_code(300);
     let full_tokens = count_tokens(&content);
     let task = Some("fix authentication in validate_token");
 
@@ -1254,6 +1255,120 @@ fn auto_reread_of_fully_delivered_file_serves_unchanged_stub() {
         "stub ({} tok) must be far cheaper than a full re-delivery ({} tok)",
         reread.output_tokens,
         full.output_tokens
+    );
+}
+
+/// Regression #841: a full->task->full sequence must NOT serve the [unchanged]
+/// stub on the third read. The task read delivers partial content, so the
+/// model's most recent view is NOT the full file -- re-delivering is mandatory.
+#[test]
+fn mode_change_clears_full_delivered_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("readme.md");
+    let p = path.to_string_lossy().to_string();
+    let body = (0..50)
+        .map(|i| {
+            format!(
+                "## Section {i}
+Content for section {i}."
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+
+",
+        );
+    std::fs::write(
+        &path,
+        format!(
+            "{body}
+"
+        ),
+    )
+    .unwrap();
+
+    let mut cache = SessionCache::new();
+
+    // 1. Full read -- delivers everything, sets full_content_delivered.
+    let full1 = handle_with_task_resolved(&mut cache, &p, "full", CrpMode::Off, None);
+    assert!(
+        !full1.content.contains("[unchanged"),
+        "first full read must deliver the body"
+    );
+    assert!(
+        cache.is_full_delivered(&p),
+        "full_content_delivered must be set"
+    );
+
+    // 2. Task read -- partial/filtered content. The fix clears full_content_delivered.
+    let task = handle_with_task_resolved(
+        &mut cache,
+        &p,
+        "task",
+        CrpMode::Off,
+        Some("find section 42"),
+    );
+    assert!(
+        !task.content.contains("[unchanged"),
+        "task read must deliver filtered content, not a stub"
+    );
+    assert!(
+        !cache.is_full_delivered(&p),
+        "full_content_delivered must be cleared after a non-full read (#841)"
+    );
+
+    // 3. Full read -- must re-deliver actual content, NOT the [unchanged] stub.
+    let full2 = handle_with_task_resolved(&mut cache, &p, "full", CrpMode::Off, None);
+    assert!(
+        !full2.content.contains("[unchanged"),
+        "full read after a task read must deliver the body, not stub (#841): {}",
+        full2.content
+    );
+    assert!(
+        full2.content.contains("Section 0") || full2.content.contains("Section 49"),
+        "re-delivered full read must contain actual file content"
+    );
+}
+
+/// Regression #841 complement: full->full (no mode change) must still serve
+/// the cheap [unchanged] stub -- the fix must not break the happy path.
+#[test]
+fn full_reread_still_serves_stub_when_no_mode_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stable.rs");
+    let p = path.to_string_lossy().to_string();
+    let body = (0..48)
+        .map(|i| format!("fn function_{i}() {{ let v = {i}; }}"))
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+    std::fs::write(
+        &path,
+        format!(
+            "{body}
+"
+        ),
+    )
+    .unwrap();
+
+    let mut cache = SessionCache::new();
+
+    // 1. Full read.
+    let full1 = handle_with_task_resolved(&mut cache, &p, "full", CrpMode::Off, None);
+    assert!(
+        !full1.content.contains("[unchanged"),
+        "first read must deliver body"
+    );
+
+    // 2. Full re-read -- same mode, file unchanged -> stub.
+    let full2 = handle_with_task_resolved(&mut cache, &p, "full", CrpMode::Off, None);
+    assert!(
+        full2.content.contains("[unchanged"),
+        "full->full re-read of unchanged file must serve the stub: {}",
+        full2.content
     );
 }
 

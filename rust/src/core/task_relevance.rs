@@ -476,6 +476,64 @@ pub fn information_bottleneck_filter(
     information_bottleneck_filter_typed(content, task_keywords, budget_ratio, None, force_keep)
 }
 
+/// #840: IB filter with optional markdown section-header preservation.
+/// When `preserve_section_headers` is true, the nearest preceding `#`-header
+/// for each selected line is injected into the output so fragments remain
+/// attributable to their enclosing sections.
+pub fn information_bottleneck_filter_with_headers(
+    content: &str,
+    task_keywords: &[String],
+    budget_ratio: f64,
+    force_keep: &[String],
+    preserve_section_headers: bool,
+) -> String {
+    if !preserve_section_headers {
+        return information_bottleneck_filter(content, task_keywords, budget_ratio, force_keep);
+    }
+    let filtered = information_bottleneck_filter(content, task_keywords, budget_ratio, force_keep);
+    inject_section_headers(content, &filtered)
+}
+
+/// For each line in `filtered` that appears in a markdown-sectioned `original`,
+/// find and inject the nearest preceding `#`-header line if not already present.
+fn inject_section_headers(original: &str, filtered: &str) -> String {
+    let orig_lines: Vec<&str> = original.lines().collect();
+    let filt_lines: Vec<&str> = filtered.lines().collect();
+
+    let header_indices: Vec<usize> = orig_lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.starts_with('#'))
+        .map(|(i, _)| i)
+        .collect();
+
+    if header_indices.is_empty() {
+        return filtered.to_string();
+    }
+
+    let mut result_lines: Vec<&str> = Vec::with_capacity(filt_lines.len() + header_indices.len());
+    let mut injected_headers: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    for filt_line in &filt_lines {
+        let trimmed = filt_line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("[task:") {
+            result_lines.push(filt_line);
+            continue;
+        }
+        if let Some(orig_idx) = orig_lines.iter().position(|l| *l == *filt_line)
+            && let Some(&h) = header_indices.iter().rev().find(|&&h| h <= orig_idx)
+            && !injected_headers.contains(&h)
+            && !filt_lines.contains(&orig_lines[h])
+        {
+            injected_headers.insert(h);
+            result_lines.push(orig_lines[h]);
+        }
+        result_lines.push(filt_line);
+    }
+
+    result_lines.join("\n")
+}
+
 /// Task-type-aware IB filter. Uses `TaskType` to adjust structural weights.
 /// `force_keep` lines (explicit `protect` tokens, #709) are kept verbatim on top
 /// of the budget; `&[]` reproduces the pre-protect output byte-for-byte (#498).

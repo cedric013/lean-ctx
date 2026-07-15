@@ -597,6 +597,7 @@ const PATH_LIKE_KEYS: &[&str] = &[
     "destination",
     "old_path",
     "new_path",
+    "file_path",
     "from",
     "to",
     "base_path",

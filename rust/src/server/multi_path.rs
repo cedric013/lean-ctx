@@ -53,19 +53,24 @@ pub fn resolve_tool_paths(
         ));
     }
 
-    if let Some(path) = ctx.resolved_path("path") {
-        return Ok(ResolvedPaths {
-            roots: vec![path.to_string()],
-            is_multi: false,
-        });
-    }
-
-    // An explicit `path` the dispatcher could not resolve lands in
-    // `path_errors` (not `resolved_paths`). Do NOT fall back to the project
-    // root — return the resolution error so the agent learns the path is out
-    // of scope rather than silently receiving an unrelated tree (#401).
-    if let Some(detail) = ctx.path_error("path") {
-        return Err(detail.to_string());
+    // #846: `file_path` is an alias for `path` in ctx_search — agents
+    // (especially Claude Code) send it expecting file-level scoping.
+    // Without this fallback the parameter is silently ignored and the
+    // search runs on the project root.
+    for key in &["path", "file_path"] {
+        if let Some(p) = ctx.resolved_path(key) {
+            return Ok(ResolvedPaths {
+                roots: vec![p.to_string()],
+                is_multi: false,
+            });
+        }
+        // An explicit path the dispatcher could not resolve lands in
+        // `path_errors`. Do NOT fall back to the project root — return the
+        // resolution error so the agent learns the path is out of scope
+        // rather than silently receiving an unrelated tree (#401).
+        if let Some(detail) = ctx.path_error(key) {
+            return Err(detail.to_string());
+        }
     }
 
     if let Some(session_lock) = ctx.session.as_ref() {

@@ -262,6 +262,9 @@ pub(crate) fn compress_if_beneficial(command: &str, output: &str) -> String {
     if is_error_output_from_build_tool(command, output) {
         let base =
             maybe_fold_progress(output, count_tokens(output)).unwrap_or_else(|| output.to_string());
+        // #848: MSBuild parallel builds print each diagnostic twice (per-node +
+        // summary). Dedup identical diagnostic lines before the verbatim cap.
+        let base = dedup_build_diagnostics(&base);
         return truncate_verbatim(&base, count_tokens(&base));
     }
 
@@ -453,6 +456,75 @@ fn strip_shell_footer(s: &str) -> &str {
 
 /// Detects whether the output contains error diagnostics from a build/check/lint tool.
 /// When true, compression is bypassed to preserve file paths, line numbers, and messages.
+/// #848: Deduplicate identical diagnostic lines in build output.
+/// MSBuild parallel builds print each warning/error twice: once per build-node
+/// and once in the summary section. This removes exact duplicates while
+/// preserving order (first occurrence wins).
+pub(crate) fn dedup_build_diagnostics(output: &str) -> String {
+    let lines: Vec<&str> = output.lines().collect();
+    if lines.len() < 10 {
+        return output.to_string();
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut deduped_count = 0usize;
+    let mut result = Vec::with_capacity(lines.len());
+    for line in &lines {
+        let trimmed = line.trim();
+        if is_diagnostic_line(trimmed) {
+            let key = normalize_diagnostic_key(trimmed);
+            if !seen.insert(key) {
+                deduped_count += 1;
+                continue;
+            }
+        }
+        result.push(*line);
+    }
+    if deduped_count > 0 {
+        result.push("");
+        let note = format!("[lean-ctx: {deduped_count} duplicate diagnostic(s) removed]");
+        // We can't push a &str that references a local — collect into owned
+        let mut out: String = result.join("\n");
+        out.push('\n');
+        out.push_str(&note);
+        return out;
+    }
+    output.to_string()
+}
+
+/// Recognises MSBuild / compiler diagnostic lines (file(line): warning CS1234: ...)
+/// and generic compiler diagnostics (file:line: warning/error: ...).
+/// Normalize a diagnostic line for dedup: strip trailing `[project]` suffixes
+/// that MSBuild appends per build node, so identical diagnostics from parallel
+/// nodes collapse into one.
+fn normalize_diagnostic_key(line: &str) -> String {
+    let trimmed = line.trim();
+    // MSBuild appends ` [/path/to/project.csproj]` — strip it.
+    if let Some(bracket) = trimmed.rfind(" [")
+        && trimmed.ends_with(']')
+    {
+        return trimmed[..bracket].to_string();
+    }
+    trimmed.to_string()
+}
+
+fn is_diagnostic_line(line: &str) -> bool {
+    if line.is_empty() {
+        return false;
+    }
+    // MSBuild: path(line,col): warning CS1234: message
+    // MSBuild: path(line,col): error CS1234: message
+    if (line.contains("): warning ") || line.contains("): error ")) && line.contains('(') {
+        return true;
+    }
+    // GCC/Clang/Rust: path:line:col: warning: / error: / note:
+    if (line.contains(": warning:") || line.contains(": error:") || line.contains(": warning["))
+        && line.contains(':')
+    {
+        return true;
+    }
+    false
+}
+
 fn is_error_output_from_build_tool(command: &str, output: &str) -> bool {
     let cmd = command.trim().to_ascii_lowercase();
 

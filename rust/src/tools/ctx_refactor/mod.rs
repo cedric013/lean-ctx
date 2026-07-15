@@ -284,7 +284,17 @@ fn container_matches_ancestor(name: &str, ancestor: &str) -> bool {
 /// Resolve a `name_path` (`Class/method` or bare `name`) to a single symbol via
 /// the tree-sitter index (spec v2a §3/§5.3). Disambiguates a qualified path by
 /// enclosing-range containment (ancestor symbol's line span contains the leaf's).
+/// #845: optional `file_scope` narrows candidates to a single file, preventing
+/// AMBIGUOUS_SYMBOL for common names like `Dispose` that appear repo-wide.
 pub(crate) fn resolve_name_path(name_path: &str, project_root: &str) -> Result<Resolved, String> {
+    resolve_name_path_scoped(name_path, project_root, None)
+}
+
+pub(crate) fn resolve_name_path_scoped(
+    name_path: &str,
+    project_root: &str,
+    file_scope: Option<&str>,
+) -> Result<Resolved, String> {
     use crate::core::graph_provider;
     let open = graph_provider::open_or_build(project_root)
         .ok_or_else(|| "NO_SYMBOL: no symbol index available".to_string())?;
@@ -301,6 +311,11 @@ pub(crate) fn resolve_name_path(name_path: &str, project_root: &str) -> Result<R
         .into_iter()
         .filter(|s| s.name == leaf)
         .collect();
+
+    // #845: narrow by file when the caller provides a scope.
+    if let Some(scope) = file_scope {
+        leaves.retain(|s| s.file.ends_with(scope) || s.file == scope);
+    }
 
     if segments.len() >= 2 {
         let ancestor = segments[segments.len() - 2];

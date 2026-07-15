@@ -393,6 +393,47 @@ fn resolve_name_path_ambiguous_trait_impls() {
     crate::test_env::remove_var("LEAN_CTX_DATA_DIR");
 }
 
+/// #845: file_scope narrows ambiguous symbols to a single file.
+#[test]
+fn file_scope_disambiguates_ambiguous_symbol() {
+    let dir = tempfile::tempdir().unwrap();
+    let proj = dir.path().join("proj845");
+    std::fs::create_dir_all(proj.join("src")).unwrap();
+
+    std::fs::write(
+        proj.join("src/a.rs"),
+        "impl A for RenderBridge {\n\
+             \x20   fn execute(&self) { let _ = 1; }\n\
+             }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        proj.join("src/b.rs"),
+        "impl B for RenderBridge {\n\
+             \x20   fn execute(&self) { let _ = 1; }\n\
+             }\n",
+    )
+    .unwrap();
+    let root = proj.to_string_lossy().to_string();
+
+    // Without file_scope: ambiguous (2 matches).
+    let err = super::resolve_name_path("RenderBridge/execute", &root)
+        .expect_err("should be ambiguous without file_scope");
+    assert!(err.starts_with("AMBIGUOUS_SYMBOL"), "got: {err}");
+
+    // With file_scope="src/a.rs": resolves to exactly one match.
+    let r = super::resolve_name_path_scoped("RenderBridge/execute", &root, Some("src/a.rs"))
+        .expect("file_scope should disambiguate");
+    assert!(r.rel_path.ends_with("src/a.rs"), "got: {}", r.rel_path);
+
+    // With file_scope="src/b.rs": resolves to exactly one match in b.rs.
+    let r = super::resolve_name_path_scoped("RenderBridge/execute", &root, Some("src/b.rs"))
+        .expect("file_scope should disambiguate");
+    assert!(r.rel_path.ends_with("src/b.rs"), "got: {}", r.rel_path);
+
+    crate::test_env::remove_var("LEAN_CTX_DATA_DIR");
+}
+
 #[test]
 fn anchor_indent_reads_leading_whitespace() {
     let content = "class A {\n    fun b() {}\n}\n";
@@ -771,7 +812,7 @@ fn handle_replace_symbol_worktree_mismatch_blocks_write() {
 
     // The symbol resolves via the main-root index to "src/lib.rs".
     let resolved = super::resolve_name_path("worktree_canary_zz", &root);
-    assert!(resolved.is_ok(), "symbol should resolve: {:?}", resolved);
+    assert!(resolved.is_ok(), "symbol should resolve: {resolved:?}");
 
     // Caller provides a path inside the worktree that differs from the
     // index-resolved location — this must be caught.

@@ -11,7 +11,11 @@ pub(super) fn resolve_rename_target(
     project_root: &str,
 ) -> Result<(String, usize, usize), String> {
     if let Some(np) = args.get("name_path").and_then(Value::as_str) {
-        let r = resolve_name_path(np, project_root)?;
+        let file_scope = args
+            .get("file")
+            .or(args.get("file_path"))
+            .and_then(Value::as_str);
+        let r = resolve_name_path_scoped(np, project_root, file_scope)?;
         Ok((r.rel_path, r.start_line, r.end_line))
     } else {
         let path = args
@@ -456,7 +460,11 @@ pub(super) fn resolve_move_target(
             })
         }
         (None, Some(parent_np)) => {
-            let r = resolve_name_path(parent_np, project_root)?; // NO_SYMBOL / AMBIGUOUS_SYMBOL
+            let file_scope = args
+                .get("file")
+                .or(args.get("file_path"))
+                .and_then(Value::as_str);
+            let r = resolve_name_path_scoped(parent_np, project_root, file_scope)?;
             let abs =
                 crate::core::path_resolve::resolve_tool_path(Some(project_root), None, &r.rel_path)
                     .map_err(|e| {
@@ -829,7 +837,11 @@ pub(super) fn resolve_reformat_scope(
             Err("INVALID_TARGET: set exactly one of 'name_path' or 'path' for reformat".to_string())
         }
         (Some(np), None) => {
-            let r = resolve_name_path(np, project_root)?; // NO_SYMBOL / AMBIGUOUS_SYMBOL
+            let file_scope = args
+                .get("file")
+                .or(args.get("file_path"))
+                .and_then(Value::as_str);
+            let r = resolve_name_path_scoped(np, project_root, file_scope)?;
             let abs =
                 crate::core::path_resolve::resolve_tool_path(Some(project_root), None, &r.rel_path)
                     .map_err(|e| format!("INVALID_TARGET: path blocked by jail: {e}"))?;

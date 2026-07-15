@@ -548,6 +548,14 @@ fn handle_with_options_resolved_preread(
 
     if let Some(entry) = cache.get_mut(path) {
         entry.last_mode.clone_from(&result.resolved_mode);
+        // #841: a partial/filtered read means the model's most recent view is NOT
+        // the full content. Clear the delivery flag so a subsequent mode="full"
+        // re-delivers real content instead of the [unchanged] stub. Without this,
+        // a task→full sequence returns an empty stub because the flag was set by an
+        // earlier full delivery and never cleared by the intervening non-full read.
+        if !matches!(result.resolved_mode.as_str(), "full" | "full-compact") {
+            entry.full_content_delivered = false;
+        }
     }
 
     // SSOT via [`ReadMode`] (#528): lossy summaries may elide shared blocks.

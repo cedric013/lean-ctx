@@ -48,6 +48,7 @@ impl McpTool for CtxRefactorTool {
                         "description": "run|list"
                     },
                     "name_path": { "type": "string", "description": "Symbol path for body edits (qualified or bare)" },
+                    "file": { "type": "string", "description": "Scope name_path resolution to this file (avoids AMBIGUOUS_SYMBOL for common names)" },
                     "new_body": { "type": "string", "description": "Full replacement declaration text" },
                     "text": { "type": "string", "description": "Sibling text to insert (auto-indented)" },
                     "end_line": { "type": "integer", "description": "1-based last line (path+line fallback)" },

@@ -140,6 +140,18 @@ fn is_heredoc_file_write(command: &str) -> bool {
 
 /// Detects shell redirect operators (`>` or `>>`) that write to files.
 /// Ignores `>` inside quotes, `2>` (stderr), `/dev/null`, and comparison operators.
+/// #848: temp directory targets are read-back, not persistent writes.
+pub fn is_temp_redirect_target(target: &str) -> bool {
+    let t = target.trim_start_matches(['>', '&']);
+    let lower = t.to_lowercase();
+    lower.starts_with("/tmp/")
+        || lower.starts_with("/tmp")
+        || lower.contains("\\temp\\")
+        || lower.contains("\\tmp\\")
+        || lower.starts_with("$tmpdir/")
+        || lower.starts_with("${tmpdir}")
+}
+
 fn has_file_write_redirect(command: &str) -> bool {
     let bytes = command.as_bytes();
     let len = bytes.len();
@@ -169,6 +181,12 @@ fn has_file_write_redirect(command: &str) -> bool {
                 .take_while(|c| !c.is_whitespace())
                 .collect();
             if target == "/dev/null" {
+                i += 1;
+                continue;
+            }
+            // #848: allow redirects to temp directories — agents capture
+            // build output for grepping, not writing persistent files.
+            if is_temp_redirect_target(&target) {
                 i += 1;
                 continue;
             }

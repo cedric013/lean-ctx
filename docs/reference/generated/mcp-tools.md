@@ -535,7 +535,7 @@ Single-phase edits (replace_symbol_body, reformat) work headless via name_path.
 Two-phase ops (_preview+_apply) need JetBrains IDE (else BACKEND_REQUIRED).
 Conflicts blocked unless force=true. See `action` parameter for full list.
 
-Parameters: `action`*, `column`, `direction`, `end_line`, `expected_hash`, `force`, `keep_definition`, `line`, `mode`, `name_path`, `new_body`, `new_name`, `optimize_imports`, `path`, `plan_hash`, `propagate`, `scope`, `search_comments`, `search_text_occurrences`, `target_parent`, `target_path`, `text`
+Parameters: `action`*, `column`, `direction`, `end_line`, `expected_hash`, `file`, `force`, `keep_definition`, `line`, `mode`, `name_path`, `new_body`, `new_name`, `optimize_imports`, `path`, `plan_hash`, `propagate`, `scope`, `search_comments`, `search_text_occurrences`, `target_parent`, `target_path`, `text`
 
 ## `ctx_repomap`
 
