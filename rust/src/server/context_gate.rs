@@ -495,7 +495,9 @@ mod tests {
         // bounce-prevention, pressure-downgrade, etc. must not clobber it to
         // "full" and silently drop the window.
         {
-            let mut bt = crate::core::bounce_tracker::global().lock().unwrap();
+            let mut bt = crate::core::bounce_tracker::global()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             bt.set_seq(101);
             bt.record_read("anchored-bouncy.yml", "map", 30, 400);
             bt.set_seq(102);
@@ -530,7 +532,9 @@ mod tests {
     #[test]
     fn pre_dispatch_bounce_prevention_forces_full() {
         {
-            let mut bt = crate::core::bounce_tracker::global().lock().unwrap();
+            let mut bt = crate::core::bounce_tracker::global()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             bt.set_seq(1);
             bt.record_read("src/bouncy.yml", "map", 30, 400);
             bt.set_seq(2);

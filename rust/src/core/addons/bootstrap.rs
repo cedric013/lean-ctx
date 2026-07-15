@@ -630,7 +630,9 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn ensure_installed_runs_manager_then_verifies() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = std::env::temp_dir().join(format!("leanctx-boot-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let marker = tmp.join("installed.marker");
@@ -663,7 +665,9 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn ensure_installed_propagates_manager_failure() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = std::env::temp_dir().join(format!("leanctx-boot-fail-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let fake_uv = tmp.join("uv");
@@ -699,7 +703,9 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn ensure_installed_preflights_a_missing_manager() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let tmp = std::env::temp_dir().join(format!("leanctx-boot-miss-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let missing = tmp.join("uv-not-here");

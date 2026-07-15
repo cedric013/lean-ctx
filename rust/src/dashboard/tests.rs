@@ -36,7 +36,9 @@ fn open_mode_flag_parses_all_variants() {
 
 #[test]
 fn open_mode_env_is_used_when_no_flag() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     crate::test_env::set_var("LEAN_CTX_DASHBOARD_OPEN", "none");
     assert_eq!(resolve_open_mode(None), DashboardOpen::None);
     crate::test_env::set_var("LEAN_CTX_DASHBOARD_OPEN", "vscode");

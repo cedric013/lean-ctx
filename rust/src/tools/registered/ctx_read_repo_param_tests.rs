@@ -23,7 +23,9 @@ async fn repo_param_resolves_against_repo_root_no_cache_collision() {
     let alias_b = "test-repo-696-b";
     {
         let manager = crate::core::multi_repo::global_manager();
-        let mut mgr = manager.lock().unwrap();
+        let mut mgr = manager
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         mgr.add_root(&dir_a.path().to_string_lossy(), Some(alias_a))
             .unwrap();
         mgr.add_root(&dir_b.path().to_string_lossy(), Some(alias_b))
@@ -85,7 +87,9 @@ async fn repo_param_unknown_alias_errors_with_known_aliases() {
 
     {
         let manager = crate::core::multi_repo::global_manager();
-        let mut mgr = manager.lock().unwrap();
+        let mut mgr = manager
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempfile::tempdir().unwrap();
         mgr.add_root(&dir.path().to_string_lossy(), Some("test-repo-696-known"))
             .ok();

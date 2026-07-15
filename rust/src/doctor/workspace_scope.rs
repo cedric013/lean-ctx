@@ -234,7 +234,9 @@ mod tests {
     fn with_cwd<T>(dir: &std::path::Path, f: impl FnOnce() -> T) -> T {
         use std::sync::Mutex;
         static LOCK: Mutex<()> = Mutex::new(());
-        let _guard = LOCK.lock().unwrap();
+        let _guard = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir).unwrap();
         let out = f();

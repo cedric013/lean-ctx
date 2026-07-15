@@ -225,7 +225,9 @@ mod tests {
         let _ = get_or_load(&cache, tmp1.path());
         let idx2 = get_or_load(&cache, tmp2.path());
 
-        let guard = cache.lock().unwrap();
+        let guard = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let entry = guard.as_ref().unwrap();
         assert_eq!(entry.root, tmp2.path());
         assert_eq!(entry.index.doc_count, idx2.doc_count);

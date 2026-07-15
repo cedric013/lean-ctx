@@ -288,7 +288,9 @@ mod tests {
     /// baseline → delta → tags assertions must not run as parallel tests.
     #[test]
     fn baseline_then_deltas_then_tags() {
-        *BASELINE.lock().unwrap() = None;
+        *BASELINE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 
         // Cycle 1: baseline only, nothing submitted.
         assert!(build_series(1000).is_empty());

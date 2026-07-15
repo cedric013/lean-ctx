@@ -51,7 +51,9 @@ fn per_file_lock_serializes_concurrent_access() {
         let path = path.to_string();
         handles.push(std::thread::spawn(move || {
             let lock = per_file_lock(&path);
-            let _guard = lock.lock().unwrap();
+            let _guard = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let active = counter.fetch_add(1, Ordering::SeqCst) + 1;
             max_concurrent.fetch_max(active, Ordering::SeqCst);
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -78,7 +80,9 @@ fn per_file_lock_allows_parallel_different_paths() {
         let path = format!("/tmp/test_parallel_{i}.txt");
         handles.push(std::thread::spawn(move || {
             let lock = per_file_lock(&path);
-            let _guard = lock.lock().unwrap();
+            let _guard = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let active = counter.fetch_add(1, Ordering::SeqCst) + 1;
             max_concurrent.fetch_max(active, Ordering::SeqCst);
             std::thread::sleep(std::time::Duration::from_millis(50));
