@@ -447,8 +447,8 @@ class CockpitCommander extends HTMLElement {
 
       // Expandable trail row (power mode)
       if (this._powerMode && r.source_trail && r.source_trail.length > 0) {
-        const expanded = this._expandedTrails.has(idx);
-        h += '<tr class="cmdr-trail-toggle" data-trail-idx="' + idx + '">';
+        const expanded = this._expandedTrails.has(r.path);
+        h += '<tr class="cmdr-trail-toggle" data-trail-path="' + pd + '">';
         h += '<td colspan="' + (this._powerMode ? 12 : 6) + '" style="padding:2px 12px;font-size:10px;cursor:pointer;color:var(--muted)">';
         h += (expanded ? '\u25bc' : '\u25b6') + ' Why in context? (' + r.source_trail.length + ')';
         h += '</td></tr>';
@@ -507,11 +507,11 @@ class CockpitCommander extends HTMLElement {
 
     this.querySelectorAll('.cmdr-trail-toggle').forEach(row => {
       row.addEventListener('click', () => {
-        const idx = parseInt(row.getAttribute('data-trail-idx'), 10);
-        if (this._expandedTrails.has(idx)) {
-          this._expandedTrails.delete(idx);
+        const path = decodeURIComponent(row.getAttribute('data-trail-path'));
+        if (this._expandedTrails.has(path)) {
+          this._expandedTrails.delete(path);
         } else {
-          this._expandedTrails.add(idx);
+          this._expandedTrails.add(path);
         }
         this.render();
       });
