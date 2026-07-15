@@ -260,6 +260,7 @@ fn reserve_event_id_block_at(
     result
 }
 
+#[cfg(test)]
 fn next_event_id_at(
     sequence_path: &std::path::Path,
     journal_path: &std::path::Path,
