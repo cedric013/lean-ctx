@@ -101,8 +101,10 @@ impl Config {
         }
         // Index filters (#735): repo-local excludes extend the global list; a
         // repo-local include set (the stricter, corpus-defining axis) replaces
-        // the global one; gitignore handling can only be switched off locally
-        // (same only-tighten pattern as the bool flags above).
+        // the global one. Disabling gitignore respect is trust-gated: it widens
+        // the indexed/searchable surface, so an untrusted repo's
+        // `respect_gitignore = false` is reset by `strip_sensitive_overrides` and
+        // this branch only lands from a trusted local config.
         if !local.index.exclude.is_empty() {
             self.index.exclude.extend(local.index.exclude);
         }

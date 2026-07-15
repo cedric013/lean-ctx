@@ -940,6 +940,27 @@ mod extra_roots_tests {
     }
 
     #[test]
+    fn merge_local_untrusted_withholds_gitignore_disable() {
+        let mut untrusted = Config::default();
+        assert!(untrusted.index.respect_gitignore);
+        untrusted.merge_local("[index]\nrespect_gitignore = false\n", false);
+        assert!(
+            untrusted.index.respect_gitignore,
+            "untrusted workspace must not disable gitignore respect"
+        );
+
+        let mut trusted = Config::default();
+        trusted.merge_local("[index]\nrespect_gitignore = false\n", true);
+        assert!(
+            !trusted.index.respect_gitignore,
+            "trusted workspace may disable gitignore respect"
+        );
+
+        let withheld = local_sensitive_overrides("[index]\nrespect_gitignore = false\n");
+        assert!(withheld.contains(&"index.respect_gitignore"));
+    }
+
+    #[test]
     fn allow_symlink_roots_follows_extra_roots_trust_semantics() {
         // #596 premium: the symlink write-through allowlist is security-sensitive,
         // so an untrusted workspace's entry is withheld while a trusted one applies.

@@ -918,6 +918,12 @@ fn strip_sensitive_overrides(local: &mut Config) -> Vec<&'static str> {
         local.permission_inheritance = None;
         withheld.push("permission_inheritance");
     }
+    strip_tool_surface_sensitive_overrides(local, &mut withheld);
+
+    withheld
+}
+
+fn strip_tool_surface_sensitive_overrides(local: &mut Config, withheld: &mut Vec<&'static str>) {
     if !local.disabled_tools.is_empty() {
         local.disabled_tools.clear();
         withheld.push("disabled_tools");
@@ -934,8 +940,15 @@ fn strip_sensitive_overrides(local: &mut Config) -> Vec<&'static str> {
         local.default_tool_categories.clear();
         withheld.push("default_tool_categories");
     }
-
-    withheld
+    // Disabling gitignore respect widens the indexed/searchable surface
+    // (gitignored files become visible to ctx_search) -- a boundary an
+    // untrusted repo must not relax. is_secret_like still guards obvious
+    // secrets, but private/gitignored files that do not match that heuristic
+    // would otherwise leak.
+    if !local.index.respect_gitignore {
+        local.index.respect_gitignore = true;
+        withheld.push("index.respect_gitignore");
+    }
 }
 
 /// Names of the SECURITY-sensitive overrides a project-local `.lean-ctx.toml`
