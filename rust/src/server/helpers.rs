@@ -52,8 +52,11 @@ pub fn hash_fast(s: &str) -> String {
     } else {
         let prefix = &s[..s.floor_char_boundary(4096)];
         let suffix = &s[s.ceil_char_boundary(s.len().saturating_sub(4096))..];
-        let key = format!("{}{}{}", prefix, s.len(), suffix);
-        crate::core::hasher::hash_str(&key)
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(prefix.as_bytes());
+        hasher.update(s.len().to_string().as_bytes());
+        hasher.update(suffix.as_bytes());
+        hasher.finalize().to_hex().to_string()
     }
 }
 
