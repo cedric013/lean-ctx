@@ -23,6 +23,59 @@ pub struct EvictionOrchestrator {
     token_budget: usize,
 }
 
+#[derive(Default)]
+struct EvictionRegistry {
+    targets: Vec<std::sync::Weak<EvictionOrchestrator>>,
+}
+
+impl EvictionRegistry {
+    fn register(&mut self, target: &Arc<EvictionOrchestrator>) {
+        self.targets.retain(|target| target.strong_count() > 0);
+        self.targets.push(Arc::downgrade(target));
+    }
+
+    fn live_targets(&mut self) -> Vec<Arc<EvictionOrchestrator>> {
+        let live = self
+            .targets
+            .iter()
+            .filter_map(std::sync::Weak::upgrade)
+            .collect();
+        self.targets.retain(|target| target.strong_count() > 0);
+        live
+    }
+}
+
+static TARGETS: std::sync::LazyLock<Mutex<EvictionRegistry>> =
+    std::sync::LazyLock::new(|| Mutex::new(EvictionRegistry::default()));
+
+/// Register a server-local eviction target without extending its lifetime.
+pub fn register(target: &Arc<EvictionOrchestrator>) {
+    TARGETS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .register(target);
+}
+
+/// Fan process-wide RSS pressure out to every live server-local cache.
+pub fn on_memory_pressure(level: memory_guard::PressureLevel) {
+    let live = TARGETS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .live_targets();
+
+    for target in live {
+        target.on_pressure(level);
+    }
+
+    // These caches are process-global rather than owned by a server target.
+    if level >= memory_guard::PressureLevel::Hard {
+        super::content_cache::clear();
+        super::ann_cache::clear();
+        super::search_index::clear_resident();
+        super::graph_cache::invalidate(None);
+    }
+}
+
 impl EvictionOrchestrator {
     pub fn new(cache: SharedCache, bm25_cache: SharedBm25Cache) -> Self {
         let token_budget = super::cache::max_cache_tokens();
@@ -225,6 +278,35 @@ mod tests {
         let cache = Arc::new(tokio::sync::RwLock::new(SessionCache::new()));
         let bm25_cache: SharedBm25Cache = Arc::new(std::sync::Mutex::new(None));
         EvictionOrchestrator::new(cache, bm25_cache)
+    }
+
+    #[test]
+    fn registry_fans_out_and_prunes_dropped_targets() {
+        let first = Arc::new(make_orchestrator());
+        let second = Arc::new(make_orchestrator());
+        let first_cache = first.cache.clone();
+        let second_cache = second.cache.clone();
+        first_cache
+            .blocking_write()
+            .store("/first.rs", "fn first() {}");
+        second_cache
+            .blocking_write()
+            .store("/second.rs", "fn second() {}");
+
+        let mut registry = EvictionRegistry::default();
+        registry.register(&first);
+        registry.register(&second);
+        let live = registry.live_targets();
+        assert_eq!(live.len(), 2);
+        for target in live {
+            target.on_pressure(memory_guard::PressureLevel::Critical);
+        }
+        assert_eq!(first_cache.blocking_read().total_cached_tokens(), 0);
+        assert_eq!(second_cache.blocking_read().total_cached_tokens(), 0);
+
+        drop(second);
+        assert_eq!(registry.live_targets().len(), 1);
+        assert_eq!(registry.targets.len(), 1);
     }
 
     #[test]

@@ -127,17 +127,18 @@ impl LeanCtxServer {
         let bm25_cache: Arc<std::sync::Mutex<Option<crate::core::bm25_cache::Bm25CacheEntry>>> =
             Arc::new(std::sync::Mutex::new(None));
 
-        // Start the RAM guardian with real eviction via EvictionOrchestrator.
-        // Bridges memory_guard (RSS monitoring) → HomeostasisController (graduated actions).
-        let orchestrator = std::sync::Arc::new(
+        // Register every server-local cache with the single process-wide guardian.
+        // The registry stores weak targets, so closed HTTP/MCP sessions are not retained.
+        let eviction_target = std::sync::Arc::new(
             crate::core::eviction_orchestrator::EvictionOrchestrator::new(
                 cache.clone(),
                 bm25_cache.clone(),
             ),
         );
-        crate::core::memory_guard::start_guard(std::sync::Arc::new(move |level| {
-            orchestrator.on_pressure(level);
-        }));
+        crate::core::eviction_orchestrator::register(&eviction_target);
+        crate::core::memory_guard::start_guard(std::sync::Arc::new(
+            crate::core::eviction_orchestrator::on_memory_pressure,
+        ));
 
         Self {
             cache,
@@ -190,6 +191,7 @@ impl LeanCtxServer {
             roots_list_attempts: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             bm25_cache,
             progress_sender: Arc::new(std::sync::Mutex::new(None)),
+            eviction_target,
             last_tools_config_hash: Arc::new(std::sync::atomic::AtomicU64::new(
                 crate::server::tools_config_watch::current_hash(),
             )),
