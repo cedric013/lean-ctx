@@ -42,7 +42,10 @@ fn build_edges_with_cache(index: &mut ProjectIndex, content_cache: &HashMap<Stri
     // Fan-out adapts before every batch to current guardian headroom.
     const EDGE_BATCH_SIZE: usize = 500;
     const EDGE_MIN_BATCH_FILES: usize = 1;
-    const EDGE_EST_TRANSIENT_PER_FILE: u64 = 256 * 1024;
+    // Import resolution + deep analysis per file: content (often from cache,
+    // so only the Cow overhead) + resolved-import strings + DeepAnalysis.
+    // Heavier than scan because deep_queries::analyze is O(n_imports).
+    const EDGE_EST_TRANSIENT_PER_FILE: u64 = 320 * 1024;
     // #790: flush edges into index.edges after each batch instead of
     // accumulating all FileEdges in a Vec. Only type_inputs (C#/Java/Go/Kotlin)
     // are retained across batches for the cross-file type_ref pass.

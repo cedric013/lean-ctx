@@ -786,7 +786,10 @@ fn scan_inner(project_root: &str) -> (ProjectIndex, HashMap<String, String>) {
     /// Maximum phase-2 fan-out. Actual batches shrink with guardian headroom.
     const SCAN_BATCH_FILES: usize = 500;
     const SCAN_MIN_BATCH_FILES: usize = 1;
-    const SCAN_EST_TRANSIENT_PER_FILE: u64 = 256 * 1024;
+    // Per-file scan: content string (~20 KB avg) + SHA-256 state +
+    // signature extraction + line/token counts. Lighter than BM25
+    // because no chunk splitting or lowered-token vectors are built.
+    const SCAN_EST_TRANSIENT_PER_FILE: u64 = 192 * 1024;
     let scan_deadline = std::time::Instant::now() + std::time::Duration::from_mins(5);
 
     // #934: two-phase scan. Phase 1 walks the tree sequentially (cheap; it

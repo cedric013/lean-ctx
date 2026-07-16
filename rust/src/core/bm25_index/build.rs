@@ -31,13 +31,16 @@ const MAX_BATCH_FILES: usize = 500;
 /// Minimum progress unit under low headroom.
 const MIN_BATCH_FILES: usize = 1;
 
-/// Conservative estimate of peak transient memory per file during preparation.
+/// Conservative estimate of peak transient memory per file during BM25
+/// preparation: file content (~20 KB avg) + tree-sitter chunks + lowered
+/// token vectors + content-cache Arc. Higher than graph-scan because
+/// chunk extraction and tokenization run concurrently per batch element.
 const EST_TRANSIENT_PER_FILE: u64 = 256 * 1024;
 
 fn effective_batch_size(max_files: usize) -> usize {
     crate::core::memory_guard::adaptive_batch_size(
         MIN_BATCH_FILES,
-        max_files.min(MAX_BATCH_FILES).max(1),
+        max_files.clamp(1, MAX_BATCH_FILES),
         EST_TRANSIENT_PER_FILE,
     )
 }
@@ -208,9 +211,6 @@ fn prepare_incremental_file(
         && let Some(chunks) = old_by_file.get(rel)
         && chunks.first().is_some_and(|c| !c.content.is_empty())
     {
-        if crate::core::memory_guard::abort_requested() {
-            return None;
-        }
         return Some(PreparedFile {
             rel: rel.to_string(),
             state,
@@ -238,16 +238,17 @@ impl BM25Index {
         Self::build_parallel_batched(root, content_hint, files, MAX_BATCH_FILES)
     }
 
-    /// Batch-size-injectable core of [`Self::build_parallel`] so the multi-batch
-    /// merge path is testable without a 2000-file corpus.
+    /// Batch-size-injectable core of [`Self::build_parallel`]. `max_batch_size`
+    /// caps the upper bound; actual batch sizes adapt to RSS headroom each
+    /// iteration. Testable without a 2000-file corpus.
     pub(super) fn build_parallel_batched(
         root: &Path,
         content_hint: &HashMap<String, String>,
         files: &[String],
-        batch_size: usize,
+        max_batch_size: usize,
     ) -> Self {
         let mut index = Self::new();
-        let max_batch_size = batch_size.max(1).min(MAX_BATCH_FILES);
+        let max_batch_size = max_batch_size.clamp(1, MAX_BATCH_FILES);
         let mut files_done = 0;
         while files_done < files.len() {
             if parallel_build_must_stop("bm25", files_done) {
