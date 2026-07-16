@@ -1,5 +1,7 @@
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::config;
 use crate::core::slow_log;
@@ -26,7 +28,15 @@ fn wait_with_limits(
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
     let start = std::time::Instant::now();
+    // Set by either reader thread the instant it hits its byte limit, so the
+    // main loop below can kill the child right away instead of waiting out
+    // the rest of `timeout`. Once a reader thread stops draining its pipe, a
+    // child that keeps writing (and doesn't die from EPIPE/SIGPIPE — e.g. it
+    // ignores the signal, or there's no such thing on Windows) just blocks
+    // on a full pipe until the full timeout finally kills it.
+    let truncated = Arc::new(AtomicBool::new(false));
 
+    let stdout_truncated_flag = Arc::clone(&truncated);
     let stdout_handle = std::thread::spawn(move || {
         let Some(mut pipe) = stdout_pipe else {
             return (Vec::new(), false);
@@ -40,6 +50,7 @@ fn wait_with_limits(
                     if buf.len() + n > max_bytes {
                         let remaining = max_bytes.saturating_sub(buf.len());
                         buf.extend_from_slice(&chunk[..remaining]);
+                        stdout_truncated_flag.store(true, Ordering::Relaxed);
                         return (buf, true);
                     }
                     buf.extend_from_slice(&chunk[..n]);
@@ -51,6 +62,7 @@ fn wait_with_limits(
         (buf, false)
     });
 
+    let stderr_truncated_flag = Arc::clone(&truncated);
     let stderr_handle = std::thread::spawn(move || {
         let Some(mut pipe) = stderr_pipe else {
             return Vec::new();
@@ -63,6 +75,7 @@ fn wait_with_limits(
                 Ok(0) => break,
                 Ok(n) => {
                     if buf.len() + n > STDERR_LIMIT {
+                        stderr_truncated_flag.store(true, Ordering::Relaxed);
                         break;
                     }
                     buf.extend_from_slice(&chunk[..n]);
@@ -76,10 +89,11 @@ fn wait_with_limits(
 
     let mut timed_out = false;
     loop {
-        if start.elapsed() > timeout {
+        let hit_timeout = start.elapsed() > timeout;
+        if hit_timeout || truncated.load(Ordering::Relaxed) {
             kill_child(&mut child, kill_group);
             let _ = child.wait();
-            timed_out = true;
+            timed_out = hit_timeout;
             break;
         }
         match child.try_wait() {
@@ -1106,6 +1120,33 @@ mod exec_tests {
             stdout.len(),
             &stdout[stdout.len().saturating_sub(80)..]
         );
+    }
+
+    #[test]
+    fn wait_with_limits_kills_promptly_on_truncation() {
+        // GH #948: once the reader thread hit max_bytes it used to just
+        // stop draining the pipe and let the main loop poll until the full
+        // `timeout` elapsed, even though truncation had already happened.
+        // `yes` writes effectively unbounded output; with a tiny byte limit
+        // and a timeout far longer than a prompt kill should ever take, a
+        // regression here would make this run close to the 20s timeout.
+        let child = std::process::Command::new("yes")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let start = std::time::Instant::now();
+        let output =
+            super::wait_with_limits(child, 4096, std::time::Duration::from_secs(20), false);
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(3),
+            "truncation should kill promptly, took {elapsed:?} (timeout was 20s)"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("[lean-ctx: output truncated"));
     }
 
     #[test]
