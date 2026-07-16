@@ -70,13 +70,15 @@ fn load_graph_data(graph: &CodeGraph) -> Result<GraphData, String> {
     let conn = &graph.connection();
     let mut stmt = conn
         .prepare(
-            "SELECT DISTINCT n_src.file_path, n_tgt.file_path
+            "SELECT DISTINCT p_src.path, p_tgt.path
          FROM edges e
          JOIN nodes n_src ON e.source_id = n_src.id
          JOIN nodes n_tgt ON e.target_id = n_tgt.id
+         JOIN paths p_src ON p_src.id = n_src.file_id
+         JOIN paths p_tgt ON p_tgt.id = n_tgt.file_id
          WHERE e.kind = 'imports'
            AND n_src.kind = 'file' AND n_tgt.kind = 'file'
-           AND n_src.file_path != n_tgt.file_path",
+           AND n_src.file_id != n_tgt.file_id",
         )
         .map_err(|e| format!("{e}"))?;
 
@@ -99,7 +101,11 @@ fn load_graph_data(graph: &CodeGraph) -> Result<GraphData, String> {
     }
 
     let mut file_stmt = conn
-        .prepare("SELECT DISTINCT file_path FROM nodes WHERE kind = 'file'")
+        .prepare(
+            "SELECT DISTINCT p.path
+             FROM nodes n JOIN paths p ON p.id = n.file_id
+             WHERE n.kind = 'file'",
+        )
         .map_err(|e| format!("{e}"))?;
     let file_rows = file_stmt
         .query_map([], |row| row.get::<_, String>(0))

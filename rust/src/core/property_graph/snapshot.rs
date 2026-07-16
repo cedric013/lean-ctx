@@ -204,7 +204,8 @@ fn resolve_endpoint(
     let conn = graph.connection();
     let found: Option<i64> = conn
         .query_row(
-            "SELECT id FROM nodes WHERE kind = ?1 AND file_path = ?2 AND name = ?3",
+            "SELECT n.id FROM nodes n JOIN paths p ON p.id = n.file_id
+             WHERE n.kind = ?1 AND p.path = ?2 AND n.name = ?3",
             params![identity.0, identity.1, identity.2],
             |row| row.get(0),
         )

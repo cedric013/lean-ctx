@@ -304,14 +304,16 @@ fn graph_hotspot_rows(project_root: &str, gp: &GraphProvider) -> Vec<(String, us
     if let Ok(graph) = crate::core::property_graph::CodeGraph::open(project_root) {
         let sql = "
             WITH edge_files AS (
-              SELECT e.kind AS kind, ns.file_path AS fp
+              SELECT e.kind AS kind, ps.path AS fp
               FROM edges e
               JOIN nodes ns ON e.source_id = ns.id
+              JOIN paths ps ON ps.id = ns.file_id
               WHERE e.kind IN ('imports', 'calls')
               UNION ALL
-              SELECT e.kind, nt.file_path
+              SELECT e.kind, pt.path
               FROM edges e
               JOIN nodes nt ON e.target_id = nt.id
+              JOIN paths pt ON pt.id = nt.file_id
               WHERE e.kind IN ('imports', 'calls')
             )
             SELECT fp,

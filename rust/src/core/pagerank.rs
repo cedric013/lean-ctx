@@ -18,9 +18,11 @@ impl PageRankInput {
         let mut files: HashSet<String> = HashSet::new();
         let mut forward: HashMap<String, Vec<String>> = HashMap::new();
 
-        if let Ok(mut stmt) =
-            conn.prepare("SELECT DISTINCT file_path FROM nodes WHERE kind = 'file'")
-            && let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0))
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT DISTINCT p.path
+             FROM nodes n JOIN paths p ON p.id = n.file_id
+             WHERE n.kind = 'file'",
+        ) && let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0))
         {
             for f in rows.flatten() {
                 files.insert(f);
@@ -28,12 +30,14 @@ impl PageRankInput {
         }
 
         let edge_sql = "
-            SELECT DISTINCT n1.file_path, n2.file_path
+            SELECT DISTINCT p1.path, p2.path
             FROM edges e
             JOIN nodes n1 ON e.source_id = n1.id
             JOIN nodes n2 ON e.target_id = n2.id
+            JOIN paths p1 ON p1.id = n1.file_id
+            JOIN paths p2 ON p2.id = n2.file_id
             WHERE n1.kind = 'file' AND n2.kind = 'file'
-              AND n1.file_path != n2.file_path
+              AND n1.file_id != n2.file_id
         ";
         if let Ok(mut stmt) = conn.prepare(edge_sql)
             && let Ok(rows) = stmt.query_map([], |row| {

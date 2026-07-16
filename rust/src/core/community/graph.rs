@@ -189,9 +189,11 @@ pub(super) fn cohesion_of(graph: &AdjGraph, members: &[usize]) -> f64 {
 }
 
 fn query_files(conn: &Connection) -> Vec<String> {
-    let Ok(mut stmt) =
-        conn.prepare("SELECT DISTINCT file_path FROM nodes WHERE kind = 'file' ORDER BY file_path")
-    else {
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT p.path
+         FROM nodes n JOIN paths p ON p.id = n.file_id
+         WHERE n.kind = 'file' ORDER BY p.path",
+    ) else {
         tracing::warn!("community: failed to prepare file query");
         return Vec::new();
     };
@@ -205,13 +207,15 @@ fn query_files(conn: &Connection) -> Vec<String> {
 
 fn query_file_edges(conn: &Connection) -> Vec<(String, String, f64)> {
     let sql = "
-        SELECT DISTINCT n1.file_path, n2.file_path, e.kind
+        SELECT DISTINCT p1.path, p2.path, e.kind
         FROM edges e
         JOIN nodes n1 ON e.source_id = n1.id
         JOIN nodes n2 ON e.target_id = n2.id
+        JOIN paths p1 ON p1.id = n1.file_id
+        JOIN paths p2 ON p2.id = n2.file_id
         WHERE n1.kind = 'file' AND n2.kind = 'file'
-          AND n1.file_path != n2.file_path
-        ORDER BY n1.file_path, n2.file_path
+          AND n1.file_id != n2.file_id
+        ORDER BY p1.path, p2.path
     ";
     let Ok(mut stmt) = conn.prepare(sql) else {
         tracing::warn!("community: failed to prepare edge query");

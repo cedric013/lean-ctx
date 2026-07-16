@@ -444,7 +444,7 @@ impl PackageBuilder {
 fn export_graph_nodes(graph: &crate::core::property_graph::CodeGraph) -> Vec<GraphNodeExport> {
     let conn = graph.connection();
     let Ok(mut stmt) =
-        conn.prepare("SELECT kind, name, file_path, line_start, line_end, metadata FROM nodes")
+        conn.prepare("SELECT n.kind, n.name, p.path, n.line_start, n.line_end, n.metadata FROM nodes n JOIN paths p ON p.id = n.file_id")
     else {
         tracing::warn!("ctxpkg: failed to prepare graph nodes query");
         return Vec::new();
@@ -479,10 +479,12 @@ fn export_graph_nodes(graph: &crate::core::property_graph::CodeGraph) -> Vec<Gra
 fn export_graph_edges(graph: &crate::core::property_graph::CodeGraph) -> Vec<GraphEdgeExport> {
     let conn = graph.connection();
     let sql = "
-        SELECT n1.file_path, n1.name, n2.file_path, n2.name, e.kind, e.metadata
+        SELECT p1.path, n1.name, p2.path, n2.name, e.kind, e.metadata
         FROM edges e
         JOIN nodes n1 ON e.source_id = n1.id
         JOIN nodes n2 ON e.target_id = n2.id
+        JOIN paths p1 ON p1.id = n1.file_id
+        JOIN paths p2 ON p2.id = n2.file_id
     ";
     let Ok(mut stmt) = conn.prepare(sql) else {
         tracing::warn!("ctxpkg: failed to prepare graph edges query");

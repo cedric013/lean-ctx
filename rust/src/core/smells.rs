@@ -114,7 +114,7 @@ pub fn summarize(findings: &[SmellFinding]) -> Vec<SmellSummary> {
 /// dynamic/re-export usage rather than true death (see GH #365).
 fn detect_dead_code(conn: &Connection) -> Vec<SmellFinding> {
     let sql = "
-        SELECT n.name, n.file_path, n.line_start,
+        SELECT n.name, p.path, n.line_start,
                EXISTS(
                    SELECT 1 FROM edges e2
                    WHERE e2.source_id = n.id AND e2.kind = 'exports'
@@ -124,18 +124,19 @@ fn detect_dead_code(conn: &Connection) -> Vec<SmellFinding> {
                    JOIN nodes f ON f.id = e3.target_id
                    WHERE e3.kind = 'imports'
                      AND f.kind = 'file'
-                     AND f.file_path = n.file_path
+                     AND f.file_id = n.file_id
                ) AS file_imported
         FROM nodes n
+        JOIN paths p ON p.id = n.file_id
         WHERE n.kind = 'symbol'
-          AND n.file_path NOT LIKE '%test%'
-          AND n.file_path NOT LIKE '%spec%'
+          AND p.path NOT LIKE '%test%'
+          AND p.path NOT LIKE '%spec%'
           AND n.name NOT IN ('main', 'new', 'default', 'fmt', 'drop', '<module>')
           AND n.id NOT IN (
               SELECT DISTINCT e.target_id FROM edges e
               WHERE e.kind IN ('calls', 'type_ref', 'imports')
           )
-        ORDER BY n.file_path, n.line_start
+        ORDER BY p.path, n.line_start
         LIMIT 200
     ";
     let mut findings = Vec::new();
@@ -186,9 +187,10 @@ fn detect_dead_code(conn: &Connection) -> Vec<SmellFinding> {
 
 fn detect_long_functions(conn: &Connection, threshold: usize) -> Vec<SmellFinding> {
     let sql = format!(
-        "SELECT n.name, n.file_path, n.line_start,
+        "SELECT n.name, p.path, n.line_start,
                 (n.line_end - n.line_start) AS span
          FROM nodes n
+        JOIN paths p ON p.id = n.file_id
          WHERE n.kind = 'symbol'
            AND n.line_start IS NOT NULL
            AND n.line_end IS NOT NULL
@@ -209,9 +211,10 @@ fn detect_long_functions(conn: &Connection, threshold: usize) -> Vec<SmellFindin
 
 fn detect_long_files(conn: &Connection, threshold: usize) -> Vec<SmellFinding> {
     let sql = format!(
-        "SELECT n.name, n.file_path, NULL,
+        "SELECT n.name, p.path, NULL,
                 CAST(n.metadata AS INTEGER) AS line_count
          FROM nodes n
+        JOIN paths p ON p.id = n.file_id
          WHERE n.kind = 'file'
            AND n.metadata IS NOT NULL
            AND CAST(n.metadata AS INTEGER) > {threshold}
@@ -231,10 +234,11 @@ fn detect_long_files(conn: &Connection, threshold: usize) -> Vec<SmellFinding> {
 
 fn detect_god_files(conn: &Connection, threshold: usize) -> Vec<SmellFinding> {
     let sql = format!(
-        "SELECT COUNT(*) AS sym_count, n.file_path
+        "SELECT COUNT(*) AS sym_count, p.path
          FROM nodes n
+        JOIN paths p ON p.id = n.file_id
          WHERE n.kind = 'symbol'
-         GROUP BY n.file_path
+         GROUP BY p.path
          HAVING sym_count > {threshold}
          ORDER BY sym_count DESC
          LIMIT 50"
@@ -265,8 +269,9 @@ fn detect_god_files(conn: &Connection, threshold: usize) -> Vec<SmellFinding> {
 
 fn detect_fan_out(conn: &Connection, threshold: usize) -> Vec<SmellFinding> {
     let sql = format!(
-        "SELECT n.name, n.file_path, n.line_start, COUNT(e.id) AS call_count
+        "SELECT n.name, p.path, n.line_start, COUNT(e.id) AS call_count
          FROM nodes n
+        JOIN paths p ON p.id = n.file_id
          JOIN edges e ON e.source_id = n.id AND e.kind = 'calls'
          WHERE n.kind = 'symbol'
          GROUP BY n.id
@@ -287,8 +292,9 @@ fn detect_fan_out(conn: &Connection, threshold: usize) -> Vec<SmellFinding> {
 
 fn detect_duplicate_definitions(conn: &Connection) -> Vec<SmellFinding> {
     let sql = "
-        SELECT n.name, GROUP_CONCAT(n.file_path, ', ') AS files, COUNT(*) AS cnt
+        SELECT n.name, GROUP_CONCAT(p.path, ', ') AS files, COUNT(*) AS cnt
         FROM nodes n
+        JOIN paths p ON p.id = n.file_id
         WHERE n.kind = 'symbol'
           AND n.name NOT IN ('new', 'default', 'fmt', 'from', 'into', 'drop', 'clone', 'eq')
         GROUP BY n.name
@@ -326,11 +332,12 @@ fn detect_duplicate_definitions(conn: &Connection) -> Vec<SmellFinding> {
 
 fn detect_untested(conn: &Connection) -> Vec<SmellFinding> {
     let sql = "
-        SELECT n.name, n.file_path, n.line_start
+        SELECT n.name, p.path, n.line_start
         FROM nodes n
+        JOIN paths p ON p.id = n.file_id
         WHERE n.kind = 'symbol'
-          AND n.file_path NOT LIKE '%test%'
-          AND n.file_path NOT LIKE '%spec%'
+          AND p.path NOT LIKE '%test%'
+          AND p.path NOT LIKE '%spec%'
           AND n.metadata LIKE '%export%'
           AND n.id NOT IN (
               SELECT DISTINCT e.source_id FROM edges e WHERE e.kind = 'tested_by'
@@ -338,7 +345,7 @@ fn detect_untested(conn: &Connection) -> Vec<SmellFinding> {
           AND n.id NOT IN (
               SELECT DISTINCT e.target_id FROM edges e WHERE e.kind = 'tested_by'
           )
-        ORDER BY n.file_path, n.line_start
+        ORDER BY p.path, n.line_start
         LIMIT 100
     ";
     query_findings(
@@ -365,10 +372,11 @@ fn detect_cyclomatic_complexity(conn: &Connection) -> Vec<SmellFinding> {
 #[cfg(not(feature = "tree-sitter"))]
 fn detect_cyclomatic_heuristic(conn: &Connection) -> Vec<SmellFinding> {
     let sql = "
-        SELECT n.name, n.file_path, n.line_start,
+        SELECT n.name, p.path, n.line_start,
                (n.line_end - n.line_start) AS span,
                (SELECT COUNT(*) FROM edges e WHERE e.source_id = n.id AND e.kind = 'calls') AS calls
         FROM nodes n
+        JOIN paths p ON p.id = n.file_id
         WHERE n.kind = 'symbol'
           AND n.line_start IS NOT NULL
           AND n.line_end IS NOT NULL
@@ -428,11 +436,12 @@ fn detect_cyclomatic_tree_sitter(conn: &Connection) -> Vec<SmellFinding> {
     const ERR_CC: u32 = 21;
 
     let sql = "
-        SELECT DISTINCT n.file_path
+        SELECT DISTINCT p.path
         FROM nodes n
+        JOIN paths p ON p.id = n.file_id
         WHERE n.kind = 'symbol'
-          AND n.file_path IS NOT NULL
-          AND length(trim(n.file_path)) > 0
+          AND p.path IS NOT NULL
+          AND length(trim(p.path)) > 0
         LIMIT 400
     ";
     let mut paths = Vec::new();
