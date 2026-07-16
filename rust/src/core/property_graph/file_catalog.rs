@@ -13,10 +13,11 @@ pub struct FileCatalogEntry {
 
 pub(super) fn upsert(conn: &Connection, entry: &FileCatalogEntry) -> anyhow::Result<()> {
     let exports_json = serde_json::to_string(&entry.exports).unwrap_or_else(|_| "[]".to_string());
+    let file_id = super::path_id::intern(conn, &entry.path)?;
     conn.execute(
-        "INSERT INTO file_catalog (path, hash, language, line_count, token_count, exports, summary)
+        "INSERT INTO file_catalog (file_id, hash, language, line_count, token_count, exports, summary)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(path) DO UPDATE SET
+         ON CONFLICT(file_id) DO UPDATE SET
              hash = excluded.hash,
              language = excluded.language,
              line_count = excluded.line_count,
@@ -24,7 +25,7 @@ pub(super) fn upsert(conn: &Connection, entry: &FileCatalogEntry) -> anyhow::Res
              exports = excluded.exports,
              summary = excluded.summary",
         params![
-            entry.path,
+            file_id.raw(),
             entry.hash,
             entry.language,
             entry.line_count as i64,
@@ -38,8 +39,9 @@ pub(super) fn upsert(conn: &Connection, entry: &FileCatalogEntry) -> anyhow::Res
 
 pub(super) fn get(conn: &Connection, path: &str) -> anyhow::Result<Option<FileCatalogEntry>> {
     let mut stmt = conn.prepare(
-        "SELECT path, hash, language, line_count, token_count, exports, summary
-         FROM file_catalog WHERE path = ?1",
+        "SELECT p.path, f.hash, f.language, f.line_count, f.token_count, f.exports, f.summary
+         FROM file_catalog f JOIN paths p ON p.id = f.file_id
+         WHERE p.path = ?1",
     )?;
 
     let result = stmt
@@ -66,7 +68,9 @@ pub(super) fn count(conn: &Connection) -> anyhow::Result<usize> {
 }
 
 pub(super) fn all_paths(conn: &Connection) -> anyhow::Result<Vec<String>> {
-    let mut stmt = conn.prepare("SELECT path FROM file_catalog ORDER BY path")?;
+    let mut stmt = conn.prepare(
+        "SELECT p.path FROM file_catalog f JOIN paths p ON p.id = f.file_id ORDER BY p.path",
+    )?;
     let paths = stmt
         .query_map([], |row| row.get(0))?
         .filter_map(Result::ok)

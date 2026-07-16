@@ -50,12 +50,14 @@ pub fn edge_weight(kind: &str) -> f64 {
 /// Files that depend on `file_path` via structural edges (imports, calls, type_ref, etc.).
 pub(super) fn dependents(conn: &Connection, file_path: &str) -> anyhow::Result<Vec<String>> {
     let sql = format!(
-        "SELECT DISTINCT n_src.file_path
+        "SELECT DISTINCT p_src.path
          FROM edges e
          JOIN nodes n_src ON e.source_id = n_src.id
          JOIN nodes n_tgt ON e.target_id = n_tgt.id
-         WHERE n_tgt.file_path = ?1
-           AND n_src.file_path != ?1
+         JOIN paths p_src ON p_src.id = n_src.file_id
+         JOIN paths p_tgt ON p_tgt.id = n_tgt.file_id
+         WHERE p_tgt.path = ?1
+           AND p_src.path != ?1
            AND e.kind IN ({STRUCTURAL_EDGE_KINDS})"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -73,12 +75,14 @@ pub(super) fn dependents(conn: &Connection, file_path: &str) -> anyhow::Result<V
 /// Files that `file_path` depends on via structural edges.
 pub(super) fn dependencies(conn: &Connection, file_path: &str) -> anyhow::Result<Vec<String>> {
     let sql = format!(
-        "SELECT DISTINCT n_tgt.file_path
+        "SELECT DISTINCT p_tgt.path
          FROM edges e
          JOIN nodes n_src ON e.source_id = n_src.id
          JOIN nodes n_tgt ON e.target_id = n_tgt.id
-         WHERE n_src.file_path = ?1
-           AND n_tgt.file_path != ?1
+         JOIN paths p_src ON p_src.id = n_src.file_id
+         JOIN paths p_tgt ON p_tgt.id = n_tgt.file_id
+         WHERE p_src.path = ?1
+           AND p_tgt.path != ?1
            AND e.kind IN ({STRUCTURAL_EDGE_KINDS})"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -203,15 +207,17 @@ pub fn related_files(
     limit: usize,
 ) -> anyhow::Result<Vec<(String, f64)>> {
     let sql = format!(
-        "SELECT n_other.file_path, e.kind
+        "SELECT p_other.path, e.kind
          FROM edges e
          JOIN nodes n_self ON (e.source_id = n_self.id OR e.target_id = n_self.id)
          JOIN nodes n_other ON (
              (e.source_id = n_other.id AND e.target_id = n_self.id)
              OR (e.target_id = n_other.id AND e.source_id = n_self.id)
          )
-         WHERE n_self.file_path = ?1
-           AND n_other.file_path != ?1
+         JOIN paths p_self ON p_self.id = n_self.file_id
+         JOIN paths p_other ON p_other.id = n_other.file_id
+         WHERE p_self.path = ?1
+           AND p_other.path != ?1
            AND e.kind IN ({STRUCTURAL_EDGE_KINDS})"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -242,7 +248,8 @@ pub fn file_connectivity(
     let mut stmt_out = conn.prepare(
         "SELECT e.kind, COUNT(*)
          FROM edges e JOIN nodes n ON e.source_id = n.id
-         WHERE n.file_path = ?1
+         JOIN paths p ON p.id = n.file_id
+         WHERE p.path = ?1
          GROUP BY e.kind",
     )?;
     let rows = stmt_out.query_map(params![file_path], |row| {
@@ -256,7 +263,8 @@ pub fn file_connectivity(
     let mut stmt_in = conn.prepare(
         "SELECT e.kind, COUNT(*)
          FROM edges e JOIN nodes n ON e.target_id = n.id
-         WHERE n.file_path = ?1
+         JOIN paths p ON p.id = n.file_id
+         WHERE p.path = ?1
          GROUP BY e.kind",
     )?;
     let rows = stmt_in.query_map(params![file_path], |row| {
@@ -274,12 +282,14 @@ fn build_weighted_reverse_graph(
     conn: &Connection,
 ) -> anyhow::Result<HashMap<String, Vec<(String, f64)>>> {
     let sql = format!(
-        "SELECT n_tgt.file_path, n_src.file_path, e.kind
+        "SELECT p_tgt.path, p_src.path, e.kind
          FROM edges e
          JOIN nodes n_src ON e.source_id = n_src.id
          JOIN nodes n_tgt ON e.target_id = n_tgt.id
+         JOIN paths p_src ON p_src.id = n_src.file_id
+         JOIN paths p_tgt ON p_tgt.id = n_tgt.file_id
          WHERE e.kind IN ({STRUCTURAL_EDGE_KINDS})
-           AND n_src.file_path != n_tgt.file_path"
+           AND p_src.path != p_tgt.path"
     );
     let mut stmt = conn.prepare(&sql)?;
 
@@ -313,12 +323,14 @@ fn build_weighted_reverse_graph(
 
 fn build_forward_graph(conn: &Connection) -> anyhow::Result<HashMap<String, Vec<String>>> {
     let sql = format!(
-        "SELECT DISTINCT n_src.file_path, n_tgt.file_path
+        "SELECT DISTINCT p_src.path, p_tgt.path
          FROM edges e
          JOIN nodes n_src ON e.source_id = n_src.id
          JOIN nodes n_tgt ON e.target_id = n_tgt.id
+         JOIN paths p_src ON p_src.id = n_src.file_id
+         JOIN paths p_tgt ON p_tgt.id = n_tgt.file_id
          WHERE e.kind IN ({STRUCTURAL_EDGE_KINDS})
-           AND n_src.file_path != n_tgt.file_path"
+           AND p_src.path != p_tgt.path"
     );
     let mut stmt = conn.prepare(&sql)?;
 

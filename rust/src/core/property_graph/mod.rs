@@ -10,6 +10,7 @@ mod edge;
 pub mod file_catalog;
 mod meta;
 mod node;
+mod path_id;
 mod queries;
 mod schema;
 pub mod snapshot;
@@ -76,7 +77,8 @@ fn migrate_if_needed(project_root: &str, new_dir: &Path) {
 ///   graph stamped by an engine that predates the mirror fix must rebuild.
 /// - `4`: same-package `type_ref` edges extended to Go (directory-scoped) and
 ///   Kotlin (GH #398 bug class); graphs built before they existed must rebuild.
-pub const GRAPH_ENGINE_VERSION: u32 = 4;
+/// - `5`: PropertyGraph file paths use interned IDs; pre-ID databases rebuild.
+pub const GRAPH_ENGINE_VERSION: u32 = 5;
 
 /// `true` when the persisted graph was built by an engine older than
 /// [`GRAPH_ENGINE_VERSION`] — or predates the version stamp entirely (missing or
@@ -270,7 +272,7 @@ impl CodeGraph {
 
     pub fn clear(&self) -> anyhow::Result<()> {
         self.conn.execute_batch(
-            "DELETE FROM edges; DELETE FROM nodes; DELETE FROM file_catalog; \
+            "DELETE FROM edges; DELETE FROM nodes; DELETE FROM file_catalog; DELETE FROM paths; \
              DELETE FROM cross_source_edges;",
         )?;
         Ok(())
@@ -281,8 +283,9 @@ impl CodeGraph {
     /// so rebuilding the code graph never drops lateral provider hints, which
     /// live in their own table and are repopulated on a separate ingest cycle.
     pub fn clear_code_graph(&self) -> anyhow::Result<()> {
-        self.conn
-            .execute_batch("DELETE FROM edges; DELETE FROM nodes; DELETE FROM file_catalog;")?;
+        self.conn.execute_batch(
+            "DELETE FROM edges; DELETE FROM nodes; DELETE FROM file_catalog; DELETE FROM paths;",
+        )?;
         Ok(())
     }
 

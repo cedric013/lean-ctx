@@ -139,17 +139,18 @@ impl Node {
 }
 
 pub(super) fn upsert(conn: &Connection, node: &Node) -> anyhow::Result<i64> {
+    let file_id = super::path_id::intern(conn, &node.file_path)?;
     conn.execute(
-        "INSERT INTO nodes (kind, name, file_path, line_start, line_end, metadata)
+        "INSERT INTO nodes (kind, name, file_id, line_start, line_end, metadata)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(kind, name, file_path) DO UPDATE SET
+         ON CONFLICT(kind, name, file_id) DO UPDATE SET
             line_start = excluded.line_start,
             line_end = excluded.line_end,
             metadata = excluded.metadata",
         params![
             node.kind.as_str(),
             node.name,
-            node.file_path,
+            file_id.raw(),
             node.line_start.map(|v| v as i64),
             node.line_end.map(|v| v as i64),
             node.metadata,
@@ -157,8 +158,8 @@ pub(super) fn upsert(conn: &Connection, node: &Node) -> anyhow::Result<i64> {
     )?;
 
     let id: i64 = conn.query_row(
-        "SELECT id FROM nodes WHERE kind = ?1 AND name = ?2 AND file_path = ?3",
-        params![node.kind.as_str(), node.name, node.file_path],
+        "SELECT id FROM nodes WHERE kind = ?1 AND name = ?2 AND file_id = ?3",
+        params![node.kind.as_str(), node.name, file_id.raw()],
         |row| row.get(0),
     )?;
 
@@ -168,8 +169,9 @@ pub(super) fn upsert(conn: &Connection, node: &Node) -> anyhow::Result<i64> {
 pub(super) fn get_by_path(conn: &Connection, file_path: &str) -> anyhow::Result<Option<Node>> {
     let result = conn
         .query_row(
-            "SELECT id, kind, name, file_path, line_start, line_end, metadata
-             FROM nodes WHERE kind = 'file' AND file_path = ?1",
+            "SELECT n.id, n.kind, n.name, p.path, n.line_start, n.line_end, n.metadata
+             FROM nodes n JOIN paths p ON p.id = n.file_id
+             WHERE n.kind = 'file' AND p.path = ?1",
             params![file_path],
             |row| {
                 Ok(Node {
@@ -194,8 +196,9 @@ pub(super) fn get_by_symbol(
 ) -> anyhow::Result<Option<Node>> {
     let result = conn
         .query_row(
-            "SELECT id, kind, name, file_path, line_start, line_end, metadata
-             FROM nodes WHERE name = ?1 AND file_path = ?2 AND kind != 'file'",
+            "SELECT n.id, n.kind, n.name, p.path, n.line_start, n.line_end, n.metadata
+             FROM nodes n JOIN paths p ON p.id = n.file_id
+             WHERE n.name = ?1 AND p.path = ?2 AND n.kind != 'file'",
             params![name, file_path],
             |row| {
                 Ok(Node {
@@ -215,11 +218,17 @@ pub(super) fn get_by_symbol(
 
 pub(super) fn remove_by_file(conn: &Connection, file_path: &str) -> anyhow::Result<()> {
     conn.execute(
-        "DELETE FROM edges WHERE source_id IN (SELECT id FROM nodes WHERE file_path = ?1)
-         OR target_id IN (SELECT id FROM nodes WHERE file_path = ?1)",
+        "DELETE FROM edges WHERE source_id IN (
+             SELECT n.id FROM nodes n JOIN paths p ON p.id = n.file_id WHERE p.path = ?1
+         ) OR target_id IN (
+             SELECT n.id FROM nodes n JOIN paths p ON p.id = n.file_id WHERE p.path = ?1
+         )",
         params![file_path],
     )?;
-    conn.execute("DELETE FROM nodes WHERE file_path = ?1", params![file_path])?;
+    conn.execute(
+        "DELETE FROM nodes WHERE file_id = (SELECT id FROM paths WHERE path = ?1)",
+        params![file_path],
+    )?;
     Ok(())
 }
 
@@ -231,19 +240,19 @@ pub(super) fn find_symbols(
 ) -> anyhow::Result<Vec<Node>> {
     let name_lower = name.to_lowercase();
     let mut sql = String::from(
-        "SELECT id, kind, name, file_path, line_start, line_end, metadata
-         FROM nodes WHERE kind != 'file'
+        "SELECT n.id, n.kind, n.name, p.path, n.line_start, n.line_end, n.metadata
+         FROM nodes n JOIN paths p ON p.id = n.file_id WHERE n.kind != 'file'
          AND LOWER(name) LIKE '%' || ?1 || '%'",
     );
     let mut param_idx = 2;
     if file_filter.is_some() {
-        sql.push_str(&format!(" AND file_path LIKE '%' || ?{param_idx} || '%'"));
+        sql.push_str(&format!(" AND p.path LIKE '%' || ?{param_idx} || '%'"));
         param_idx += 1;
     }
     if kind_filter.is_some() {
         sql.push_str(&format!(" AND kind = ?{param_idx}"));
     }
-    sql.push_str(" ORDER BY file_path, line_start LIMIT 100");
+    sql.push_str(" ORDER BY p.path, n.line_start LIMIT 100");
 
     let mut stmt = conn.prepare(&sql)?;
 
@@ -293,9 +302,9 @@ pub(super) fn resolve_symbol_def_files(
     name: &str,
 ) -> anyhow::Result<Vec<String>> {
     let mut stmt = conn.prepare(
-        "SELECT DISTINCT file_path FROM nodes
-         WHERE kind = 'symbol' AND name = ?1 AND file_path != ''
-         ORDER BY file_path",
+        "SELECT DISTINCT p.path FROM nodes n JOIN paths p ON p.id = n.file_id
+         WHERE n.kind = 'symbol' AND n.name = ?1 AND p.path != ''
+         ORDER BY p.path",
     )?;
     let rows = stmt.query_map(params![name], |row| row.get::<_, String>(0))?;
     let mut out = Vec::new();
@@ -310,9 +319,9 @@ pub(super) fn resolve_symbol_def_files(
 /// that the call-graph builder needs (replacing `ProjectIndex::symbols`).
 pub(super) fn all_symbols(conn: &Connection) -> anyhow::Result<Vec<Node>> {
     let mut stmt = conn.prepare(
-        "SELECT id, kind, name, file_path, line_start, line_end, metadata
-         FROM nodes WHERE kind != 'file'
-         ORDER BY file_path, line_start",
+        "SELECT n.id, n.kind, n.name, p.path, n.line_start, n.line_end, n.metadata
+         FROM nodes n JOIN paths p ON p.id = n.file_id WHERE n.kind != 'file'
+         ORDER BY p.path, n.line_start",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(Node {
@@ -361,10 +370,12 @@ pub(super) fn all_edges_flat(
     // non-existent `e.weight` made this query error out, so PG `edges()` always
     // returned empty (#682.3). Compute the weight from the kind instead.
     let mut stmt = conn.prepare(
-        "SELECT n1.file_path, n2.file_path, e.kind
+        "SELECT p1.path, p2.path, e.kind
          FROM edges e
          JOIN nodes n1 ON e.source_id = n1.id
          JOIN nodes n2 ON e.target_id = n2.id
+         JOIN paths p1 ON p1.id = n1.file_id
+         JOIN paths p2 ON p2.id = n2.file_id
          WHERE n1.kind = 'file' AND n2.kind = 'file'",
     )?;
     let rows = stmt.query_map([], |row| {
