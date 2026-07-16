@@ -9,7 +9,7 @@ use serde_json::Value;
 use super::ProxyState;
 use super::forward;
 use super::tool_kind::{self, ToolResultKind};
-use super::{cache_safety, prose};
+use super::{cache_safety, prefix_cache_stats, prefix_replay, prose, sticky_tools};
 use crate::core::config::{HistoryMode, ProseRole};
 
 pub async fn handler(
@@ -39,6 +39,10 @@ pub(super) fn compress_request_body(
     // Opt-in per-role prose aggressiveness (#710). Both default to `None`, in
     // which case nothing below fires and the body is byte-for-byte unchanged.
     let cfg = crate::core::config::Config::load();
+    let headroom_compat = cfg.proxy.is_headroom_compat();
+    if headroom_compat {
+        prefix_cache_stats::record_headroom_compat();
+    }
     let system_aggr = cfg.proxy.resolved_role_aggressiveness(ProseRole::System);
     let user_aggr = cfg.proxy.resolved_role_aggressiveness(ProseRole::User);
     let live_compress = cfg.proxy.live_compresses();
@@ -301,6 +305,20 @@ pub(super) fn compress_request_body(
         cache_safety::record_cold_repack();
     }
     cache_safety::record(prose_segments, true);
+
+    // Sticky CCR tool injection: once a conversation has used CCR, keep
+    // ctx_expand in tools[] to avoid prefix-cache-busting tool-list changes.
+    let system_val = doc.get("system");
+    let messages_for_id = doc.get("messages").and_then(Value::as_array);
+    if let Some(msgs) = messages_for_id {
+        let conv_id = prefix_replay::conversation_id(system_val, msgs);
+        if sticky_tools::ensure_tool_present(conv_id, &mut doc) {
+            modified = true;
+            prefix_cache_stats::record_sticky_injection();
+        }
+    }
+
+    prefix_cache_stats::record_frozen_count(cached as u64);
 
     let out = serde_json::to_vec(&doc).unwrap_or_default();
     let compressed_size = if modified { out.len() } else { original_size };

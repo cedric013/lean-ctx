@@ -39,9 +39,9 @@ pub use memory::{MemoryCleanup, MemoryGuardConfig, MemoryProfile, SavingsFooter}
 pub use provenance::{ConfigProvenance, EnvOverride};
 pub use proxy::{
     BaselineConfig, DEFAULT_LOCAL_SHADOW_RATE_PER_MTOK, HistoryMode, ProseRanker, ProseRole,
-    ProviderEntry, ProxyConfig, ProxyProvider, ResolvedProvider, RoleAggressiveness, RoutingRules,
-    UpstreamDrift, Upstreams, WireShape, diagnose_drift, env_upstream_override, is_local_proxy_url,
-    normalize_url, normalize_url_opt, parse_route_target,
+    ProviderEntry, ProxyConfig, ProxyMode, ProxyProvider, ResolvedProvider, RoleAggressiveness,
+    RoutingRules, UpstreamDrift, Upstreams, WireShape, diagnose_drift, env_upstream_override,
+    is_local_proxy_url, normalize_url, normalize_url_opt, parse_route_target,
 };
 pub use read_dedup::ReadDedup;
 pub use read_redirect::ReadRedirect;

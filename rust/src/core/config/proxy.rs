@@ -189,6 +189,16 @@ pub struct ProxyConfig {
     /// `false`. Env `LEAN_CTX_PROXY_VERBOSITY_STEER`. See
     /// [`ProxyConfig::verbosity_steer_enabled`].
     pub verbosity_steer: Option<bool>,
+    /// Unified proxy operation mode (`[proxy] proxy_mode`). `"cache"` (default)
+    /// or `"token"`. Sets sensible defaults for all cache-related knobs; explicit
+    /// per-knob overrides always win. Env `LEAN_CTX_PROXY_MODE`.
+    pub proxy_mode: Option<String>,
+    /// Headroom stacking compatibility (`[proxy] compat_stack`). When set to
+    /// `"headroom"`, the proxy auto-configures for running behind Headroom:
+    /// live compression off, breakpoint injection off, cache alignment on.
+    /// Also auto-detected via the `X-Headroom-Compressed` request header.
+    /// Env `LEAN_CTX_PROXY_COMPAT_STACK`.
+    pub compat_stack: Option<String>,
     /// Opt-in: route a Codex *ChatGPT-subscription* login through the proxy for
     /// model-turn compression. Default `None`/`false` keeps Codex native (history
     /// visible, cloud/remote intact, no #597). When `true`, Codex setup pins the
@@ -418,6 +428,51 @@ pub enum ProseRole {
     User,
 }
 
+/// Unified proxy operation mode that sets cache-optimal defaults for all knobs.
+///
+/// Instead of configuring 8+ individual booleans, operators pick a single mode
+/// that resolves sensible defaults. Explicit per-knob overrides always win.
+///
+/// - `Cache` (default): maximise provider prompt-cache hit rate. History is
+///   frozen at staircase boundaries, breakpoints are injected, volatile fields
+///   are detected, and the live tail is compressed — but the prefix is never
+///   rewritten.
+/// - `Token`: maximise raw token reduction. History may be rewritten, cold
+///   prefixes repacked, and volatile fields relocated. Best for short one-shot
+///   requests where cache reuse is unlikely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyMode {
+    Cache,
+    Token,
+}
+
+impl ProxyMode {
+    fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "cache" | "cache_mode" | "cost_savings" => Some(Self::Cache),
+            "token" | "token_mode" | "token_savings" => Some(Self::Token),
+            _ => None,
+        }
+    }
+
+    /// Default value for a cache-related knob under this mode.
+    pub fn preset_for(self, knob: &str) -> Option<bool> {
+        match (self, knob) {
+            (Self::Cache | Self::Token, "cache_aligner" | "cache_policy")
+            | (Self::Token, "cache_align_relocate" | "cold_prefix_repack" | "verbosity_steer") => {
+                Some(true)
+            }
+
+            (Self::Cache | Self::Token, "cache_breakpoint")
+            | (Self::Cache, "cache_align_relocate" | "cold_prefix_repack" | "verbosity_steer") => {
+                Some(false)
+            }
+
+            _ => None,
+        }
+    }
+}
+
 /// How the proxy squeezes prose it must shrink (#895).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProseRanker {
@@ -458,6 +513,27 @@ pub enum HistoryMode {
 }
 
 impl ProxyConfig {
+    /// Resolved proxy mode. `LEAN_CTX_PROXY_MODE` env wins, then config, then `Cache`.
+    #[must_use]
+    pub fn resolved_proxy_mode(&self) -> ProxyMode {
+        let raw = std::env::var("LEAN_CTX_PROXY_MODE")
+            .ok()
+            .or_else(|| self.proxy_mode.clone());
+        raw.as_deref()
+            .and_then(ProxyMode::parse)
+            .unwrap_or(ProxyMode::Cache)
+    }
+
+    /// Whether a Headroom-compatible stack is configured.
+    #[must_use]
+    pub fn is_headroom_compat(&self) -> bool {
+        let raw = std::env::var("LEAN_CTX_PROXY_COMPAT_STACK")
+            .ok()
+            .or_else(|| self.compat_stack.clone());
+        raw.as_deref()
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case("headroom"))
+    }
+
     /// Resolved history mode: `LEAN_CTX_PROXY_HISTORY_MODE` env var wins,
     /// then `[proxy].history_mode` in config.toml, then cache-aware.
     /// Unknown values fall back to the default so a typo can never silently
@@ -536,7 +612,12 @@ impl ProxyConfig {
                 || v.eq_ignore_ascii_case("on")
                 || v.eq_ignore_ascii_case("yes");
         }
-        self.verbosity_steer.unwrap_or(false)
+        if let Some(v) = self.verbosity_steer {
+            return v;
+        }
+        self.resolved_proxy_mode()
+            .preset_for("verbosity_steer")
+            .unwrap_or(false)
     }
 
     /// Resolved Codex ChatGPT-subscription proxy opt-in (default off).
@@ -553,8 +634,15 @@ impl ProxyConfig {
     /// value) wins, then `[proxy] cold_prefix_repack` in config.toml, else
     /// `false`.
     pub fn repacks_cold_prefix(&self) -> bool {
-        std::env::var("LEAN_CTX_PROXY_COLD_PREFIX_REPACK").is_ok()
-            || self.cold_prefix_repack.unwrap_or(false)
+        if std::env::var("LEAN_CTX_PROXY_COLD_PREFIX_REPACK").is_ok() {
+            return true;
+        }
+        if let Some(v) = self.cold_prefix_repack {
+            return v;
+        }
+        self.resolved_proxy_mode()
+            .preset_for("cold_prefix_repack")
+            .unwrap_or(false)
     }
 
     /// Whether opt-in in-band CCR retrieval (#493) is enabled. Off by default:
@@ -572,8 +660,18 @@ impl ProxyConfig {
     /// `LEAN_CTX_PROXY_CACHE_BREAKPOINT` (any value) wins, then `[proxy]
     /// cache_breakpoint` in config.toml, else `false`.
     pub fn cache_breakpoint_enabled(&self) -> bool {
-        std::env::var("LEAN_CTX_PROXY_CACHE_BREAKPOINT").is_ok()
-            || self.cache_breakpoint.unwrap_or(false)
+        if std::env::var("LEAN_CTX_PROXY_CACHE_BREAKPOINT").is_ok() {
+            return true;
+        }
+        if let Some(v) = self.cache_breakpoint {
+            return v;
+        }
+        if self.is_headroom_compat() {
+            return false;
+        }
+        self.resolved_proxy_mode()
+            .preset_for("cache_breakpoint")
+            .unwrap_or(false)
     }
 
     /// Whether opt-in counterfactual savings metering (#701) is enabled. Off by
@@ -603,8 +701,18 @@ impl ProxyConfig {
     /// `LEAN_CTX_PROXY_CACHE_ALIGN_RELOCATE` (any value) wins, then `[proxy]
     /// cache_align_relocate` in config.toml, else `false`.
     pub fn cache_align_relocate_enabled(&self) -> bool {
-        std::env::var("LEAN_CTX_PROXY_CACHE_ALIGN_RELOCATE").is_ok()
-            || self.cache_align_relocate.unwrap_or(false)
+        if std::env::var("LEAN_CTX_PROXY_CACHE_ALIGN_RELOCATE").is_ok() {
+            return true;
+        }
+        if let Some(v) = self.cache_align_relocate {
+            return v;
+        }
+        if self.is_headroom_compat() {
+            return false;
+        }
+        self.resolved_proxy_mode()
+            .preset_for("cache_align_relocate")
+            .unwrap_or(false)
     }
 
     /// Whether cache-economics (#986) is enabled: prompt-cache miss attribution
@@ -654,7 +762,13 @@ impl ProxyConfig {
                 _ => {}
             }
         }
-        self.live_compress.unwrap_or(true)
+        if let Some(v) = self.live_compress {
+            return v;
+        }
+        if self.is_headroom_compat() {
+            return false;
+        }
+        true
     }
 
     /// Resolved per-tool live-compress exclusion patterns (#481). `None` in

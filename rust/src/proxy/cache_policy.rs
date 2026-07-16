@@ -92,6 +92,49 @@ pub fn net_cost_decision(before_tokens: u64, after_tokens: u64, cost: &ModelCost
         && repack_saving_usd(before_tokens, after_tokens, cost) > 0.0
 }
 
+/// Decision outcome for a frozen-region mutation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MutationDecision {
+    /// The compression saving exceeds the cache-bust cost.
+    Mutate { break_even: u32 },
+    /// The cache-bust cost exceeds the compression saving; preserve the prefix.
+    Preserve { break_even: u32 },
+}
+
+/// Generalised net-cost gate for **any** frozen-region mutation. Compares the
+/// one-time cache-bust cost (write premium on the new prefix + loss of the read
+/// discount on the old prefix) against the per-call saving from a smaller
+/// prefix. Returns [`MutationDecision::Mutate`] only when the estimated reuse
+/// count clears the break-even point.
+#[must_use]
+pub fn should_mutate_frozen(
+    before_tokens: u64,
+    after_tokens: u64,
+    estimated_reuse_count: u32,
+    cost: &ModelCost,
+) -> MutationDecision {
+    if before_tokens < MIN_CACHEABLE_TOKENS || after_tokens >= before_tokens {
+        return MutationDecision::Preserve {
+            break_even: u32::MAX,
+        };
+    }
+    let saved_tokens = before_tokens - after_tokens;
+    let bust_cost = (after_tokens as f64 / 1_000_000.0 * cost.cache_write_per_m)
+        + (before_tokens as f64 / 1_000_000.0 * cost.cache_read_per_m);
+    let per_call_saving = saved_tokens as f64 / 1_000_000.0 * cost.input_per_m;
+    if per_call_saving <= 0.0 {
+        return MutationDecision::Preserve {
+            break_even: u32::MAX,
+        };
+    }
+    let break_even = (bust_cost / per_call_saving).ceil().max(1.0) as u32;
+    if estimated_reuse_count >= break_even {
+        MutationDecision::Mutate { break_even }
+    } else {
+        MutationDecision::Preserve { break_even }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +232,32 @@ mod tests {
     #[test]
     fn repack_saving_is_zero_when_inflated() {
         assert_eq!(repack_saving_usd(1000, 2000, &opus()), 0.0);
+    }
+
+    #[test]
+    fn should_mutate_frozen_accepts_with_enough_reuse() {
+        let d = should_mutate_frozen(4000, 2000, 10, &opus());
+        match d {
+            MutationDecision::Mutate { break_even } => assert!(break_even <= 10),
+            MutationDecision::Preserve { .. } => panic!("expected Mutate"),
+        }
+    }
+
+    #[test]
+    fn should_mutate_frozen_rejects_with_low_reuse() {
+        let d = should_mutate_frozen(4000, 3900, 1, &opus());
+        assert!(matches!(d, MutationDecision::Preserve { .. }));
+    }
+
+    #[test]
+    fn should_mutate_frozen_rejects_subcacheable() {
+        let d = should_mutate_frozen(500, 200, 100, &opus());
+        assert!(matches!(d, MutationDecision::Preserve { .. }));
+    }
+
+    #[test]
+    fn should_mutate_frozen_rejects_inflation() {
+        let d = should_mutate_frozen(3000, 4000, 100, &opus());
+        assert!(matches!(d, MutationDecision::Preserve { .. }));
     }
 }

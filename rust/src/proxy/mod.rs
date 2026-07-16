@@ -48,6 +48,8 @@ pub mod openai_responses_ws;
 pub mod output_savings;
 pub mod pii;
 pub mod policy_gate;
+pub mod prefix_cache_stats;
+pub mod prefix_replay;
 pub mod prose;
 pub mod prose_ranker;
 pub mod providers;
@@ -56,6 +58,7 @@ pub mod routing;
 pub mod shape_xlat;
 #[cfg(test)]
 mod stats_tests;
+pub mod sticky_tools;
 pub mod tool_kind;
 pub mod tool_output;
 #[cfg(test)]
@@ -810,6 +813,7 @@ async fn status_handler(State(state): State<ProxyState>) -> impl IntoResponse {
 
     let body = serde_json::json!({
         "status": "running",
+        "proxy_mode": format!("{:?}", crate::core::config::Config::load().proxy.resolved_proxy_mode()),
         "port": state.port,
         "upstreams": {
             "anthropic": up.anthropic.clone(),
@@ -837,6 +841,7 @@ async fn status_handler(State(state): State<ProxyState>) -> impl IntoResponse {
         "bytes_compressed": s.bytes_compressed.load(Relaxed),
         "compression_ratio_pct": format!("{:.1}", s.compression_ratio()),
         "per_upstream": s.provider_summary(),
+        "prefix_cache": prefix_cache_stats::snapshot(),
         "cache_safety": cache_safety::snapshot(),
         "cache_attribution": cache_attribution::snapshot(),
         "effort": effort::snapshot(active_effort),

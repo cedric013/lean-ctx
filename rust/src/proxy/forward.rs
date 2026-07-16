@@ -11,6 +11,19 @@ use std::io::{Read, Write};
 
 use super::ProxyState;
 
+/// Header set by Headroom when it has already compressed the request.
+const HEADROOM_COMPRESSED_HEADER: &str = "x-headroom-compressed";
+
+/// Check whether an incoming request was already compressed by Headroom.
+#[allow(dead_code)]
+pub(super) fn is_headroom_compressed(parts: &axum::http::request::Parts) -> bool {
+    parts
+        .headers
+        .get(HEADROOM_COMPRESSED_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false"))
+}
+
 /// Default request-body ceiling (MiB). A large-codebase refactor with several
 /// big files in context easily exceeds the old 10 MiB cap, which surfaced to the
 /// agent as a hard `400` mid-task. Raised and made configurable via
