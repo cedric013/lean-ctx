@@ -21,7 +21,7 @@ pub fn redact_text_if_enabled(input: &str) -> String {
     if !redaction_enabled_for_active_role() {
         return input.to_string();
     }
-    redact_text_with_excludes(input, &config_exclude_patterns())
+    redact_text_with_excludes(input, config_exclude_patterns().as_slice())
 }
 
 /// #718: unquoted identifier or property-access chains (`SvelteKit`,
@@ -295,13 +295,43 @@ pub fn redact_text_with_excludes(input: &str, excludes: &[regex::Regex]) -> Stri
 
 /// Compile the configured `exclude_patterns` (#718). Invalid regexes are
 /// skipped — a broken exclude must never disable redaction.
-pub fn config_exclude_patterns() -> Vec<regex::Regex> {
-    crate::core::config::Config::load()
-        .secret_detection
-        .exclude_patterns
-        .iter()
-        .filter_map(|p| regex::Regex::new(p).ok())
-        .collect()
+///
+/// #952: regex compilation — the expensive part of this call — used to run
+/// on every redaction call (`ctx_read`, `ctx_shell`, `ctx_execute` all funnel
+/// through `redact_text_if_enabled`) regardless of whether the config had
+/// changed. Cached here, keyed on `Arc::ptr_eq` against the config `Arc`:
+/// `Config::load_arc` returns the *same* `Arc` when the underlying config
+/// content hash is unchanged, so a real config edit is exactly what
+/// invalidates this cache too — no separate change-detection needed.
+pub fn config_exclude_patterns() -> std::sync::Arc<Vec<regex::Regex>> {
+    type Cache = Option<(
+        std::sync::Arc<crate::core::config::Config>,
+        std::sync::Arc<Vec<regex::Regex>>,
+    )>;
+    static CACHE: std::sync::Mutex<Cache> = std::sync::Mutex::new(None);
+
+    let cfg = crate::core::config::Config::load_arc();
+
+    if let Ok(guard) = CACHE.lock()
+        && let Some((cached_cfg, patterns)) = &*guard
+        && std::sync::Arc::ptr_eq(cached_cfg, &cfg)
+    {
+        return std::sync::Arc::clone(patterns);
+    }
+
+    let compiled = std::sync::Arc::new(
+        cfg.secret_detection
+            .exclude_patterns
+            .iter()
+            .filter_map(|p| regex::Regex::new(p).ok())
+            .collect::<Vec<_>>(),
+    );
+
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = Some((cfg, std::sync::Arc::clone(&compiled)));
+    }
+
+    compiled
 }
 
 /// Apply caller-supplied policy redaction patterns on top of the built-in
@@ -332,6 +362,18 @@ pub fn redact_with_patterns(input: &str, patterns: &[(String, regex::Regex)]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- #952: exclude_patterns compilation cache ---
+
+    #[test]
+    fn config_exclude_patterns_reuses_compiled_regexes_when_config_unchanged() {
+        let first = config_exclude_patterns();
+        let second = config_exclude_patterns();
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "unchanged config must reuse the cached compiled patterns, not recompile"
+        );
+    }
 
     #[test]
     fn redacts_bearer_token() {
