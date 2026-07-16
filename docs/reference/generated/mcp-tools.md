@@ -435,7 +435,7 @@ Hash-anchored edit — patch by (line,hash) anchor from ctx_read(anchored)/ctx_s
 Ops: set_line(line,hash,new_text) | replace_lines(start_line/hash,end_line/hash,new_text) |
 insert_after(line,hash,new_text) | delete(line,hash or start/end range) |
 replace_symbol(name,new_body) | create(new_text) | replace_all(find,replace,dry_run).
-Batch: ops:[{…}]. Stale anchor → CONFLICT with fresh anchors.
+Batch: ops:[{…}] (not replace_symbol/replace_all). Stale → CONFLICT.
 
 Parameters: `dry_run`, `end_hash`, `end_line`, `find`, `hash`, `line`, `name`, `new_body`, `new_text`, `op`, `ops`, `path`*, `replace`, `start_hash`, `start_line`
 

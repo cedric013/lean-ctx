@@ -26,7 +26,7 @@ impl McpTool for CtxPatchTool {
              Ops: set_line(line,hash,new_text) | replace_lines(start_line/hash,end_line/hash,new_text) |\n\
              insert_after(line,hash,new_text) | delete(line,hash or start/end range) |\n\
              replace_symbol(name,new_body) | create(new_text) | replace_all(find,replace,dry_run).\n\
-             Batch: ops:[{…}]. Stale anchor → CONFLICT with fresh anchors.",
+             Batch: ops:[{…}] (not replace_symbol/replace_all). Stale → CONFLICT.",
             json!({
                 "type": "object",
                 "properties": {
