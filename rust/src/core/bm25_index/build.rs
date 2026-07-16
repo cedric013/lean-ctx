@@ -28,27 +28,18 @@ pub(super) const PARALLEL_MIN_FILES: usize = 32;
 /// so every file in the batch is live in RAM simultaneously.
 const MAX_BATCH_FILES: usize = 500;
 
-/// Lower bound — below this the rayon overhead dominates.
-const MIN_BATCH_FILES: usize = 50;
+/// Minimum progress unit under low headroom.
+const MIN_BATCH_FILES: usize = 1;
 
-/// Conservative estimate of peak transient memory per file during parallel
-/// preparation: file content (~20 KB avg) + tree-sitter chunks + lowered
-/// token vectors. Files up to 2 MB are admitted, but the average is far lower.
-const EST_TRANSIENT_PER_FILE: u64 = 150_000;
+/// Conservative estimate of peak transient memory per file during preparation.
+const EST_TRANSIENT_PER_FILE: u64 = 256 * 1024;
 
-/// Computes the effective batch size based on current memory headroom.
-/// Returns a value in `[MIN_BATCH_FILES, MAX_BATCH_FILES]` that keeps the
-/// estimated peak transient allocation within the guardian's hard threshold.
-fn effective_batch_size() -> usize {
-    let headroom = match (
-        crate::core::memory_guard::rss_limit_bytes(),
-        crate::core::memory_guard::get_rss_bytes(),
-    ) {
-        (Some(limit), Some(rss)) => limit.saturating_mul(2).saturating_sub(rss),
-        _ => return MAX_BATCH_FILES,
-    };
-    let by_headroom = (headroom / EST_TRANSIENT_PER_FILE).min(MAX_BATCH_FILES as u64) as usize;
-    by_headroom.clamp(MIN_BATCH_FILES, MAX_BATCH_FILES)
+fn effective_batch_size(max_files: usize) -> usize {
+    crate::core::memory_guard::adaptive_batch_size(
+        MIN_BATCH_FILES,
+        max_files.min(MAX_BATCH_FILES).max(1),
+        EST_TRANSIENT_PER_FILE,
+    )
 }
 
 const MAX_FILE_SIZE_BYTES: u64 = 2 * 1024 * 1024;
@@ -129,6 +120,9 @@ fn prepare_file(
     rel: &str,
     content_hint: &HashMap<String, String>,
 ) -> Option<PreparedFile> {
+    if crate::core::memory_guard::abort_requested() {
+        return None;
+    }
     let abs = root.join(rel);
     let state = IndexedFileState::from_path(&abs)?;
     if state.size_bytes > MAX_FILE_SIZE_BYTES {
@@ -170,6 +164,10 @@ fn prepare_file(
         }
     };
 
+    if crate::core::memory_guard::abort_requested() {
+        return None;
+    }
+
     let mut chunks = extract_chunks(rel, &content);
     chunks.sort_by(|a, b| {
         a.start_line
@@ -199,6 +197,9 @@ fn prepare_incremental_file(
     content_hint: &HashMap<String, String>,
     rel: &str,
 ) -> Option<PreparedFile> {
+    if crate::core::memory_guard::abort_requested() {
+        return None;
+    }
     let abs = root.join(rel);
     let state = IndexedFileState::from_path(&abs)?;
 
@@ -207,6 +208,9 @@ fn prepare_incremental_file(
         && let Some(chunks) = old_by_file.get(rel)
         && chunks.first().is_some_and(|c| !c.content.is_empty())
     {
+        if crate::core::memory_guard::abort_requested() {
+            return None;
+        }
         return Some(PreparedFile {
             rel: rel.to_string(),
             state,
@@ -231,7 +235,7 @@ impl BM25Index {
         content_hint: &HashMap<String, String>,
         files: &[String],
     ) -> Self {
-        Self::build_parallel_batched(root, content_hint, files, effective_batch_size())
+        Self::build_parallel_batched(root, content_hint, files, MAX_BATCH_FILES)
     }
 
     /// Batch-size-injectable core of [`Self::build_parallel`] so the multi-batch
@@ -243,16 +247,15 @@ impl BM25Index {
         batch_size: usize,
     ) -> Self {
         let mut index = Self::new();
-        // Batched fan-out (#685): each batch is an order-preserving
-        // `par_iter().collect()` merged immediately, so peak transient state is
-        // one batch instead of the whole corpus, and the guardian gets a say
-        // between batches. `chunks()` keeps the sorted file order — identical
-        // output to the sequential path.
-        for (batch_no, batch) in files.chunks(batch_size.max(1)).enumerate() {
-            if parallel_build_must_stop("bm25", batch_no * batch_size) {
+        let max_batch_size = batch_size.max(1).min(MAX_BATCH_FILES);
+        let mut files_done = 0;
+        while files_done < files.len() {
+            if parallel_build_must_stop("bm25", files_done) {
                 break;
             }
-            let prepared: Vec<Option<PreparedFile>> = batch
+            let adaptive_size = effective_batch_size(max_batch_size);
+            let batch_end = (files_done + adaptive_size).min(files.len());
+            let prepared: Vec<Option<PreparedFile>> = files[files_done..batch_end]
                 .par_iter()
                 .map(|rel| prepare_file(root, rel, content_hint))
                 .collect();
@@ -262,11 +265,8 @@ impl BM25Index {
                 }
                 index.files.insert(pf.rel, pf.state);
             }
-            // Reclaim freed transient state immediately so RSS does not
-            // accumulate across batches due to jemalloc page retention.
-            if batch_no > 0 {
-                crate::core::memory_guard::jemalloc_purge();
-            }
+            files_done = batch_end;
+            crate::core::memory_guard::jemalloc_purge();
         }
         index.finalize();
         index
@@ -291,15 +291,14 @@ impl BM25Index {
         let empty_hint: HashMap<String, String> = HashMap::new();
 
         let mut index = Self::new();
-        // Batched fan-out (#685) — see `build_parallel`. `chunks()` keeps the
-        // input file order, so the merge sees files exactly as the sequential
-        // rebuild iterates them — the foundation of identical output.
-        let batch_size = effective_batch_size();
-        for (batch_no, batch) in files.chunks(batch_size).enumerate() {
-            if parallel_build_must_stop("bm25-incr", batch_no * batch_size) {
+        let mut files_done = 0;
+        while files_done < files.len() {
+            if parallel_build_must_stop("bm25-incr", files_done) {
                 break;
             }
-            let prepared: Vec<Option<PreparedFile>> = batch
+            let batch_size = effective_batch_size(MAX_BATCH_FILES);
+            let batch_end = (files_done + batch_size).min(files.len());
+            let prepared: Vec<Option<PreparedFile>> = files[files_done..batch_end]
                 .par_iter()
                 .map(|rel| prepare_incremental_file(root, prev, old_by_file, &empty_hint, rel))
                 .collect();
@@ -309,9 +308,8 @@ impl BM25Index {
                 }
                 index.files.insert(pf.rel, pf.state);
             }
-            if batch_no > 0 {
-                crate::core::memory_guard::jemalloc_purge();
-            }
+            files_done = batch_end;
+            crate::core::memory_guard::jemalloc_purge();
         }
         index.finalize();
         index

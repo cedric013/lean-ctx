@@ -70,6 +70,66 @@ pub fn rss_limit_bytes() -> Option<u64> {
     Some(sys_ram / 100 * u64::from(pct))
 }
 
+/// Computes a memory-bounded work batch from current RSS and the guardian's
+/// hard threshold (1.5× the configured base limit). Falls back to `max_files`
+/// when RSS is unavailable. The lower bound keeps progress deterministic while
+/// allowing callers to reduce in-flight work substantially under low headroom.
+pub(crate) fn adaptive_batch_size(
+    min_files: usize,
+    max_files: usize,
+    estimated_bytes_per_file: u64,
+) -> usize {
+    let headroom = match (rss_limit_bytes(), get_rss_bytes()) {
+        (Some(limit), Some(rss)) => hard_headroom_bytes(limit, rss),
+        _ => return max_files.max(1),
+    };
+    batch_size_for_headroom(headroom, min_files, max_files, estimated_bytes_per_file)
+}
+
+fn hard_headroom_bytes(base_limit: u64, rss: u64) -> u64 {
+    base_limit
+        .saturating_mul(3)
+        .saturating_div(2)
+        .saturating_sub(rss)
+}
+
+fn batch_size_for_headroom(
+    headroom_bytes: u64,
+    min_files: usize,
+    max_files: usize,
+    estimated_bytes_per_file: u64,
+) -> usize {
+    let min_files = min_files.max(1);
+    let max_files = max_files.max(min_files);
+    let estimate = estimated_bytes_per_file.max(1);
+    let by_headroom = (headroom_bytes / estimate).min(max_files as u64) as usize;
+    by_headroom.clamp(min_files, max_files)
+}
+
+#[cfg(test)]
+mod adaptive_batch_tests {
+    use super::{batch_size_for_headroom, hard_headroom_bytes};
+
+    #[test]
+    fn hard_headroom_uses_guardian_hard_threshold() {
+        assert_eq!(hard_headroom_bytes(1_000, 1_100), 400);
+        assert_eq!(hard_headroom_bytes(1_000, 1_500), 0);
+        assert_eq!(hard_headroom_bytes(1_000, 2_000), 0);
+    }
+
+    #[test]
+    fn batch_size_tracks_headroom_and_bounds() {
+        assert_eq!(batch_size_for_headroom(1_000, 1, 500, 100), 10);
+        assert_eq!(batch_size_for_headroom(0, 1, 500, 100), 1);
+        assert_eq!(batch_size_for_headroom(100_000, 1, 500, 100), 500);
+    }
+
+    #[test]
+    fn batch_size_sanitizes_zero_bounds_and_estimate() {
+        assert_eq!(batch_size_for_headroom(0, 0, 0, 0), 1);
+    }
+}
+
 /// Recorded peak RSS since process start.
 pub fn peak_rss_bytes() -> u64 {
     PEAK_RSS.load(Ordering::Relaxed)

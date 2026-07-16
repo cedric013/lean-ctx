@@ -783,10 +783,10 @@ fn scan_inner(project_root: &str) -> (ProjectIndex, HashMap<String, String>) {
     };
     const MAX_ENTRIES_VISITED: usize = 500_000;
     const MAX_FILE_SIZE_BYTES: u64 = 2 * 1024 * 1024; // 2 MB per file
-    /// #790: per-batch size for the phase-2 fan-out. Lowered from 2000 to 500
-    /// (matching BM25's MAX_BATCH_FILES) — 2000-file batches hold ~40 MB of
-    /// ScanFileResult content inside par_iter().collect() with no pressure check.
+    /// Maximum phase-2 fan-out. Actual batches shrink with guardian headroom.
     const SCAN_BATCH_FILES: usize = 500;
+    const SCAN_MIN_BATCH_FILES: usize = 1;
+    const SCAN_EST_TRANSIENT_PER_FILE: u64 = 256 * 1024;
     let scan_deadline = std::time::Instant::now() + std::time::Duration::from_mins(5);
 
     // #934: two-phase scan. Phase 1 walks the tree sequentially (cheap; it
@@ -904,25 +904,32 @@ fn scan_inner(project_root: &str) -> (ProjectIndex, HashMap<String, String>) {
         &target_rels,
     );
     let parallel = admission.parallel_ok && !crate::core::memory_guard::is_under_pressure();
-    for (batch_no, batch) in targets.chunks(SCAN_BATCH_FILES).enumerate() {
-        // #790: check pressure on EVERY batch including batch 0 — previously
-        // batch 0 always ran unchecked, allowing 2000 (now 500) files to allocate
-        // freely even when the system was already under pressure.
+    let mut files_done = 0;
+    while files_done < targets.len() {
         if crate::core::memory_guard::abort_requested() {
             tracing::warn!(
-                "[graph_index: aborting scan after {} files due to critical memory pressure]",
-                batch_no * SCAN_BATCH_FILES
+                "[graph_index: aborting scan after {files_done} files due to critical memory pressure]"
             );
             break;
         }
         if crate::core::memory_guard::is_under_pressure() {
             tracing::warn!(
-                "[graph_index: stopping scan after {} files due to memory pressure]",
-                batch_no * SCAN_BATCH_FILES
+                "[graph_index: stopping scan after {files_done} files due to memory pressure]"
             );
             break;
         }
-        let results = process_scan_targets(batch, &old_files, existing.as_ref(), parallel);
+        let batch_size = crate::core::memory_guard::adaptive_batch_size(
+            SCAN_MIN_BATCH_FILES,
+            SCAN_BATCH_FILES,
+            SCAN_EST_TRANSIENT_PER_FILE,
+        );
+        let batch_end = (files_done + batch_size).min(targets.len());
+        let results = process_scan_targets(
+            &targets[files_done..batch_end],
+            &old_files,
+            existing.as_ref(),
+            parallel,
+        );
         for r in results {
             if r.reused {
                 reused += 1;
@@ -933,13 +940,13 @@ fn scan_inner(project_root: &str) -> (ProjectIndex, HashMap<String, String>) {
             for (key, sym) in r.symbols {
                 index.symbols.insert(key, sym);
             }
-            // #790: stop caching file contents once the budget is exceeded;
-            // the edge builder falls back to disk reads on cache misses.
             if content_cache_bytes < CONTENT_CACHE_MAX_BYTES {
                 content_cache_bytes += r.content.len();
                 content_cache.insert(r.rel, r.content);
             }
         }
+        files_done = batch_end;
+        crate::core::memory_guard::jemalloc_purge();
     }
 
     build_edges_cached(&mut index, &content_cache);
@@ -986,6 +993,9 @@ fn process_scan_file(
     old_files: &OldFileSymbols,
     existing: Option<&ProjectIndex>,
 ) -> Option<ScanFileResult> {
+    if crate::core::memory_guard::abort_requested() {
+        return None;
+    }
     let content = std::fs::read_to_string(file_path).ok()?;
     let hash = compute_hash(&content);
 
@@ -1001,6 +1011,10 @@ fn process_scan_file(
             content,
             reused: true,
         });
+    }
+
+    if crate::core::memory_guard::abort_requested() {
+        return None;
     }
 
     let sigs = signatures::extract_signatures(&content, ext);

@@ -39,9 +39,10 @@ fn build_edges_with_cache(index: &mut ProjectIndex, content_cache: &HashMap<Stri
     let resolver_ctx =
         import_resolver::ResolverContext::new(root_path, file_paths.clone(), content_cache);
 
-    // #934 + #790: fan out in 500-file batches with memory pressure checks
-    // between them. Under pressure, fall back to sequential with 1000-file checks.
+    // Fan-out adapts before every batch to current guardian headroom.
     const EDGE_BATCH_SIZE: usize = 500;
+    const EDGE_MIN_BATCH_FILES: usize = 1;
+    const EDGE_EST_TRANSIENT_PER_FILE: u64 = 256 * 1024;
     // #790: flush edges into index.edges after each batch instead of
     // accumulating all FileEdges in a Vec. Only type_inputs (C#/Java/Go/Kotlin)
     // are retained across batches for the cross-file type_ref pass.
@@ -60,43 +61,33 @@ fn build_edges_with_cache(index: &mut ProjectIndex, content_cache: &HashMap<Stri
             }
         };
 
-    if crate::core::memory_guard::is_under_pressure() {
-        for (i, rel_path) in file_paths.iter().enumerate() {
-            if i.is_multiple_of(1000) && crate::core::memory_guard::is_under_pressure() {
-                tracing::warn!(
-                    "[graph_index: stopping edge-building at file {i}/{} due to memory pressure]",
-                    file_paths.len()
-                );
-                break;
-            }
-            let fe = resolve_file_edges(rel_path, content_cache, &resolver_ctx, root_path);
-            index.edges.extend(fe.edges);
-            if let Some(ti) = fe.type_input {
-                type_inputs.push(ti);
-            }
+    let mut files_done = 0;
+    while files_done < file_paths.len() {
+        if crate::core::memory_guard::abort_requested() {
+            tracing::warn!(
+                "[graph_index: aborting edge-building after {files_done} files due to critical memory pressure]"
+            );
+            break;
         }
-    } else {
-        for (batch_no, batch) in file_paths.chunks(EDGE_BATCH_SIZE).enumerate() {
-            if crate::core::memory_guard::abort_requested() {
-                tracing::warn!(
-                    "[graph_index: aborting edge-building at batch {batch_no} due to critical memory pressure]",
-                );
-                break;
-            }
-            if crate::core::memory_guard::is_under_pressure() {
-                tracing::warn!(
-                    "[graph_index: stopping edge-building at batch {batch_no} due to memory pressure]",
-                );
-                break;
-            }
-            let batch_results: Vec<FileEdges> = batch
-                .par_iter()
-                .map(|rel_path| {
-                    resolve_file_edges(rel_path, content_cache, &resolver_ctx, root_path)
-                })
-                .collect();
-            flush_batch(batch_results, index, &mut type_inputs);
+        if crate::core::memory_guard::is_under_pressure() {
+            tracing::warn!(
+                "[graph_index: stopping edge-building after {files_done} files due to memory pressure]"
+            );
+            break;
         }
+        let batch_size = crate::core::memory_guard::adaptive_batch_size(
+            EDGE_MIN_BATCH_FILES,
+            EDGE_BATCH_SIZE,
+            EDGE_EST_TRANSIENT_PER_FILE,
+        );
+        let batch_end = (files_done + batch_size).min(file_paths.len());
+        let batch_results: Vec<FileEdges> = file_paths[files_done..batch_end]
+            .par_iter()
+            .map(|rel_path| resolve_file_edges(rel_path, content_cache, &resolver_ctx, root_path))
+            .collect();
+        flush_batch(batch_results, index, &mut type_inputs);
+        files_done = batch_end;
+        crate::core::memory_guard::jemalloc_purge();
     }
 
     // Cross-file type-reference edges for C#/Java same-namespace usage (GH #398).
@@ -156,6 +147,10 @@ fn resolve_file_edges(
         type_input: None,
     };
 
+    if crate::core::memory_guard::abort_requested() {
+        return out;
+    }
+
     let content = if let Some(cached) = content_cache.get(rel_path) {
         std::borrow::Cow::Borrowed(cached.as_str())
     } else {
@@ -170,6 +165,10 @@ fn resolve_file_edges(
             Err(_) => return out,
         }
     };
+
+    if crate::core::memory_guard::abort_requested() {
+        return out;
+    }
 
     let ext = Path::new(rel_path)
         .extension()
