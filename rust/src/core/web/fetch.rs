@@ -131,13 +131,18 @@ pub fn post(
 }
 
 fn build_agent(timeout_secs: u64) -> ureq::Agent {
-    crate::core::http_client::ureq_agent(
-        ureq::config::Config::builder()
-            .tls_config(crate::core::http_client::platform_tls_config())
-            .timeout_global(Some(Duration::from_secs(timeout_secs)))
-            .max_redirects(0)
-            .http_status_as_error(false)
-            .build(),
+    // #ssrf-rebinding: use the SSRF-pinning resolver instead of the plain
+    // `http_client::ureq_agent` helper — see `url_guard::SsrfSafeResolver`.
+    let config = ureq::config::Config::builder()
+        .tls_config(crate::core::http_client::platform_tls_config())
+        .timeout_global(Some(Duration::from_secs(timeout_secs)))
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .build();
+    ureq::Agent::with_parts(
+        config,
+        ureq::unversioned::transport::DefaultConnector::default(),
+        url_guard::SsrfSafeResolver::default(),
     )
 }
 

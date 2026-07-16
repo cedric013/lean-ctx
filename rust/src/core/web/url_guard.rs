@@ -8,6 +8,11 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
 
+use ureq::config::Config;
+use ureq::http::Uri;
+use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
+use ureq::unversioned::transport::NextTimeout;
+
 /// Reasons a URL is refused before fetching.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UrlError {
@@ -168,6 +173,36 @@ pub fn ip_is_blocked(ip: IpAddr) -> bool {
     }
 }
 
+/// A [`ureq::unversioned::resolver::Resolver`] that pins DNS resolution to the
+/// exact lookup used for the SSRF check.
+///
+/// [`SafeUrl::ensure_resolves_safely`] and ureq's own resolver each perform an
+/// independent DNS lookup, which opens a rebinding window: a hostile resolver
+/// with a short TTL can answer the first (validation) query with a public
+/// address and the second (connect) query with a blocked one (e.g. the cloud
+/// metadata IP or loopback). Passing this resolver to the `ureq::Agent` makes
+/// resolution and validation the same lookup, so there is no second query left
+/// to rebind.
+#[derive(Debug, Default)]
+pub struct SsrfSafeResolver {
+    inner: DefaultResolver,
+}
+
+impl Resolver for SsrfSafeResolver {
+    fn resolve(
+        &self,
+        uri: &Uri,
+        config: &Config,
+        timeout: NextTimeout,
+    ) -> Result<ResolvedSocketAddrs, ureq::Error> {
+        let addrs = self.inner.resolve(uri, config, timeout)?;
+        if addrs.iter().any(|addr| ip_is_blocked(addr.ip())) {
+            return Err(ureq::Error::HostNotFound);
+        }
+        Ok(addrs)
+    }
+}
+
 fn v4_is_blocked(v4: Ipv4Addr) -> bool {
     let o = v4.octets();
     v4.is_loopback()
@@ -280,5 +315,36 @@ mod tests {
     fn ensure_resolves_safely_allows_literal_public_ip() {
         let u = validate("http://8.8.8.8/").unwrap();
         assert!(u.ensure_resolves_safely().is_ok());
+    }
+
+    // --- SSRF-rebinding: resolver pinning ---
+
+    fn no_timeout() -> NextTimeout {
+        use ureq::unversioned::transport::time::Duration;
+        NextTimeout {
+            after: Duration::NotHappening,
+            reason: ureq::Timeout::Global,
+        }
+    }
+
+    #[test]
+    fn ssrf_safe_resolver_blocks_loopback_hostname() {
+        // `localhost` resolves via the OS hosts file to 127.0.0.1 with no
+        // network access, so this exercises the real DefaultResolver lookup
+        // path — a stand-in for a DNS-rebinding response that only appears
+        // blocked at the moment of connection, not at the earlier
+        // `ensure_resolves_safely` check.
+        let resolver = SsrfSafeResolver::default();
+        let uri: Uri = "http://localhost:80/".parse().unwrap();
+        let config = Config::default();
+        assert!(resolver.resolve(&uri, &config, no_timeout()).is_err());
+    }
+
+    #[test]
+    fn ssrf_safe_resolver_allows_literal_public_ip() {
+        let resolver = SsrfSafeResolver::default();
+        let uri: Uri = "http://8.8.8.8:80/".parse().unwrap();
+        let config = Config::default();
+        assert!(resolver.resolve(&uri, &config, no_timeout()).is_ok());
     }
 }
