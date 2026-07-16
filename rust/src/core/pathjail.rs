@@ -358,6 +358,43 @@ pub fn jail_path(candidate: &Path, jail_root: &Path) -> Result<PathBuf, PathJail
     jail_path_with_roots(candidate, jail_root, &[])
 }
 
+/// Detect well-known language cache paths and return a targeted hint.
+fn detected_cache_hint(candidate: &std::path::Path) -> Option<String> {
+    let s = candidate.to_string_lossy();
+    let patterns: &[(&str, &str, &str)] = &[
+        ("/go/pkg/mod/", "Go module cache", "~/go/pkg/mod"),
+        (
+            "/.cargo/registry/",
+            "Rust crate registry",
+            "~/.cargo/registry",
+        ),
+        (
+            "/site-packages/",
+            "Python site-packages",
+            "<venv>/lib/pythonX.Y/site-packages",
+        ),
+        (
+            "/.m2/repository/",
+            "Maven local repository",
+            "~/.m2/repository",
+        ),
+        ("/.gradle/caches/", "Gradle cache", "~/.gradle/caches"),
+        (
+            "/.nuget/packages/",
+            "NuGet package cache",
+            "~/.nuget/packages",
+        ),
+    ];
+    for &(pattern, name, example) in patterns {
+        if s.contains(pattern) {
+            return Some(format!(
+                ". Detected {name} — add read_only_roots = [\"{example}\"] to                  ~/.config/lean-ctx/config.toml for cached, compressed reads without write access"
+            ));
+        }
+    }
+    None
+}
+
 /// Like [`jail_path`], but also accepts paths under any of `extra_roots`.
 ///
 /// `extra_roots` are session-scoped trusted roots (MCP `roots/list` and config
@@ -474,6 +511,9 @@ pub fn jail_path_with_roots(
                      `lean-ctx doctor` shows the path in effect",
                     missing.display()
                 ));
+            }
+            if let Some(cache_hint) = detected_cache_hint(candidate) {
+                hint.push_str(&cache_hint);
             }
             return Err(PathJailError::EscapesRoot {
                 path: candidate.to_path_buf(),
@@ -1068,5 +1108,27 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(&fake_root).ok();
+    }
+
+    #[test]
+    fn detected_cache_hint_recognizes_go_cargo_python() {
+        use std::path::Path;
+        let go = detected_cache_hint(Path::new("/Users/x/go/pkg/mod/github.com/foo/bar/main.go"));
+        assert!(go.is_some(), "Go module cache should be detected");
+        assert!(go.unwrap().contains("Go module cache"));
+
+        let cargo = detected_cache_hint(Path::new(
+            "/home/x/.cargo/registry/src/crates.io/serde-1.0/lib.rs",
+        ));
+        assert!(cargo.is_some(), "Rust cargo registry should be detected");
+        assert!(cargo.unwrap().contains("Rust crate registry"));
+
+        let py = detected_cache_hint(Path::new(
+            "/usr/lib/python3.12/site-packages/requests/api.py",
+        ));
+        assert!(py.is_some(), "Python site-packages should be detected");
+
+        let normal = detected_cache_hint(Path::new("/home/x/projects/myapp/src/main.rs"));
+        assert!(normal.is_none(), "Normal project path should not match");
     }
 }

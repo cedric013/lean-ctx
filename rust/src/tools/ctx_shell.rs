@@ -445,22 +445,29 @@ mod tests {
     #[test]
     fn issue_897_edge_cases_post_fix() {
         assert!(
-            validate_command("cat <<'EOF' > output.txt
+            validate_command(
+                "cat <<'EOF' > output.txt
 some content
-EOF").is_some(),
+EOF"
+            )
+            .is_some(),
             "heredoc to file must block"
         );
         assert!(
-            validate_command("git commit --allow-empty -F - <<'COMMIT_MSG'
+            validate_command(
+                "git commit --allow-empty -F - <<'COMMIT_MSG'
 feat: test
-COMMIT_MSG")
-                .is_none(),
+COMMIT_MSG"
+            )
+            .is_none(),
             "git commit -F - with heredoc must allow"
         );
         let cmd = r#"gh issue create --title "Fix" --body "path > root: /y""#;
-        assert!(validate_command(cmd).is_none(), "quoted > must allow: {cmd}");
+        assert!(
+            validate_command(cmd).is_none(),
+            "quoted > must allow: {cmd}"
+        );
     }
-
 
     // --- GH #391: download tools writing files without shell redirects ---
 
