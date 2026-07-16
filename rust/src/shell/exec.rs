@@ -23,6 +23,8 @@ fn wait_with_limits(
     timeout: std::time::Duration,
     kill_group: bool,
 ) -> Output {
+    const STDERR_LIMIT: usize = 512 * 1024;
+
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
     let start = std::time::Instant::now();
@@ -53,17 +55,18 @@ fn wait_with_limits(
 
     let stderr_handle = std::thread::spawn(move || {
         let Some(mut pipe) = stderr_pipe else {
-            return Vec::new();
+            return (Vec::new(), false);
         };
         let mut buf = Vec::new();
         let mut chunk = [0u8; 4096];
-        const STDERR_LIMIT: usize = 512 * 1024;
         loop {
             match pipe.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(n) => {
                     if buf.len() + n > STDERR_LIMIT {
-                        break;
+                        let remaining = STDERR_LIMIT.saturating_sub(buf.len());
+                        buf.extend_from_slice(&chunk[..remaining]);
+                        return (buf, true);
                     }
                     buf.extend_from_slice(&chunk[..n]);
                 }
@@ -71,7 +74,7 @@ fn wait_with_limits(
                 Err(_) => break,
             }
         }
-        buf
+        (buf, false)
     });
 
     let mut timed_out = false;
@@ -89,7 +92,7 @@ fn wait_with_limits(
     }
 
     let (mut stdout_buf, stdout_truncated) = stdout_handle.join().unwrap_or_default();
-    let stderr_buf = stderr_handle.join().unwrap_or_default();
+    let (mut stderr_buf, stderr_truncated) = stderr_handle.join().unwrap_or_default();
 
     if timed_out || stdout_truncated {
         let notice = format!(
@@ -98,6 +101,13 @@ fn wait_with_limits(
             timeout.as_secs()
         );
         stdout_buf.extend_from_slice(notice.as_bytes());
+    }
+    if stderr_truncated {
+        let notice = format!(
+            "\n[lean-ctx: stderr truncated at {} KB limit]\n",
+            STDERR_LIMIT / 1024
+        );
+        stderr_buf.extend_from_slice(notice.as_bytes());
     }
 
     let status = child.wait().unwrap_or_else(|_| {
@@ -1105,6 +1115,33 @@ mod exec_tests {
             "expected truncation notice, got len={}: ...{}",
             stdout.len(),
             &stdout[stdout.len().saturating_sub(80)..]
+        );
+    }
+
+    #[test]
+    fn wait_with_limits_truncates_large_stderr() {
+        // GH #946: stderr silently dropped bytes past the 512 KB limit with
+        // no notice — the truncation was invisible to the agent. Generate
+        // ~2 MB of stderr and assert the same kind of notice stdout gets.
+        let child = std::process::Command::new("sh")
+            .args(["-c", "yes 'aaaaaaaaaa' | head -200000 >&2"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let output = super::wait_with_limits(
+            child,
+            1024 * 1024,
+            std::time::Duration::from_secs(10),
+            false,
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("[lean-ctx: stderr truncated"),
+            "expected stderr truncation notice, got len={}: ...{}",
+            stderr.len(),
+            &stderr[stderr.len().saturating_sub(80)..]
         );
     }
 
