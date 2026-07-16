@@ -259,9 +259,16 @@ impl CtxReadTool {
         let budget_warning = gate_result.budget_warning.clone();
         // #513: an explicit raw/verbatim request is never silently downgraded by
         // the budget gate — the caller asked for exact bytes.
+        let mut mode_override_note: Option<String> = None;
         if mode != "raw"
             && let Some(overridden) = gate_result.overridden_mode
         {
+            if explicit_mode {
+                let reason = gate_result.reason.unwrap_or("context-gate");
+                mode_override_note = Some(format!(
+                    "[mode overridden: {mode} -> {overridden}, reason={reason}]"
+                ));
+            }
             mode = overridden;
         }
 
@@ -1113,6 +1120,9 @@ impl CtxReadTool {
             warnings.push(w.as_str());
         }
         if let Some(ref w) = delta_explicit_note {
+            warnings.push(w.as_str());
+        }
+        if let Some(ref w) = mode_override_note {
             warnings.push(w.as_str());
         }
         let graph_suffix = graph_hint.map(|h| format!("\n{h}")).unwrap_or_default();
