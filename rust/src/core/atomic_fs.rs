@@ -71,7 +71,26 @@ pub(crate) fn try_atomic_write(
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
+
+    // #954: `f.sync_all()` above durably persists the temp file's *content*,
+    // but swapping it into `path` via `rename` is a directory-entry update —
+    // without also fsyncing the parent directory, a crash right after the
+    // rename can lose that directory-entry change on some filesystems, and
+    // the old file reappears despite the temp+rename having "completed".
+    #[cfg(unix)]
+    fsync_dir(parent);
+
     Ok(())
+}
+
+/// Best-effort `fsync` of a directory's inode so a preceding `rename`/`create`
+/// into it survives a crash (Unix only — opening a directory as a `File` for
+/// this purpose is not portable to Windows).
+#[cfg(unix)]
+fn fsync_dir(dir: &Path) {
+    if let Ok(f) = std::fs::File::open(dir) {
+        let _ = f.sync_all();
+    }
 }
 
 /// In-place overwrite of an existing file inode (`O_WRONLY|O_TRUNC`, plus
@@ -173,6 +192,15 @@ mod tests {
                 libc::EPERM
             )));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fsync_dir_succeeds_on_a_real_directory() {
+        // #954: exercises the open+sync_all mechanics directly — must not
+        // panic or otherwise disrupt the caller (best-effort, errors ignored).
+        let dir = tempfile::tempdir().unwrap();
+        fsync_dir(dir.path());
     }
 
     #[test]
