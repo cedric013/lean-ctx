@@ -715,35 +715,35 @@ COMMIT_MSG"
                 "search result file{i} should be preserved in output"
             );
         }
+    }
 
-        // --- GH #931: unquoted heredoc body > must not trip redirect scanner ---
+    // --- GH #931: unquoted heredoc body > must not trip redirect scanner ---
 
-        #[test]
-        fn unquoted_heredoc_gt_in_body_not_blocked() {
-            let cmd = "psql <<SQL\nSELECT * FROM t WHERE x > 0;\nSQL";
-            assert!(
-                validate_command(cmd).is_none(),
-                "unquoted heredoc body with > must not be flagged as redirect"
-            );
-        }
+    #[test]
+    fn unquoted_heredoc_gt_in_body_not_blocked() {
+        let cmd = "psql <<SQL\nSELECT * FROM t WHERE x > 0;\nSQL";
+        assert!(
+            validate_command(cmd).is_none(),
+            "unquoted heredoc body with > must not be flagged as redirect"
+        );
+    }
 
-        #[test]
-        fn unquoted_heredoc_append_in_body_not_blocked() {
-            let cmd = "cat <<END\nline with >> inside\nEND";
-            assert!(
-                validate_command(cmd).is_none(),
-                "unquoted heredoc body with >> must not be flagged"
-            );
-        }
+    #[test]
+    fn unquoted_heredoc_append_in_body_not_blocked() {
+        let cmd = "cat <<END\nline with >> inside\nEND";
+        assert!(
+            validate_command(cmd).is_none(),
+            "unquoted heredoc body with >> must not be flagged"
+        );
+    }
 
-        #[test]
-        fn real_redirect_after_heredoc_still_blocked() {
-            let cmd = "cat <<EOF > /tmp/../evil.txt\ndata\nEOF";
-            assert!(
-                validate_command(cmd).is_some(),
-                "redirect OUTSIDE heredoc body must still block"
-            );
-        }
+    #[test]
+    fn real_redirect_after_heredoc_still_blocked() {
+        let cmd = "cat <<EOF > /tmp/../evil.txt\ndata\nEOF";
+        assert!(
+            validate_command(cmd).is_some(),
+            "redirect OUTSIDE heredoc body must still block"
+        );
     }
 
     // --- GH #931: unquoted heredoc body > must not trip redirect scanner ---
