@@ -4,7 +4,7 @@
 //! module under the 1500-line budget. All `rewrite_*` functions plus shared
 //! helpers (`shell_tokenize`, `shell_quote`) live here.
 
-use super::is_outside_project_path;
+use super::file_rewrite::is_outside_project_path;
 
 /// Rewrites `grep`/`egrep`/`fgrep`/`rg` (and PowerShell `Select-String`/`sls`,
 /// #561) to `lean-ctx grep <pattern> [path]` when the invocation is simple enough
