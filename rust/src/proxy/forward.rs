@@ -15,7 +15,6 @@ use super::ProxyState;
 const HEADROOM_COMPRESSED_HEADER: &str = "x-headroom-compressed";
 
 /// Check whether an incoming request was already compressed by Headroom.
-#[allow(dead_code)]
 pub(super) fn is_headroom_compressed(parts: &axum::http::request::Parts) -> bool {
     parts
         .headers
@@ -114,6 +113,11 @@ pub async fn forward_request(
         })
     };
 
+    if is_headroom_compressed(&parts) {
+        super::anthropic::set_headroom_request(true);
+        super::prefix_cache_stats::record_headroom_compat();
+    }
+
     let prepared = prepare_request_body(
         &parts,
         &body_bytes,
@@ -204,11 +208,34 @@ pub async fn forward_request(
         None
     };
 
+    let forwarded_body = prepared.body;
+
+    // Prefix replay: record the exact forwarded bytes for byte-identical
+    // replay on subsequent append-only turns (ProxyMode::Cache).
+    if let Some(ref pre) = parsed {
+        let cfg_replay = crate::core::config::Config::load();
+        if matches!(
+            cfg_replay.proxy.resolved_proxy_mode(),
+            crate::core::config::ProxyMode::Cache
+        ) {
+            let system_val = pre.get("system");
+            if let Some(msgs) = pre.get("messages").and_then(|m| m.as_array()) {
+                let conv_id = super::prefix_replay::conversation_id(system_val, msgs);
+                super::prefix_replay::record_forwarded(
+                    conv_id,
+                    forwarded_body.clone(),
+                    msgs,
+                    msgs.len(),
+                );
+            }
+        }
+    }
+
     let response = send_upstream(
         &state,
         &parts,
         &upstream_url,
-        prepared.body,
+        forwarded_body,
         provider_label,
         preserve_content_encoding,
     )

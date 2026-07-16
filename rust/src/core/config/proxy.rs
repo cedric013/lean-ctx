@@ -542,10 +542,17 @@ impl ProxyConfig {
         let raw = std::env::var("LEAN_CTX_PROXY_HISTORY_MODE")
             .ok()
             .or_else(|| self.history_mode.clone());
-        match raw.as_deref().map(str::trim) {
-            Some(s) if s.eq_ignore_ascii_case("rolling") => HistoryMode::Rolling,
-            Some(s) if s.eq_ignore_ascii_case("off") => HistoryMode::Off,
-            _ => HistoryMode::CacheAware,
+        if let Some(mode) = raw.as_deref().map(str::trim) {
+            if mode.eq_ignore_ascii_case("rolling") {
+                return HistoryMode::Rolling;
+            }
+            if mode.eq_ignore_ascii_case("off") {
+                return HistoryMode::Off;
+            }
+        }
+        match self.resolved_proxy_mode() {
+            ProxyMode::Token => HistoryMode::Rolling,
+            ProxyMode::Cache => HistoryMode::CacheAware,
         }
     }
 
@@ -768,7 +775,9 @@ impl ProxyConfig {
         if self.is_headroom_compat() {
             return false;
         }
-        true
+        match self.resolved_proxy_mode() {
+            ProxyMode::Cache | ProxyMode::Token => true,
+        }
     }
 
     /// Resolved per-tool live-compress exclusion patterns (#481). `None` in
@@ -842,7 +851,14 @@ impl ProxyConfig {
         let from_env = std::env::var(env_var)
             .ok()
             .and_then(|v| v.trim().parse::<f64>().ok());
-        from_env.or(configured).map(|a| a.clamp(0.0, 1.0))
+        let resolved = from_env.or(configured);
+        if resolved.is_some() {
+            return resolved.map(|a| a.clamp(0.0, 1.0));
+        }
+        if self.resolved_proxy_mode() == ProxyMode::Token && role == ProseRole::System {
+            return Some(0.5);
+        }
+        None
     }
 
     /// Whether a non-loopback plaintext `http://` upstream is allowed. Opt-in

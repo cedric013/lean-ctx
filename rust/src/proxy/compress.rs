@@ -62,6 +62,7 @@ enum CcrAudience {
 /// byte-stable across turns and never invalidates the provider cache prefix
 /// (#448). Passthrough / verbatim results (no real shrink) keep their bytes.
 fn attach_ccr(original: &str, result: String, audience: CcrAudience) -> String {
+    use super::sticky_tools;
     if original.len() < ccr::MIN_TEE_BYTES
         || original.len().saturating_sub(result.len()) < ccr::MIN_TEE_BYTES
     {
@@ -76,26 +77,26 @@ fn attach_ccr(original: &str, result: String, audience: CcrAudience) -> String {
         // shape (`[lean-ctx: `): this line is functional content — a footer
         // strip must never eat it.
         Some(handle) if audience == CcrAudience::Gateway => {
+            sticky_tools::mark_ccr_active(0);
             let hash = ccr::litellm_hash(original);
             format!(
                 "{result}\n[lean-ctx CCR: full original elided to save tokens — call the \
                  retrieve tool with hash={hash}, or read {handle} locally]"
             )
         }
-        Some(handle) => match ccr::inband_locator(&handle) {
-            // In-band (#493): a remote agent can't read the local tee path, so
-            // advertise the echo-able marker instead — echoing it splices the
-            // verbatim original back inline next turn.
-            Some(marker) => format!(
-                "{result}\n[lean-ctx: full original elided to save tokens — echo {marker} \
-                 on your next turn to get the verbatim original spliced back inline]"
-            ),
-            // Shared-filesystem default: the path handle (native read or slice).
-            None => format!(
-                "{result}\n[lean-ctx: full original at {handle} — read it directly (no MCP), or \
-                 ctx_expand(id=\"{handle}\", head=N|search=\"…\"|json_path=\"…\") for a slice]"
-            ),
-        },
+        Some(handle) => {
+            sticky_tools::mark_ccr_active(0);
+            match ccr::inband_locator(&handle) {
+                Some(marker) => format!(
+                    "{result}\n[lean-ctx: full original elided to save tokens — echo {marker} \
+                     on your next turn to get the verbatim original spliced back inline]"
+                ),
+                None => format!(
+                    "{result}\n[lean-ctx: full original at {handle} — read it directly (no MCP), or \
+                     ctx_expand(id=\"{handle}\", head=N|search=\"…\"|json_path=\"…\") for a slice]"
+                ),
+            }
+        }
         None => result,
     }
 }

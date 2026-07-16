@@ -10,6 +10,16 @@ use super::ProxyState;
 use super::forward;
 use super::tool_kind::{self, ToolResultKind};
 use super::{cache_safety, prefix_cache_stats, prefix_replay, prose, sticky_tools};
+
+std::thread_local! {
+    /// Set by `forward.rs` when the current request has the `X-Headroom-Compressed` header.
+    static HEADROOM_REQUEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Called from `forward.rs` to signal that this request was pre-compressed by Headroom.
+pub(super) fn set_headroom_request(val: bool) {
+    HEADROOM_REQUEST.set(val);
+}
 use crate::core::config::{HistoryMode, ProseRole};
 
 pub async fn handler(
@@ -39,10 +49,15 @@ pub(super) fn compress_request_body(
     // Opt-in per-role prose aggressiveness (#710). Both default to `None`, in
     // which case nothing below fires and the body is byte-for-byte unchanged.
     let cfg = crate::core::config::Config::load();
-    let headroom_compat = cfg.proxy.is_headroom_compat();
-    if headroom_compat {
+    let config_headroom = cfg.proxy.is_headroom_compat();
+    if config_headroom {
         prefix_cache_stats::record_headroom_compat();
     }
+    // Per-request Headroom detection: if this specific request carries the
+    // X-Headroom-Compressed header, treat it as headroom-compat even without
+    // the global config flag. The header is checked in forward.rs and the
+    // result is threaded through via a thread-local set by the caller.
+    let _headroom_compat = config_headroom || HEADROOM_REQUEST.get();
     let system_aggr = cfg.proxy.resolved_role_aggressiveness(ProseRole::System);
     let user_aggr = cfg.proxy.resolved_role_aggressiveness(ProseRole::User);
     let live_compress = cfg.proxy.live_compresses();
@@ -138,8 +153,19 @@ pub(super) fn compress_request_body(
     // why this turn hits or misses the provider prompt-cache (TTL lapse vs prefix
     // change) and bump the `/status` gauges. Reads the cacheable prefix only — the
     // body is never touched — so it is strictly cache-safe.
-    if cache_economics && let Some(m) = doc.get("messages").and_then(|m| m.as_array()) {
-        super::cache_attribution::record_request(m, cached);
+    if cache_economics
+        && let Some(m) = doc.get("messages").and_then(|m| m.as_array())
+        && let Some(outcome) = super::cache_attribution::record_request(m, cached)
+    {
+        match outcome {
+            super::cache_attribution::CacheOutcome::WarmReuse => {
+                prefix_cache_stats::record_hit();
+            }
+            super::cache_attribution::CacheOutcome::ColdStart => {}
+            _ => {
+                prefix_cache_stats::record_miss();
+            }
+        }
     }
     // #480 repack decision, with the #986 net-cost gate folded in: when
     // cache-economics is on, also require the prefix to be large enough to cache
@@ -162,15 +188,37 @@ pub(super) fn compress_request_body(
     // carries no `cache_control` of its own — otherwise it anchors the cache.
     // A cold-prefix repack (`protect == 0` with `repack`) deliberately rewrites
     // it to re-seed a leaner cache.
+    let model_name = doc
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("default")
+        .to_owned();
     if let Some(a) = system_aggr
         && protect == 0
         && let Some(system) = doc.get_mut("system")
         && (repack || !prose::value_has_cache_control(system))
     {
-        let n = prose::compress_system_value(system, a);
-        if n > 0 {
-            prose_segments += u64::from(n);
-            modified = true;
+        let should_compress = if repack || cached == 0 {
+            true
+        } else {
+            let sys_tokens = prose::estimate_tokens(system) as u64;
+            let estimated_after = (sys_tokens as f64 * (1.0 - a)).max(0.0) as u64;
+            let reuse_rate = super::cache_attribution::estimated_reuse_rate();
+            let model_cost = super::cache_policy::model_cost_for(&model_name);
+            let gate = super::cache_policy::should_mutate_frozen(
+                sys_tokens,
+                estimated_after,
+                reuse_rate,
+                &model_cost,
+            );
+            matches!(gate, super::cache_policy::MutationDecision::Mutate { .. })
+        };
+        if should_compress {
+            let n = prose::compress_system_value(system, a);
+            if n > 0 {
+                prose_segments += u64::from(n);
+                modified = true;
+            }
         }
     }
 
@@ -320,7 +368,33 @@ pub(super) fn compress_request_body(
 
     prefix_cache_stats::record_frozen_count(cached as u64);
 
-    let out = serde_json::to_vec(&doc).unwrap_or_default();
+    // Prefix replay: if this is an append-only turn, overlay the cached
+    // forwarded prefix bytes with the fresh delta for byte-identical prefix.
+    let system_val_replay = doc.get("system");
+    let msgs_replay = doc.get("messages").and_then(Value::as_array);
+    let out = if let Some(msgs) = msgs_replay {
+        let conv_id = prefix_replay::conversation_id(system_val_replay, msgs);
+        if let Some(delta) = prefix_replay::detect_append_only(conv_id, msgs) {
+            let delta_msgs = &msgs[delta.delta_start..];
+            if let Some(replayed) = prefix_replay::overlay_prefix(&delta.prefix_bytes, delta_msgs) {
+                prefix_cache_stats::record_replay_hit();
+                let original_bytes = serde_json::to_vec(&doc).unwrap_or_default();
+                prefix_cache_stats::record_delta(
+                    original_bytes.len() as u64,
+                    replayed.len() as u64,
+                );
+                replayed
+            } else {
+                prefix_cache_stats::record_replay_miss();
+                serde_json::to_vec(&doc).unwrap_or_default()
+            }
+        } else {
+            prefix_cache_stats::record_replay_miss();
+            serde_json::to_vec(&doc).unwrap_or_default()
+        }
+    } else {
+        serde_json::to_vec(&doc).unwrap_or_default()
+    };
     let compressed_size = if modified { out.len() } else { original_size };
     (out, original_size, compressed_size)
 }

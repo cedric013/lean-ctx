@@ -187,6 +187,13 @@ pub fn compress_gemini_text_parts(parts: &mut [Value], aggressiveness: f64) -> u
     count
 }
 
+/// Rough token estimate for a JSON value (chars / 4).
+#[must_use]
+pub fn estimate_tokens(val: &serde_json::Value) -> usize {
+    let s = serde_json::to_string(val).unwrap_or_default();
+    s.len() / 4
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

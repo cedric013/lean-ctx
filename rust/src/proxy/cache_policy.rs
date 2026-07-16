@@ -102,11 +102,34 @@ pub enum MutationDecision {
 }
 
 /// Generalised net-cost gate for **any** frozen-region mutation. Compares the
-/// one-time cache-bust cost (write premium on the new prefix + loss of the read
-/// discount on the old prefix) against the per-call saving from a smaller
-/// prefix. Returns [`MutationDecision::Mutate`] only when the estimated reuse
-/// count clears the break-even point.
+/// Look up cost parameters for a model name. Falls back to Sonnet-class pricing.
 #[must_use]
+pub fn model_cost_for(model: &str) -> ModelCost {
+    let m = model.to_ascii_lowercase();
+    if m.contains("opus") {
+        ModelCost {
+            input_per_m: 15.0,
+            output_per_m: 75.0,
+            cache_write_per_m: 18.75,
+            cache_read_per_m: 1.5,
+        }
+    } else if m.contains("haiku") {
+        ModelCost {
+            input_per_m: 0.25,
+            output_per_m: 1.25,
+            cache_write_per_m: 0.30,
+            cache_read_per_m: 0.03,
+        }
+    } else {
+        ModelCost {
+            input_per_m: 3.0,
+            output_per_m: 15.0,
+            cache_write_per_m: 3.75,
+            cache_read_per_m: 0.30,
+        }
+    }
+}
+
 pub fn should_mutate_frozen(
     before_tokens: u64,
     after_tokens: u64,
