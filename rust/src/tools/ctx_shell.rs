@@ -15,7 +15,10 @@ pub fn validate_command(command: &str) -> Option<String> {
         ));
     }
 
-    if has_file_write_redirect(command) {
+    // #931: strip heredoc bodies before the redirect scanner — a `>` inside a
+    // heredoc body is opaque data, not a file-write redirect.
+    let cmd_no_heredoc = crate::core::shell_allowlist::strip_all_heredoc_bodies(command);
+    if has_file_write_redirect(&cmd_no_heredoc) {
         return Some(
             "ERROR: ctx_shell detected a file-write command (shell redirect > or >>). \
              Use the native Write tool to create/modify files. \
@@ -709,6 +712,35 @@ COMMIT_MSG"
             assert!(
                 result.contains(&format!("file{i}")),
                 "search result file{i} should be preserved in output"
+            );
+        }
+
+        // --- GH #931: unquoted heredoc body > must not trip redirect scanner ---
+
+        #[test]
+        fn unquoted_heredoc_gt_in_body_not_blocked() {
+            let cmd = "psql <<SQL\nSELECT * FROM t WHERE x > 0;\nSQL";
+            assert!(
+                validate_command(cmd).is_none(),
+                "unquoted heredoc body with > must not be flagged as redirect"
+            );
+        }
+
+        #[test]
+        fn unquoted_heredoc_append_in_body_not_blocked() {
+            let cmd = "cat <<END\nline with >> inside\nEND";
+            assert!(
+                validate_command(cmd).is_none(),
+                "unquoted heredoc body with >> must not be flagged"
+            );
+        }
+
+        #[test]
+        fn real_redirect_after_heredoc_still_blocked() {
+            let cmd = "cat <<EOF > /tmp/../evil.txt\ndata\nEOF";
+            assert!(
+                validate_command(cmd).is_some(),
+                "redirect OUTSIDE heredoc body must still block"
             );
         }
     }
