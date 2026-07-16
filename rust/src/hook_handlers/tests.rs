@@ -1208,6 +1208,15 @@ fn redirect_read_still_redirects_without_cursor_task_id() {
 }
 
 #[test]
+#[cfg(unix)]
+fn warm_daemon_cache_tolerates_missing_socket() {
+    // Cache warming must be best-effort: no panic, no error when the daemon
+    // socket doesn't exist (e.g. in CI, fresh installs, or hook-only mode).
+    warm_daemon_cache("/nonexistent/test/file.rs");
+    // If we reach here without panic, the function correctly handled the missing socket.
+}
+
+#[test]
 fn gating_decision_returns_work_result_when_fast() {
     // The normal path: work finishes well within budget, so its decision is used.
     let out = decide_with_timeout(

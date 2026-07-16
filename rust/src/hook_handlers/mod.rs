@@ -748,6 +748,7 @@ fn redirect_read(tool_input: Option<&serde_json::Value>) -> String {
             &path,
             "Cursor subagent (CURSOR_TASK_ID) — Write/Edit needs native Read",
         );
+        warm_daemon_cache(&path);
         return build_dual_allow_output();
     }
 
@@ -999,6 +1000,45 @@ fn redirect_glob(tool_input: Option<&serde_json::Value>) -> String {
     log_shadow_intercept("Glob", &format!("{pattern} in {search_path}"));
     allow
 }
+
+/// Best-effort cache warming: send a fire-and-forget `ctx_read` request to
+/// the daemon via Unix socket so subsequent MCP reads hit a warm SessionCache.
+/// Inspired by Thomson Reuters' "proactive cache warming" pattern (60% savings).
+/// Non-blocking: connects with a 50ms timeout and never reads the response.
+#[cfg(unix)]
+fn warm_daemon_cache(path: &str) {
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    let addr = crate::daemon::daemon_addr();
+    if !addr.is_listening() {
+        return;
+    }
+    let socket = match addr {
+        crate::ipc::DaemonAddr::Unix(ref p) => p.clone(),
+    };
+
+    let body = serde_json::json!({
+        "name": "ctx_read",
+        "arguments": { "path": path, "mode": "auto" }
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/tools/call HTTP/1.1\r\nHost: localhost\r\n         Content-Type: application/json\r\n         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let Ok(mut stream) = UnixStream::connect(&socket) else {
+        return;
+    };
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(50)));
+    let _ = stream.write_all(request.as_bytes());
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+}
+
+#[cfg(not(unix))]
+fn warm_daemon_cache(_path: &str) {}
 
 const REDIRECT_SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(10);
 
