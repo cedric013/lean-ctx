@@ -55,6 +55,11 @@ impl LeanCtxServer {
         duration_ms: u64,
         path: Option<&str>,
     ) {
+        if let Some(agent_id) = self.presence_agent_id.read().await.clone()
+            && let Err(error) = crate::core::agents::AgentRegistry::heartbeat_persistent(&agent_id)
+        {
+            tracing::warn!("lean-ctx: failed to update MCP agent heartbeat: {error}");
+        }
         let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let mut calls = self.tool_calls.write().await;
         calls.push(ToolCallRecord {

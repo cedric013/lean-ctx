@@ -67,6 +67,7 @@ pub struct LeanCtxServer {
     pub cache_ttl_secs: u64,
     pub last_call: Arc<RwLock<Instant>>,
     pub agent_id: Arc<RwLock<Option<String>>>,
+    pub(crate) presence_agent_id: Arc<RwLock<Option<String>>>,
     pub client_name: Arc<RwLock<String>>,
     pub autonomy: Arc<super::autonomy::AutonomyState>,
     pub loop_detector: Arc<RwLock<crate::core::loop_detection::LoopDetector>>,

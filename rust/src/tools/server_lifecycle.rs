@@ -140,6 +140,20 @@ impl LeanCtxServer {
             crate::core::eviction_orchestrator::on_memory_pressure,
         ));
 
+        let presence_root = startup
+            .project_root
+            .as_deref()
+            .or(startup.shell_cwd.as_deref())
+            .unwrap_or(".");
+        let presence_agent_id =
+            match crate::core::agents::AgentRegistry::register_mcp_process(presence_root) {
+                Ok(agent_id) => Some(agent_id),
+                Err(error) => {
+                    tracing::warn!("lean-ctx: failed to register MCP agent presence: {error}");
+                    None
+                }
+            };
+
         Self {
             cache,
             session,
@@ -148,6 +162,7 @@ impl LeanCtxServer {
             cache_ttl_secs: ttl,
             last_call: Arc::new(RwLock::new(Instant::now())),
             agent_id: Arc::new(RwLock::new(None)),
+            presence_agent_id: Arc::new(RwLock::new(presence_agent_id)),
             client_name: Arc::new(RwLock::new(String::new())),
             autonomy: Arc::new(autonomy::AutonomyState::new()),
             loop_detector: Arc::new(RwLock::new(
@@ -229,6 +244,11 @@ impl LeanCtxServer {
 
     /// Aggressive cleanup on connection drop: save session, consolidate knowledge, clear caches.
     pub async fn shutdown(&self) {
+        if let Some(agent_id) = self.presence_agent_id.read().await.clone()
+            && let Err(error) = crate::core::agents::AgentRegistry::finish_persistent(&agent_id)
+        {
+            tracing::warn!("lean-ctx: failed to finish MCP agent presence: {error}");
+        }
         {
             let session = self.session.read().await;
             let has_insights = !session.findings.is_empty() || !session.decisions.is_empty();

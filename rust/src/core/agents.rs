@@ -105,12 +105,23 @@ impl AgentRegistry {
     }
 
     pub fn register(&mut self, agent_type: &str, role: Option<&str>, project_root: &str) -> String {
-        let pid = std::process::id();
+        self.register_process(agent_type, role, project_root, std::process::id())
+    }
+
+    fn register_process(
+        &mut self,
+        agent_type: &str,
+        role: Option<&str>,
+        project_root: &str,
+        pid: u32,
+    ) -> String {
         let agent_id = format!("{}-{}-{}", agent_type, pid, generate_short_id());
 
         if let Some(existing) = self.agents.iter_mut().find(|a| a.pid == pid) {
             existing.last_active = Utc::now();
             existing.status = AgentStatus::Active;
+            existing.agent_type = agent_type.to_string();
+            existing.project_root = project_root.to_string();
             if let Some(r) = role {
                 existing.role = Some(r.to_string());
             }
@@ -132,6 +143,26 @@ impl AgentRegistry {
         self.updated_at = Utc::now();
         crate::core::events::emit_agent_action(&agent_id, "register", None);
         agent_id
+    }
+
+    /// Atomically registers this MCP process in the shared on-disk registry.
+    pub fn register_mcp_process(project_root: &str) -> Result<String, String> {
+        mutate_persistent(|registry| {
+            registry.cleanup_stale(24);
+            registry.register("mcp", Some("context-engine"), project_root)
+        })
+    }
+
+    /// Atomically refreshes a registered MCP process heartbeat.
+    pub fn heartbeat_persistent(agent_id: &str) -> Result<(), String> {
+        mutate_persistent(|registry| registry.update_heartbeat(agent_id))
+    }
+
+    /// Atomically marks a registered MCP process as finished.
+    pub fn finish_persistent(agent_id: &str) -> Result<(), String> {
+        mutate_persistent(|registry| {
+            registry.set_status(agent_id, AgentStatus::Finished, Some("connection closed"));
+        })
     }
 
     pub fn update_heartbeat(&mut self, agent_id: &str) {
@@ -546,6 +577,21 @@ fn truncate(s: &str, max: usize) -> String {
 fn agents_dir() -> Result<PathBuf, String> {
     let dir = crate::core::data_dir::lean_ctx_data_dir()?;
     Ok(dir.join("agents"))
+}
+
+fn mutate_persistent<T>(mutate: impl FnOnce(&mut AgentRegistry) -> T) -> Result<T, String> {
+    let dir = agents_dir()?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let _lock = FileLock::acquire(&dir.join("registry.lock"))?;
+    let path = dir.join("registry.json");
+    let mut registry = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default();
+    let result = mutate(&mut registry);
+    let json = serde_json::to_string_pretty(&registry).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())?;
+    Ok(result)
 }
 
 fn generate_short_id() -> String {
@@ -1112,5 +1158,49 @@ mod tests {
             "all 8 concurrent registrations must survive, got {}",
             registry.agents.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod presence_tests {
+    use super::*;
+
+    #[test]
+    fn persistent_presence_preserves_multiple_processes_and_lifecycle() {
+        let isolated = crate::core::data_dir::isolated_data_dir();
+        let mut registry = AgentRegistry::new();
+        let first = registry.register_process("mcp", Some("context-engine"), "/project", 101);
+        let second = registry.register_process("mcp", Some("context-engine"), "/project", 202);
+        registry.save().expect("save registry");
+
+        assert_ne!(first, second);
+        assert_eq!(AgentRegistry::load().expect("registry").agents.len(), 2);
+
+        AgentRegistry::heartbeat_persistent(&first).expect("heartbeat");
+        AgentRegistry::finish_persistent(&second).expect("finish");
+        let loaded = AgentRegistry::load().expect("registry");
+        assert_eq!(
+            loaded
+                .agents
+                .iter()
+                .find(|agent| agent.agent_id == second)
+                .expect("second agent")
+                .status,
+            AgentStatus::Finished
+        );
+        assert!(isolated.path().join("agents/registry.json").exists());
+    }
+
+    #[test]
+    fn reregistering_process_refreshes_metadata_without_duplication() {
+        let mut registry = AgentRegistry::new();
+        let first = registry.register_process("unknown", None, "/old", 303);
+        let second = registry.register_process("mcp", Some("context-engine"), "/new", 303);
+
+        assert_eq!(first, second);
+        assert_eq!(registry.agents.len(), 1);
+        assert_eq!(registry.agents[0].agent_type, "mcp");
+        assert_eq!(registry.agents[0].project_root, "/new");
+        assert_eq!(registry.agents[0].role.as_deref(), Some("context-engine"));
     }
 }
