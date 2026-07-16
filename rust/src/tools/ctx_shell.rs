@@ -717,7 +717,6 @@ COMMIT_MSG"
         }
     }
 
-
     // --- GH #931: unquoted heredoc body > must not trip redirect scanner ---
 
     #[test]
