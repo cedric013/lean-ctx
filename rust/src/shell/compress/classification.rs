@@ -74,7 +74,49 @@ pub fn has_structural_output(command: &str) -> bool {
     if is_standalone_diff_command(command) {
         return true;
     }
+    if is_source_search(command) {
+        return true;
+    }
     is_structural_git_command(command)
+}
+
+/// Grep-family search commands (#980, #985). Routed to the dedicated
+/// `patterns::grep` compressor (groups matches per file, caps count) which
+/// never applies terse dictionaries. This is the correct middle tier: verbatim
+/// wastes tokens, terse corrupts source identifiers.
+fn is_source_search(command: &str) -> bool {
+    is_grep_binary(first_binary(command))
+        || is_source_search_pipe_tail(command)
+        || is_source_search_compound_tail(command)
+}
+
+fn is_grep_binary(bin: &str) -> bool {
+    matches!(
+        bin,
+        "grep" | "egrep" | "fgrep" | "rg" | "ag" | "ack" | "ugrep" | "sift"
+    )
+}
+
+fn is_source_search_pipe_tail(command: &str) -> bool {
+    if !command.contains('|') {
+        return false;
+    }
+    let last = command.rsplit('|').next().unwrap_or("").trim();
+    !last.is_empty() && is_grep_binary(first_binary(last))
+}
+
+fn is_source_search_compound_tail(command: &str) -> bool {
+    let last = command
+        .rsplit("&&")
+        .next()
+        .and_then(|s| s.rsplit("||").next())
+        .and_then(|s| s.rsplit(';').next())
+        .unwrap_or("")
+        .trim();
+    if last.is_empty() || last == command.trim() {
+        return false;
+    }
+    is_grep_binary(first_binary(last))
 }
 
 /// Returns true for commands where the output IS the purpose of the command.
@@ -231,12 +273,9 @@ fn is_file_viewer(command: &str) -> bool {
     let first = first_binary(command);
     match first {
         "cat" | "bat" | "batcat" | "pygmentize" | "highlight" => true,
-        // #980: grep-family output is source code / structured search results.
-        // Guard: a bare `"grep"` (no arguments) arrives from the proxy's
-        // `infer_command` for tool names like `search_files` — these proxy
-        // payloads benefit from structural compression, so only match when the
-        // command carries at least one argument (a real shell invocation).
-        "grep" | "rg" | "ag" | "ack" | "sift" => command.split_whitespace().count() > 1,
+        // #980/#985: grep-family routes to `has_structural_output` via
+        // `is_source_search` — the dedicated `patterns::grep` compressor
+        // handles them dictionary-free. NOT in is_file_viewer.
         "head" | "tail" => !command.contains("-f") && !command.contains("--follow"),
         // sed/awk are commonly used as range/pattern file viewers
         // (`sed -n '10,50p' file`, `awk '{print}' file`, GH #688). Their stdout
@@ -924,12 +963,24 @@ mod toon_tests {
 mod verbatim_classification_tests {
     use super::*;
 
-    // #980: grep-family must be classified as verbatim.
+    // #980/#985: grep-family routes to structural (patterns::grep), NOT verbatim/terse.
     #[test]
-    fn grep_is_verbatim() {
-        assert!(is_verbatim_output("grep -rn 'fn main' src/"));
-        assert!(is_verbatim_output("rg 'TODO' --type rust"));
-        assert!(is_verbatim_output("ag 'pattern' src/"));
+    fn grep_is_structural_not_terse() {
+        for cmd in [
+            "grep -rn 'fn main' src/",
+            "rg 'TODO' --type rust",
+            "ag 'pattern' src/",
+            "grep",
+        ] {
+            assert!(
+                has_structural_output(cmd),
+                "'{cmd}' must be structural so the dictionary never sees source lines"
+            );
+            assert!(
+                !is_verbatim_output(cmd),
+                "'{cmd}' must stay compressible via patterns::grep"
+            );
+        }
     }
 
     // #980: `cd /repo && cat file` — last compound segment is a file viewer.
@@ -942,8 +993,9 @@ mod verbatim_classification_tests {
     }
 
     #[test]
-    fn compound_cd_then_grep_is_verbatim() {
-        assert!(is_verbatim_output("cd /repo && grep -n 'error' log.txt"));
+    fn compound_cd_then_grep_is_structural() {
+        assert!(has_structural_output("cd /repo && grep -n 'error' log.txt"));
+        assert!(has_structural_output("cat file.go | grep func"));
     }
 
     #[test]

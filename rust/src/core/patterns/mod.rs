@@ -345,10 +345,7 @@ const PATTERNS: &[(PatternMatcher, PatternHandler)] = &[
         },
         |c, output| ruby::compress(c, output),
     ),
-    (
-        |c| c.starts_with("grep ") || c.starts_with("rg "),
-        |_c, output| grep::compress(output),
-    ),
+    (|c| is_grep_family(c), |_c, output| grep::compress(output)),
     (
         |c| c.starts_with("find "),
         |_c, output| find::compress(output),
@@ -622,6 +619,21 @@ const PATTERNS: &[(PatternMatcher, PatternHandler)] = &[
         |c, output| deploy::compress(c, output),
     ),
 ];
+
+/// A grep-family search command, bare or with arguments (#980, #985).
+///
+/// The bare form matters: `proxy::compress::infer_command` synthesises `grep`
+/// (no arguments) from tool names like `search_files`. The old `starts_with("grep ")`
+/// required a trailing space and never matched, so those results fell through to the
+/// terse pipeline which corrupted source identifiers.
+fn is_grep_family(cmd: &str) -> bool {
+    let first = cmd.split_whitespace().next().unwrap_or("");
+    let base = first.rsplit('/').next().unwrap_or(first);
+    matches!(
+        base,
+        "grep" | "egrep" | "fgrep" | "rg" | "ag" | "ack" | "ugrep" | "sift"
+    )
+}
 
 pub fn try_specific_pattern(cmd: &str, output: &str) -> Option<String> {
     let cl = cmd.to_ascii_lowercase();

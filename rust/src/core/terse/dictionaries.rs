@@ -10,248 +10,12 @@ pub struct Abbreviation {
     pub short: &'static str,
 }
 
-pub const GENERAL: &[Abbreviation] = &[
-    Abbreviation {
-        long: "function",
-        short: "fn",
-    },
-    Abbreviation {
-        long: "configuration",
-        short: "cfg",
-    },
-    Abbreviation {
-        long: "implementation",
-        short: "impl",
-    },
-    Abbreviation {
-        long: "dependencies",
-        short: "deps",
-    },
-    Abbreviation {
-        long: "dependency",
-        short: "dep",
-    },
-    Abbreviation {
-        long: "request",
-        short: "req",
-    },
-    Abbreviation {
-        long: "response",
-        short: "res",
-    },
-    Abbreviation {
-        long: "context",
-        short: "ctx",
-    },
-    Abbreviation {
-        long: "error",
-        short: "err",
-    },
-    Abbreviation {
-        long: "return",
-        short: "ret",
-    },
-    Abbreviation {
-        long: "argument",
-        short: "arg",
-    },
-    Abbreviation {
-        long: "value",
-        short: "val",
-    },
-    Abbreviation {
-        long: "module",
-        short: "mod",
-    },
-    Abbreviation {
-        long: "package",
-        short: "pkg",
-    },
-    Abbreviation {
-        long: "directory",
-        short: "dir",
-    },
-    Abbreviation {
-        long: "parameter",
-        short: "param",
-    },
-    Abbreviation {
-        long: "variable",
-        short: "var",
-    },
-    Abbreviation {
-        long: "information",
-        short: "info",
-    },
-    Abbreviation {
-        long: "application",
-        short: "app",
-    },
-    Abbreviation {
-        long: "environment",
-        short: "env",
-    },
-    Abbreviation {
-        long: "repository",
-        short: "repo",
-    },
-    Abbreviation {
-        long: "authentication",
-        short: "auth",
-    },
-    Abbreviation {
-        long: "authorization",
-        short: "authz",
-    },
-    Abbreviation {
-        long: "description",
-        short: "desc",
-    },
-    Abbreviation {
-        long: "development",
-        short: "dev",
-    },
-    Abbreviation {
-        long: "production",
-        short: "prod",
-    },
-    Abbreviation {
-        long: "connection",
-        short: "conn",
-    },
-    Abbreviation {
-        long: "database",
-        short: "db",
-    },
-    Abbreviation {
-        long: "temporary",
-        short: "tmp",
-    },
-    Abbreviation {
-        long: "document",
-        short: "doc",
-    },
-    Abbreviation {
-        long: "maximum",
-        short: "max",
-    },
-    Abbreviation {
-        long: "minimum",
-        short: "min",
-    },
-    Abbreviation {
-        long: "number",
-        short: "num",
-    },
-    Abbreviation {
-        long: "reference",
-        short: "ref",
-    },
-    Abbreviation {
-        long: "string",
-        short: "str",
-    },
-    Abbreviation {
-        long: "message",
-        short: "msg",
-    },
-    Abbreviation {
-        long: "command",
-        short: "cmd",
-    },
-    Abbreviation {
-        long: "expression",
-        short: "expr",
-    },
-    Abbreviation {
-        long: "iteration",
-        short: "iter",
-    },
-    Abbreviation {
-        long: "previous",
-        short: "prev",
-    },
-    Abbreviation {
-        long: "current",
-        short: "cur",
-    },
-    Abbreviation {
-        long: "original",
-        short: "orig",
-    },
-    Abbreviation {
-        long: "destination",
-        short: "dst",
-    },
-    Abbreviation {
-        long: "source",
-        short: "src",
-    },
-    Abbreviation {
-        long: "attribute",
-        short: "attr",
-    },
-    Abbreviation {
-        long: "allocation",
-        short: "alloc",
-    },
-    Abbreviation {
-        long: "generation",
-        short: "gen",
-    },
-    Abbreviation {
-        long: "specification",
-        short: "spec",
-    },
-    Abbreviation {
-        long: "initialization",
-        short: "init",
-    },
-    Abbreviation {
-        long: "operation",
-        short: "op",
-    },
-    Abbreviation {
-        long: "optional",
-        short: "opt",
-    },
-    Abbreviation {
-        long: "utility",
-        short: "util",
-    },
-    Abbreviation {
-        long: "execution",
-        short: "exec",
-    },
-    Abbreviation {
-        long: "property",
-        short: "prop",
-    },
-    Abbreviation {
-        long: "statistics",
-        short: "stats",
-    },
-    Abbreviation {
-        long: "accumulator",
-        short: "acc",
-    },
-    Abbreviation {
-        long: "synchronize",
-        short: "sync",
-    },
-    Abbreviation {
-        long: "asynchronous",
-        short: "async",
-    },
-    Abbreviation {
-        long: "certificate",
-        short: "cert",
-    },
-    Abbreviation {
-        long: "identifier",
-        short: "id",
-    },
-];
+/// Empty — all 60 single-English-word rules tokenize identically to their
+/// abbreviations under BPE (1 tok -> 1 tok), so they saved zero tokens while
+/// corrupting source code, file paths, and search results (#973, #980, #981).
+/// Phrase-level rules (multi-word) are the ones that yield real savings and
+/// live in the domain dictionaries (GIT, CARGO, NPM).
+pub const GENERAL: &[Abbreviation] = &[];
 
 pub const GIT: &[Abbreviation] = &[
     Abbreviation {
@@ -283,14 +47,6 @@ pub const GIT: &[Abbreviation] = &[
         short: "-",
     },
     Abbreviation {
-        long: "upstream",
-        short: "u/",
-    },
-    Abbreviation {
-        long: "origin",
-        short: "o/",
-    },
-    Abbreviation {
         long: "detached",
         short: "det",
     },
@@ -320,10 +76,6 @@ pub const CARGO: &[Abbreviation] = &[
     Abbreviation {
         long: "Downloading",
         short: "DL",
-    },
-    Abbreviation {
-        long: "Downloaded",
-        short: "DL'd",
     },
     Abbreviation {
         long: "Finished",
@@ -371,18 +123,6 @@ pub const NPM: &[Abbreviation] = &[
     Abbreviation {
         long: "removed",
         short: "-",
-    },
-    Abbreviation {
-        long: "packages",
-        short: "pkgs",
-    },
-    Abbreviation {
-        long: "vulnerabilities",
-        short: "vulns",
-    },
-    Abbreviation {
-        long: "deprecated",
-        short: "depr",
     },
     Abbreviation {
         long: "node_modules",
@@ -583,10 +323,11 @@ mod tests {
     }
 
     #[test]
-    fn general_dict_applies() {
-        let r = apply_dictionaries("the configuration directory", DictLevel::General);
-        assert!(r.contains("cfg"));
-        assert!(r.contains("dir"));
+    fn general_dict_stays_empty() {
+        assert!(
+            GENERAL.is_empty(),
+            "GENERAL must stay empty: all 60 single-word rules save 0 tokens              under BPE and corrupt source/paths (#973, #980, #981)"
+        );
     }
 
     #[test]
@@ -596,12 +337,19 @@ mod tests {
     }
 
     #[test]
-    fn dict_count_general() {
-        assert!(
-            GENERAL.len() >= 60,
-            "should have 60+ general abbreviations, got {}",
-            GENERAL.len()
-        );
+    fn no_abbreviation_inflates_tokens() {
+        for (name, dict) in [("GIT", GIT), ("CARGO", CARGO), ("NPM", NPM)] {
+            for abbr in dict {
+                let long_tok = crate::core::tokens::count_tokens(abbr.long);
+                let short_tok = crate::core::tokens::count_tokens(abbr.short);
+                assert!(
+                    short_tok <= long_tok,
+                    "{name}: '{}'->'{}'  inflates ({long_tok} tok -> {short_tok} tok)",
+                    abbr.long,
+                    abbr.short,
+                );
+            }
+        }
     }
 
     #[test]
@@ -658,6 +406,24 @@ mod tests {
         assert!(
             result.contains("src/configuration/environment.rs:42"),
             "file path must survive dictionary: {result}"
+        );
+    }
+
+    #[test]
+    fn dictionaries_leave_source_code_intact() {
+        let go_src = "func handler(ctx context.Context) (api.Result, error) { return doWork(ctx) }";
+        let result = apply_dictionaries(go_src, DictLevel::Full);
+        for keyword in ["context.Context", "error", "return"] {
+            assert!(
+                result.contains(keyword),
+                "source keyword '{keyword}' must survive dictionaries: {result}"
+            );
+        }
+        let paths = "src/environment.rs src/configuration.rs src/repository.rs";
+        let result = apply_dictionaries(paths, DictLevel::Full);
+        assert_eq!(
+            result, paths,
+            "file paths must survive dictionaries verbatim"
         );
     }
 }
