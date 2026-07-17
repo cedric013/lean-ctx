@@ -854,10 +854,17 @@ fn resolve_segment_leaves(
             resolve_segment_leaves(&inner_seg, depth + 1, out)?;
         }
     }
-    // Anything else (incl. `( … ) trailing`, brace groups, leftover delimiters) is
-    // pushed verbatim: base-extraction below sees a first token like `(ls)` or `{`
-    // that cannot match any allowlist entry, so it is blocked. `cmd (sub)` without
-    // a separator is a shell syntax error, so no executable leaf escapes here.
+    // Anything else (incl. `( … ) trailing`, leftover delimiters) is pushed
+    // verbatim: base-extraction below sees a first token like `(ls)` that
+    // cannot match any allowlist entry, so it is blocked. `cmd (sub)` without
+    // a separator is a shell syntax error, so no executable leaf escapes
+    // here. A `{ cmd; }` brace group is the one exception: split_on_operators
+    // already shields it with `brace_depth` the same way `( … )` is shielded
+    // with `paren_depth`, so it survives as one leaf here, and
+    // extract_base_from_segment (below) skips the leading `{` token to find
+    // the real base command inside — no recursion needed like subshells get,
+    // since `cd`/env changes inside `{ }` must persist to the caller (#939,
+    // agent_wrapper::rebuild's cwd-tracking wrapper).
     out.push(s.to_string());
     Ok(())
 }
@@ -1289,6 +1296,11 @@ fn split_on_operators(command: &str) -> Vec<&str> {
     let mut in_single_quote = false;
     let mut in_double_quote = false;
     let mut paren_depth: u32 = 0;
+    // #939: brace groups (`{ cmd; }`) need the same operator-shielding as
+    // `( cmd )` subshells — otherwise a `}` that closes a `{` opened on an
+    // earlier physical line (e.g. after heredoc-body stripping collapses the
+    // body between them) is misread as its own bare command segment.
+    let mut brace_depth: u32 = 0;
 
     while i < len {
         let ch = bytes[i];
@@ -1336,12 +1348,20 @@ fn split_on_operators(command: &str) -> Vec<&str> {
                 paren_depth = paren_depth.saturating_sub(1);
                 i += 1;
             }
-            b'\n' | b'\r' | b';' if paren_depth == 0 => {
+            b'{' => {
+                brace_depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                brace_depth = brace_depth.saturating_sub(1);
+                i += 1;
+            }
+            b'\n' | b'\r' | b';' if paren_depth == 0 && brace_depth == 0 => {
                 segments.push(&command[start..i]);
                 i += 1;
                 start = i;
             }
-            b'&' if paren_depth == 0 => {
+            b'&' if paren_depth == 0 && brace_depth == 0 => {
                 if i + 1 < len && bytes[i + 1] == b'&' {
                     // &&
                     segments.push(&command[start..i]);
@@ -1360,7 +1380,7 @@ fn split_on_operators(command: &str) -> Vec<&str> {
                     start = i;
                 }
             }
-            b'|' if paren_depth == 0 => {
+            b'|' if paren_depth == 0 && brace_depth == 0 => {
                 if i + 1 < len && bytes[i + 1] == b'|' {
                     // ||
                     segments.push(&command[start..i]);
@@ -1406,7 +1426,15 @@ fn extract_base_from_segment(segment: &str) -> String {
     }
 
     let tokens = shell_tokenize(cmd_part);
-    let first_token = tokens.first().map_or("", std::string::String::as_str);
+    // #939: a leading `{` brace-group token (e.g. from
+    // `agent_wrapper::rebuild`'s `{ <real command>\n} && pwd ...` wrapping)
+    // is not itself a command — skip it so the base extracted is the real
+    // command inside the group, not the brace.
+    let mut token_iter = tokens.iter();
+    let first_token = match token_iter.next().map(String::as_str) {
+        Some("{") => token_iter.next().map_or("", String::as_str),
+        other => other.unwrap_or(""),
+    };
 
     first_token
         .rsplit('/')

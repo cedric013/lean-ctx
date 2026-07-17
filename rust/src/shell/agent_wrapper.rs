@@ -65,9 +65,17 @@ impl Unwrapped {
     /// restore: the shell hook already runs inside the cwd the host spawned the
     /// command in, so only the trailing snapshot has to survive.
     pub(crate) fn rebuild(&self) -> String {
+        // #939: bare concatenation (`{inner} && pwd ...`) corrupts `inner`
+        // when its last line is a heredoc terminator (the terminator must be
+        // the ENTIRE line to match, so appending text after it breaks the
+        // heredoc) or a `#` comment (which silently swallows the appended
+        // `&& pwd ...`, so cwd tracking stops working). A brace group with an
+        // explicit newline before the closing `}` puts inner's last line
+        // alone on its own line unconditionally, so both cases are safe —
+        // the group's exit status is inner's, so `&&` gating is unchanged.
         match &self.cwd_snapshot {
-            Some(file) => format!("{} && pwd -P >| {file}", self.inner),
-            None if self.stdout_cwd => format!("{} && pwd", self.inner),
+            Some(file) => format!("{{ {}\n}} && pwd -P >| {file}", self.inner),
+            None if self.stdout_cwd => format!("{{ {}\n}} && pwd", self.inner),
             None => self.inner.clone(),
         }
     }
@@ -365,7 +373,7 @@ mod tests {
         // No `eval` survives — the allowlist's hard block can no longer fire.
         assert!(!rebuilt.contains("eval "), "eval must be gone: {rebuilt}");
         assert!(rebuilt.ends_with("&& pwd -P >| /tmp/claude-87b7-cwd"));
-        assert!(rebuilt.starts_with("/home/u/.local"));
+        assert!(rebuilt.starts_with("{ /home/u/.local"));
     }
 
     #[test]
@@ -378,7 +386,63 @@ mod tests {
         assert_eq!(u.cwd_snapshot.as_deref(), Some("/tmp/claude-aa11-cwd"));
         assert_eq!(
             u.rebuild(),
-            "cargo build --release && pwd -P >| /tmp/claude-aa11-cwd"
+            "{ cargo build --release\n} && pwd -P >| /tmp/claude-aa11-cwd"
+        );
+    }
+
+    // --- heredoc-corruption fix: rebuild() must never fuse the cwd-tracking
+    // suffix onto inner's last line (breaks heredoc terminators, silently
+    // swallowed by trailing `#` comments) ---
+
+    #[test]
+    fn rebuild_preserves_heredoc_terminator_with_file_snapshot() {
+        let cmd = "shopt -u extglob 2>/dev/null || true && eval 'cat <<'\"'\"'EOF'\"'\"'\nhello\nEOF' < /dev/null && pwd -P >| /tmp/claude-hd1-cwd";
+        let u = unwrap_agent_wrapper(cmd).expect("must detect heredoc wrapper");
+        assert_eq!(u.inner, "cat <<'EOF'\nhello\nEOF");
+        let rebuilt = u.rebuild();
+        // The heredoc terminator line must be exactly "EOF" — nothing appended
+        // after it on that line, or the shell never recognizes the delimiter.
+        let terminator_line = rebuilt.lines().nth(2).expect("rebuilt has 3+ lines");
+        assert_eq!(
+            terminator_line, "EOF",
+            "heredoc terminator must be alone on its line: {rebuilt:?}"
+        );
+        assert_eq!(
+            rebuilt,
+            "{ cat <<'EOF'\nhello\nEOF\n} && pwd -P >| /tmp/claude-hd1-cwd"
+        );
+    }
+
+    #[test]
+    fn rebuild_preserves_heredoc_terminator_stdout_cwd() {
+        let cmd = "setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && eval 'cat <<'\"'\"'EOF'\"'\"'\nhello\nEOF' < /dev/null && pwd";
+        let u = unwrap_agent_wrapper(cmd).expect("must detect heredoc zsh-sandbox wrapper");
+        assert_eq!(u.inner, "cat <<'EOF'\nhello\nEOF");
+        assert!(u.stdout_cwd);
+        let rebuilt = u.rebuild();
+        let terminator_line = rebuilt.lines().nth(2).expect("rebuilt has 3+ lines");
+        assert_eq!(
+            terminator_line, "EOF",
+            "heredoc terminator must be alone on its line: {rebuilt:?}"
+        );
+        assert_eq!(rebuilt, "{ cat <<'EOF'\nhello\nEOF\n} && pwd");
+    }
+
+    #[test]
+    fn rebuild_does_not_swallow_trailing_comment_pwd() {
+        // A `#` comment as inner's last line must not silently consume the
+        // appended `&& pwd ...` (comments run to end-of-line in shell).
+        let u = Unwrapped {
+            inner: "echo hi # a trailing comment".to_string(),
+            cwd_snapshot: Some("/tmp/claude-cmt-cwd".to_string()),
+            stdout_cwd: false,
+        };
+        let rebuilt = u.rebuild();
+        let last_line = rebuilt.lines().last().expect("rebuilt has a last line");
+        assert!(
+            last_line.trim_start().starts_with("}")
+                && last_line.contains("&& pwd -P >| /tmp/claude-cmt-cwd"),
+            "cwd-tracking suffix must not be swallowed by the comment: {rebuilt:?}"
         );
     }
 
@@ -481,7 +545,7 @@ mod tests {
         );
         assert_eq!(
             rebuilt,
-            "lean-ctx -c 'git status' && pwd -P >| /tmp/claude-9f3c-cwd"
+            "{ lean-ctx -c 'git status'\n} && pwd -P >| /tmp/claude-9f3c-cwd"
         );
     }
 
@@ -545,7 +609,7 @@ mod tests {
         let cmd = "setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && eval 'git status' < /dev/null && pwd";
         let u = unwrap_agent_wrapper(cmd).unwrap();
         let rebuilt = u.rebuild();
-        assert_eq!(rebuilt, "git status && pwd");
+        assert_eq!(rebuilt, "{ git status\n} && pwd");
         assert!(!rebuilt.contains("eval "), "eval must be gone: {rebuilt}");
         assert!(
             !rebuilt.contains("setopt"),
@@ -565,7 +629,7 @@ mod tests {
         let u = unwrap_agent_wrapper(cmd).expect("must detect pwd -P variant");
         assert_eq!(u.inner, "ls -la");
         assert!(u.stdout_cwd);
-        assert_eq!(u.rebuild(), "ls -la && pwd");
+        assert_eq!(u.rebuild(), "{ ls -la\n} && pwd");
     }
 
     // --- #745 v3: pwd - variant (lone dash flag) ---
@@ -576,7 +640,7 @@ mod tests {
         let u = unwrap_agent_wrapper(cmd).expect("must detect pwd - variant");
         assert_eq!(u.inner, "echo hi");
         assert!(u.stdout_cwd);
-        assert_eq!(u.rebuild(), "echo hi && pwd");
+        assert_eq!(u.rebuild(), "{ echo hi\n} && pwd");
     }
 
     // --- #745 v3: unquoted eval arg (eval pwd instead of eval 'pwd') ---
@@ -606,7 +670,7 @@ mod tests {
         let u = unwrap_agent_wrapper(cmd).expect("must unwrap sandbox-exec wrapper");
         assert_eq!(u.inner, "echo");
         assert!(u.stdout_cwd);
-        assert_eq!(u.rebuild(), "echo && pwd");
+        assert_eq!(u.rebuild(), "{ echo\n} && pwd");
     }
 
     #[test]

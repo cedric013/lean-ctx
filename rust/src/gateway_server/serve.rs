@@ -342,11 +342,25 @@ async fn admin_auth_guard(
     }
 }
 
+/// Constant-time byte comparison, side-channel-hardened against the
+/// admin-token *length* leaking through response timing (#962).
+///
+/// A plain `if a.len() != b.len() { return false }` early return is itself
+/// constant-time *per call*, but a fast rejection only ever happens when the
+/// guessed length is wrong — an attacker measuring many requests can binary
+/// search the presented token's length down to the expected token's exact
+/// length before ever needing to guess a single byte. Hashing both sides to
+/// a fixed-size (32-byte) digest first removes the correlation entirely:
+/// every comparison — regardless of either input's length — walks the same
+/// 32 bytes, so there is nothing left for a length probe to distinguish.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+    let ha = blake3::hash(a);
+    let hb = blake3::hash(b);
+    ha.as_bytes()
+        .iter()
+        .zip(hb.as_bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 /// `GET /metrics` — Prometheus text exposition (enterprise#34).
@@ -526,5 +540,16 @@ mod tests {
         assert!(constant_time_eq(b"abc", b"abc"));
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"ab"));
+    }
+
+    #[test]
+    fn constant_time_eq_handles_wildly_different_lengths() {
+        // #962: the hash-first comparison must remain correct however far
+        // apart the two inputs' lengths are — not just off-by-one.
+        assert!(!constant_time_eq(b"", b"nonempty"));
+        assert!(constant_time_eq(b"", b""));
+        let short = b"tok";
+        let long = [b'a'; 4096];
+        assert!(!constant_time_eq(short, &long));
     }
 }

@@ -10,7 +10,17 @@ pub fn save_tee(command: &str, output: &str) -> Option<String> {
     let tee_dir = crate::core::paths::state_dir().ok()?.join("tee");
     std::fs::create_dir_all(&tee_dir).ok()?;
 
-    cleanup_old_tee_logs(&tee_dir);
+    // #950: cleanup is an O(N) read_dir + per-file metadata() scan of the
+    // whole tee directory. Running it on every save_tee (i.e. every
+    // compressed shell call) means its cost scales with directory size on
+    // every single invocation under heavy shell activity. Entries already
+    // carry a 24h TTL, so throttling the scan to once per interval is enough
+    // to keep the directory bounded without paying the O(N) cost every time.
+    if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        && TEE_CLEANUP_THROTTLE.is_due(now.as_secs())
+    {
+        cleanup_old_tee_logs(&tee_dir);
+    }
 
     let cmd_slug: String = command
         .chars()
@@ -42,6 +52,40 @@ pub fn save_tee(command: &str, output: &str) -> Option<String> {
     Some(path.to_string_lossy().to_string())
 }
 
+/// Lock-free gate that lets [`cleanup_old_tee_logs`]'s directory scan run at
+/// most once per `interval_secs`, no matter how many `save_tee` calls land
+/// concurrently. Only the caller whose compare-exchange wins gets `true`.
+struct CleanupThrottle {
+    last_run_unix_secs: std::sync::atomic::AtomicU64,
+    interval_secs: u64,
+}
+
+impl CleanupThrottle {
+    const fn new(interval_secs: u64) -> Self {
+        Self {
+            last_run_unix_secs: std::sync::atomic::AtomicU64::new(0),
+            interval_secs,
+        }
+    }
+
+    /// `0` means "never run" and is always due, regardless of `now_unix_secs`
+    /// — avoids the throttle depending on `now` being a large real epoch time.
+    fn is_due(&self, now_unix_secs: u64) -> bool {
+        use std::sync::atomic::Ordering;
+        let last = self.last_run_unix_secs.load(Ordering::Relaxed);
+        let due = last == 0 || now_unix_secs.saturating_sub(last) >= self.interval_secs;
+        due && self
+            .last_run_unix_secs
+            .compare_exchange(last, now_unix_secs, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    }
+}
+
+static TEE_CLEANUP_THROTTLE: CleanupThrottle = CleanupThrottle::new(10 * 60);
+
+/// Removes tee log entries older than 24h. Throttled by [`TEE_CLEANUP_THROTTLE`]
+/// (called from `save_tee`) rather than run on every call — the read_dir +
+/// per-file metadata() scan is O(N) in directory size.
 pub(crate) fn cleanup_old_tee_logs(tee_dir: &std::path::Path) {
     let cutoff = std::time::SystemTime::now().checked_sub(std::time::Duration::from_hours(24));
     let Some(cutoff) = cutoff else { return };
@@ -61,6 +105,42 @@ pub(crate) fn cleanup_old_tee_logs(tee_dir: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- #950: tee cleanup throttle ---
+
+    #[test]
+    fn cleanup_throttle_gates_by_interval() {
+        let throttle = CleanupThrottle::new(600);
+        assert!(
+            throttle.is_due(1_000),
+            "never run before: first call is always due"
+        );
+        assert!(
+            !throttle.is_due(1_100),
+            "only 100s elapsed of a 600s interval"
+        );
+        assert!(!throttle.is_due(1_599), "still short of the interval by 1s");
+        assert!(
+            throttle.is_due(1_600),
+            "exactly interval-elapsed must be due again"
+        );
+    }
+
+    #[test]
+    fn cleanup_throttle_lets_only_one_racer_through_per_interval() {
+        let throttle = CleanupThrottle::new(600);
+        let hits = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| scope.spawn(|| throttle.is_due(1_000)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .filter(|&due| due)
+                .count()
+        });
+        assert_eq!(hits, 1, "exactly one racer should win the cleanup slot");
+    }
 
     /// Determinism contract (#498): the tee path must be content-addressed —
     /// the same command always maps to the same file so repeated tool outputs

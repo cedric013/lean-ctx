@@ -38,6 +38,14 @@ pub(crate) fn try_atomic_write(
         .ok_or_else(|| invalid_input("invalid path (no filename)"))?
         .to_string_lossy();
 
+    // #958: sweep this directory for temps orphaned by a previous crash
+    // between temp-file creation and rename — the only place these were
+    // ever cleaned up before was the rename error path, so a hard crash
+    // left them behind for good with no separate startup pass to catch
+    // them. Piggybacking here means every atomic write into this directory
+    // gets a chance to reap whatever an earlier crashed write left behind.
+    cleanup_orphaned_temps(parent, &filename);
+
     let pid = std::process::id();
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -58,20 +66,98 @@ pub(crate) fn try_atomic_write(
         let _ = std::fs::set_permissions(&tmp, perms.clone());
     }
 
+    // #956: on Windows, `rename` fails outright if `path` already exists, so
+    // this used to `remove_file(path)` first and rename second — two
+    // non-atomic syscalls. A reader landing in that window sees ENOENT for a
+    // file that "exists", and a process that dies after the remove but
+    // before the rename loses the original file for good while the temp file
+    // is left behind orphaned. `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`
+    // performs the swap as one atomic operation, matching what `rename(2)`
+    // already gives us for free on Unix.
     #[cfg(windows)]
-    {
-        if path.exists() {
-            let _ = std::fs::remove_file(path);
-        }
+    if let Err(e) = windows_replace(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
     }
 
+    #[cfg(not(windows))]
     if let Err(e) = std::fs::rename(&tmp, path) {
         // Don't leave a half-written temp behind before the caller decides
         // whether to fall back.
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
+
+    #[cfg(unix)]
+    fsync_dir(parent);
+
     Ok(())
+}
+
+/// Atomically replace `path` with `tmp` via `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`
+/// — the Windows equivalent of POSIX `rename(2)`'s implicit replace-if-exists.
+#[cfg(windows)]
+fn windows_replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MoveFileExW};
+
+    fn to_wide(p: &Path) -> Vec<u16> {
+        p.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+
+    let tmp_w = to_wide(tmp);
+    let path_w = to_wide(path);
+
+    let ok = unsafe { MoveFileExW(tmp_w.as_ptr(), path_w.as_ptr(), MOVEFILE_REPLACE_EXISTING) };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Best-effort `fsync` of a directory's inode so a preceding `rename`/`create`
+/// into it survives a crash (Unix only).
+#[cfg(unix)]
+fn fsync_dir(dir: &Path) {
+    if let Ok(f) = std::fs::File::open(dir) {
+        let _ = f.sync_all();
+    }
+}
+
+/// Removes `.{filename}.lean-ctx.tmp.{pid}.{nanos}` leftovers in `parent` from
+/// a crash between temp-file creation and rename (#958).
+fn cleanup_orphaned_temps(parent: &Path, filename: &str) {
+    const STALE_AGE: std::time::Duration = std::time::Duration::from_hours(1);
+    let prefix = format!(".{filename}.lean-ctx.tmp.");
+
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    let now = SystemTime::now();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name
+            .to_string_lossy()
+            .strip_prefix(&prefix)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let pid: Option<u32> = rest.split('.').next().and_then(|s| s.parse().ok());
+        let pid_dead = pid.is_some_and(|p| !crate::ipc::process::is_alive(p));
+        let stale_by_age = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .is_some_and(|age| age > STALE_AGE);
+        if pid_dead || stale_by_age {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// In-place overwrite of an existing file inode (`O_WRONLY|O_TRUNC`, plus
@@ -175,6 +261,81 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn fsync_dir_succeeds_on_a_real_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        fsync_dir(dir.path());
+    }
+
+    // --- #958: orphaned-temp sweep ---
+
+    #[test]
+    fn cleanup_orphaned_temps_removes_dead_pid_leftovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let filename = "cfg.toml";
+        let dead_pid = 999_999_999u32;
+        let orphan = dir
+            .path()
+            .join(format!(".{filename}.lean-ctx.tmp.{dead_pid}.123"));
+        std::fs::write(&orphan, b"stale").unwrap();
+
+        cleanup_orphaned_temps(dir.path(), filename);
+
+        assert!(
+            !orphan.exists(),
+            "orphaned temp with a dead PID must be removed"
+        );
+    }
+
+    #[test]
+    fn cleanup_orphaned_temps_keeps_fresh_temp_from_a_live_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let filename = "cfg.toml";
+        let my_pid = std::process::id();
+        let in_progress = dir
+            .path()
+            .join(format!(".{filename}.lean-ctx.tmp.{my_pid}.123"));
+        std::fs::write(&in_progress, b"still writing").unwrap();
+
+        cleanup_orphaned_temps(dir.path(), filename);
+
+        assert!(
+            in_progress.exists(),
+            "a live writer's own in-progress temp must survive"
+        );
+    }
+
+    #[test]
+    fn cleanup_orphaned_temps_removes_old_temp_even_with_a_live_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let filename = "cfg.toml";
+        let my_pid = std::process::id();
+        let ancient = dir
+            .path()
+            .join(format!(".{filename}.lean-ctx.tmp.{my_pid}.123"));
+        std::fs::write(&ancient, b"ancient").unwrap();
+        filetime::set_file_mtime(&ancient, filetime::FileTime::from_unix_time(0, 0)).unwrap();
+
+        cleanup_orphaned_temps(dir.path(), filename);
+
+        assert!(
+            !ancient.exists(),
+            "ancient temp must be removed regardless of PID liveness"
+        );
+    }
+
+    #[test]
+    fn cleanup_orphaned_temps_ignores_unrelated_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let filename = "cfg.toml";
+        let unrelated = dir.path().join("other-file.txt");
+        std::fs::write(&unrelated, b"keep me").unwrap();
+
+        cleanup_orphaned_temps(dir.path(), filename);
+
+        assert!(unrelated.exists(), "non-matching files must be left alone");
+    }
     #[test]
     fn try_atomic_write_creates_and_replaces() {
         let dir = tempfile::tempdir().unwrap();

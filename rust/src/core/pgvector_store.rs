@@ -335,14 +335,24 @@ fn vector_literal(vector: &[f32]) -> String {
     s
 }
 
-/// Standard SQL single-quoted literal with `'` doubling. Rejects NUL bytes
-/// (PostgreSQL cannot store them in TEXT anyway) and backslashes are safe
-/// because standard_conforming_strings is on by default since PostgreSQL 9.1.
+/// SQL string literal using the `E'...'` escape-string syntax. Rejects NUL
+/// bytes (PostgreSQL cannot store them in TEXT anyway).
+///
+/// #964: a plain `'...'` literal's backslash handling depends on the
+/// server's `standard_conforming_strings` setting — on (the default since
+/// PostgreSQL 9.1) a backslash is literal, but a server configured with it
+/// off reinterprets `\'` inside the literal as an escaped quote, letting a
+/// value ending in a backslash re-open the string and defeat the `''`
+/// doubling below regardless of client-side escaping. `E'...'` is *always*
+/// backslash-interpreted, independent of that setting, so escaping both `\`
+/// and `'` here is unconditionally correct rather than relying on a
+/// server-side default we don't control.
 fn sql_string_literal(s: &str) -> Result<String, String> {
     if s.contains('\0') {
         return Err("pgvector: NUL byte in string".to_string());
     }
-    Ok(format!("'{}'", s.replace('\'', "''")))
+    let escaped = s.replace('\\', "\\\\").replace('\'', "''");
+    Ok(format!("E'{escaped}'"))
 }
 
 /// The table prefix is interpolated into SQL identifiers; enforce the same
@@ -392,9 +402,21 @@ mod tests {
 
     #[test]
     fn sql_string_literal_escapes_quotes() {
-        assert_eq!(sql_string_literal("a'b").unwrap(), "'a''b'");
-        assert_eq!(sql_string_literal("plain").unwrap(), "'plain'");
+        assert_eq!(sql_string_literal("a'b").unwrap(), "E'a''b'");
+        assert_eq!(sql_string_literal("plain").unwrap(), "E'plain'");
         assert!(sql_string_literal("nul\0byte").is_err());
+    }
+
+    #[test]
+    fn sql_string_literal_escapes_backslashes() {
+        // #964: E'...' is always backslash-interpreted regardless of the
+        // server's standard_conforming_strings setting, so a literal
+        // backslash must be doubled just like a quote — otherwise, with
+        // standard_conforming_strings=off, a trailing backslash could
+        // re-open the string and escape the quoting entirely.
+        assert_eq!(sql_string_literal(r"a\b").unwrap(), r"E'a\\b'");
+        assert_eq!(sql_string_literal(r"trailing\").unwrap(), r"E'trailing\\'");
+        assert_eq!(sql_string_literal(r"a\'b").unwrap(), r"E'a\\''b'");
     }
 
     #[test]

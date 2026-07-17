@@ -1067,6 +1067,31 @@ fn extract_base_quoted_path() {
     assert_eq!(r, "git");
 }
 
+// #939: agent_wrapper::rebuild() now wraps the real command in a `{ ... }`
+// brace group before appending its cwd-tracking suffix (fixes heredoc
+// corruption). The allowlist must see through that wrapper to the real base
+// command, not block on the literal `{` token.
+#[test]
+fn extract_base_sees_through_leading_brace_group() {
+    let r = extract_base_from_segment("{ cat <<'EOF'\n}");
+    assert_eq!(r, "cat", "must resolve to the real command, not '{{'");
+}
+
+#[test]
+fn enforce_allowlist_allows_rebuilt_brace_wrapped_command() {
+    // `pwd` (the cwd-tracking companion segment rebuild() appends) must be
+    // allowlisted too — same requirement any agent-wrapped command already
+    // had, heredoc or not; not special-cased by this fix.
+    crate::test_env::set_var("LEAN_CTX_SHELL_ALLOWLIST_OVERRIDE", "cat,pwd");
+    let cmd = "{ cat <<'EOF'\nhello\nEOF\n} && pwd -P >| /tmp/claude-brace-cwd";
+    let result = super::enforce_shell_allowlist(cmd);
+    crate::test_env::remove_var("LEAN_CTX_SHELL_ALLOWLIST_OVERRIDE");
+    assert!(
+        result.is_ok(),
+        "a rebuilt brace-wrapped allowlisted command must not be newly blocked: {result:?}"
+    );
+}
+
 // --- security checks with quoted paths ---
 
 #[test]
