@@ -93,6 +93,12 @@ pub fn detect_project_root_for_dashboard() -> String {
         return promote_to_git_root(&explicit);
     }
 
+    if let Ok(explicit) = std::env::var("LEAN_CTX_PROJECT_ROOT")
+        && !explicit.trim().is_empty()
+    {
+        return promote_to_git_root(&explicit);
+    }
+
     if let Some(session) = crate::core::session::SessionState::load_latest() {
         if let Some(root) = session.project_root.as_deref()
             && !root.trim().is_empty()

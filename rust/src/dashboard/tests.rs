@@ -1,11 +1,25 @@
 //! Tests for dashboard auth, host allow-list, CSRF and token handling.
 
-use super::routes::helpers::normalize_dashboard_demo_path;
+use super::routes::helpers::{detect_project_root_for_dashboard, normalize_dashboard_demo_path};
 #[allow(clippy::wildcard_imports)]
 use super::*;
 use tempfile::tempdir;
 
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn dashboard_project_root_honors_general_env_override() {
+    let _g = ENV_LOCK.lock().expect("env lock");
+    let td = tempdir().expect("tempdir");
+    let root = td.path().join("project");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    let root_s = root.to_string_lossy().to_string();
+
+    crate::test_env::remove_var("LEAN_CTX_DASHBOARD_PROJECT");
+    crate::test_env::set_var("LEAN_CTX_PROJECT_ROOT", &root_s);
+    assert_eq!(detect_project_root_for_dashboard(), root_s);
+    crate::test_env::remove_var("LEAN_CTX_PROJECT_ROOT");
+}
 
 #[test]
 fn check_auth_with_valid_bearer() {
