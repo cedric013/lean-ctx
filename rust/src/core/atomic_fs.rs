@@ -261,7 +261,6 @@ mod tests {
         }
     }
 
-
     #[cfg(unix)]
     #[test]
     fn fsync_dir_succeeds_on_a_real_directory() {
