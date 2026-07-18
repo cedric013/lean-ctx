@@ -27,7 +27,7 @@ pub fn safe_canonicalize(path: &Path) -> std::io::Result<PathBuf> {
 /// Raw realpath + Windows-verbatim strip, with **no** TCC guard. Internal sink
 /// shared by [`safe_canonicalize`] (which gates it behind `may_probe_path`) and
 /// [`canonicalize_secure`] (which never gates it).
-fn canonicalize_raw(path: &Path) -> std::io::Result<PathBuf> {
+pub(crate) fn canonicalize_raw(path: &Path) -> std::io::Result<PathBuf> {
     let canon = std::fs::canonicalize(path)?;
     Ok(strip_verbatim(canon))
 }

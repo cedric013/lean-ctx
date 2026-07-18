@@ -1051,8 +1051,8 @@ fn guard_shell_execute_policy_is_discoverable() {
 
     let execute = desc_of("ctx_execute");
     assert!(
-        execute.contains("allowlist"),
-        "ctx_execute must state its no-allowlist policy (#905), got: '{execute}'"
+        execute.contains("shares ctx_shell's security policy"),
+        "ctx_execute must state that shell execution shares ctx_shell's policy (#1011), got: '{execute}'"
     );
     assert!(
         execute.contains("ctx_shell"),
@@ -1060,7 +1060,7 @@ fn guard_shell_execute_policy_is_discoverable() {
     );
 
     eprintln!(
-        "\n  [guard] ctx_shell/ctx_execute policy split is documented in both descriptions ✓"
+        "\n  [guard] ctx_shell/ctx_execute shared shell policy is documented in both descriptions ✓"
     );
 }
 
