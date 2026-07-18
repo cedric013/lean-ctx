@@ -76,6 +76,7 @@ All `std::sync::Mutex` unless noted otherwise.
 | L63 | `BLOCK` | `core/events.rs:289` | `OnceLock<Mutex<LocalBlock>>` (fn-local static) | Per-process cache of the current pre-reserved event-id block (`next`/`last`) inside `next_event_id()`: most calls just bump `next` under the lock; on exhaustion the lock is held across the refill call to `reserve_event_id_block_at`, which takes its own independent OS file lock (`events.seq.lock`, not a Rust static) to persist the next block — never nested with another *static* Rust lock |
 | L64 | `SESSION_READ_ONLY_ROOTS` | `core/pathjail.rs:143` | `OnceLock<Mutex<Vec<PathBuf>>>` | Session-scoped read-only roots auto-detected from language caches (#899); consulted by both read allow-list (jail) and `is_read_only_path` (write-deny) so a cache root is readable but never writable; independent leaf lock, never nested |
 | L65 | `SESSIONS` | `proxy/sticky_tools.rs:17` | `OnceLock<Mutex<HashSet<u64>>>` (fn-local static) | CCR active conversation tracking; capacity-bounded (`MAX_TRACKED`), oldest-first eviction on overflow; independent leaf lock, never nested |
+| L66 | `JOBS` | `server/background_shell.rs:26` | `LazyLock<Mutex<HashMap<String, Job>>>` | Content-addressed background shell jobs; lock is held only to insert, inspect, or remove a job, then released before executing or joining its worker thread; independent leaf lock, never nested |
 
 ### Test / Environment Locks (serialise env-var mutations)
 
@@ -207,9 +208,9 @@ Override via `LEAN_CTX_WORKER_THREADS` (positive integer) for environments with 
 concurrent subagents. Example: `LEAN_CTX_WORKER_THREADS=8`. The blocking thread pool
 is always `worker_threads * 4`, clamped to `[8, 32]`.
 
-### Independent Static Locks (L3–L65)
+### Independent Static Locks (L3–L66)
 
-All other static locks (L3–L65) — **except the L22 → L4 pair documented above** — are
+All other static locks (L3–L66) — **except the L22 → L4 pair documented above** — are
 **independent singletons**: they protect isolated subsystem state and are never nested inside
 each other. Each should be acquired in isolation:
 
