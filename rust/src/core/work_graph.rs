@@ -93,8 +93,8 @@ impl BoundedWorkGraph {
         Self {
             nodes: BTreeMap::new(),
             children: BTreeMap::new(),
-            max_fan_out: max_fan_out.min(MAX_FAN_OUT).max(1),
-            max_depth: max_depth.min(MAX_DEPTH).max(1),
+            max_fan_out: max_fan_out.clamp(1, MAX_FAN_OUT),
+            max_depth: max_depth.clamp(1, MAX_DEPTH),
         }
     }
 
@@ -279,9 +279,10 @@ impl BoundedWorkGraph {
         self.nodes.len()
     }
 
+    #[allow(clippy::collapsible_if)]
     fn stop_recursive(&mut self, node_id: &str, reason: StopReason, stopped: &mut Vec<String>) {
         if let Some(node) = self.nodes.get_mut(node_id) {
-            if node.status == NodeStatus::Active || node.status == NodeStatus::Pending {
+            if matches!(node.status, NodeStatus::Active | NodeStatus::Pending) {
                 node.status = NodeStatus::Stopped;
                 node.stop_reason = Some(reason);
                 stopped.push(node_id.to_string());

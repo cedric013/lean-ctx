@@ -60,10 +60,7 @@ impl EfficiencyAnalyzer for BuiltinAnalyzer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let sig = FileSignature::from_path(path, 0);
-        predictor
-            .predict_best_mode(&sig)
-            .map(|_| 0.8)
-            .unwrap_or(0.5)
+        predictor.predict_best_mode(&sig).map_or(0.5, |_| 0.8)
     }
 
     fn summary(&self) -> Vec<EfficiencyEntry> {

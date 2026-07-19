@@ -261,9 +261,10 @@ impl OclaBus {
 
 impl std::fmt::Debug for OclaBus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ring_len = self.ring.lock().map_or(0, |r| r.len());
         f.debug_struct("OclaBus")
             .field("enabled", &self.is_enabled())
-            .field("ring_len", &self.len())
+            .field("ring", &format_args!("[{ring_len} events]"))
             .field("capacity", &self.capacity)
             .field("next_id", &self.next_id.load(Ordering::Relaxed))
             .finish()
