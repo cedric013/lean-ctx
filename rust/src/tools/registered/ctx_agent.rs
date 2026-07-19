@@ -28,8 +28,8 @@ impl McpTool for CtxAgentTool {
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["register", "list", "post", "read", "status", "info", "handoff", "sync", "claim", "release", "brief", "return", "diary", "recall_diary", "diaries", "share_knowledge", "receive_knowledge"],
-                        "description": "register|list|post|read|status|info|handoff|sync|claim|release|brief|return|diary|recall_diary|diaries|share_knowledge|receive_knowledge"
+                        "enum": ["register", "list", "post", "read", "status", "info", "handoff", "sync", "claim", "release", "brief", "return", "diary", "recall_diary", "diaries", "share_knowledge", "receive_knowledge|lease_acquire|lease_release", "lease_acquire", "lease_release"],
+                        "description": "register|list|post|read|status|info|handoff|sync|claim|release|brief|return|diary|recall_diary|diaries|share_knowledge|receive_knowledge|lease_acquire|lease_release"
                     },
                     "agent_type": {
                         "type": "string",

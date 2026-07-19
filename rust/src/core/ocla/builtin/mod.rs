@@ -4,6 +4,7 @@
 //! interface. Behavior is identical to the wrapped code — the trait boundary
 //! enables future swapping, testing, and adoption tracking.
 
+pub mod agent_gateway;
 pub mod analyzer;
 pub mod experiment;
 pub mod intent_classifier;
