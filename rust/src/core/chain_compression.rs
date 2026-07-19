@@ -74,7 +74,7 @@ impl ChainCompressionTracker {
                 .entry(content_ref.clone())
                 .and_modify(|item| {
                     item.last_referenced_hop = hop;
-                    item.freshness_ref = freshness_ref.clone();
+                    item.freshness_ref.clone_from(&freshness_ref);
                 })
                 .or_insert(ChainContextItem {
                     content_ref,
