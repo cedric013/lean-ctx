@@ -795,8 +795,89 @@ pub fn handle(
             out
         }
 
+        // P11: Acquire an opaque path/symbol lease for mutation planning.
+        "lease_acquire" => {
+            let Some(agent_id) = current_agent_id else {
+                return "Error: agent must be registered first".to_string();
+            };
+            let Some(target) = message else {
+                return "Error: message (path or symbol:<name>) is required".to_string();
+            };
+            let (resource_kind, resource_ref) = lease_resource(target);
+            let duration_ms = match _ttl_hours.unwrap_or(0) {
+                0 => 10 * 60 * 1_000,
+                1 => 60 * 60 * 1_000,
+                _ => return "Error: ttl_hours for lease must be 0 (10min) or 1 (1h)".to_string(),
+            };
+            let request = crate::core::agent_lease::AgentLeaseRequestV1 {
+                schema_version: crate::core::agent_lease::AGENT_LEASE_SCHEMA_VERSION,
+                lease_request_ref: format!(
+                    "lease-request:{}",
+                    blake3::hash(format!("{agent_id}:{resource_ref}").as_bytes()).to_hex()
+                ),
+                resource_kind,
+                resource_ref: resource_ref.clone(),
+                owner_agent_id: agent_id.to_string(),
+                duration_ms,
+            };
+            match crate::core::agent_lease::acquire_local(request) {
+                Ok(crate::core::agent_lease::AgentLeaseAcquireV1::Granted(lease)) => format!(
+                    "Lease granted: {} resource={} owner={} expires_at_epoch_ms={}",
+                    lease.lease_ref, resource_ref, agent_id, lease.expires_at_epoch_ms
+                ),
+                Ok(crate::core::agent_lease::AgentLeaseAcquireV1::HeldBy {
+                    owner_agent_id,
+                    lease_ref,
+                    expires_at_epoch_ms,
+                }) => format!(
+                    "Lease HELD: resource={resource_ref} owner={owner_agent_id} lease_ref={lease_ref} expires={expires_at_epoch_ms}"
+                ),
+                Err(e) => format!("Lease rejected: {e}"),
+            }
+        }
+
+        // P11: Release a previously acquired lease.
+        "lease_release" => {
+            let Some(agent_id) = current_agent_id else {
+                return "Error: agent must be registered first".to_string();
+            };
+            let Some(target) = message else {
+                return "Error: message (same path or symbol:<name>) is required".to_string();
+            };
+            let Some(lease_ref) = category else {
+                return "Error: category (lease_ref from lease_acquire) is required".to_string();
+            };
+            let (resource_kind, resource_ref) = lease_resource(target);
+            match crate::core::agent_lease::release_local(
+                resource_kind,
+                &resource_ref,
+                agent_id,
+                lease_ref,
+            ) {
+                Ok(true) => format!("Lease released: {lease_ref} resource={resource_ref}"),
+                Ok(false) => format!("No active lease found for resource={resource_ref}"),
+                Err(e) => format!("Release failed: {e}"),
+            }
+        }
+
         _ => format!(
-            "Unknown action: {action}. Use: register, list, post, read, status, info, handoff, sync, poll_events, diary, recall_diary, diaries, share_knowledge, receive_knowledge"
+            "Unknown action: {action}. Use: register, list, post, read, status, info, handoff, sync, poll_events, diary, recall_diary, diaries, share_knowledge, receive_knowledge, lease_acquire, lease_release"
         ),
+    }
+}
+
+/// Convert a raw path/symbol target into an opaque lease resource.
+fn lease_resource(target: &str) -> (crate::core::agent_lease::AgentLeaseResourceKindV1, String) {
+    if let Some(symbol) = target.strip_prefix("symbol:") {
+        (
+            crate::core::agent_lease::AgentLeaseResourceKindV1::Symbol,
+            format!("symbolref:{}", blake3::hash(symbol.as_bytes()).to_hex()),
+        )
+    } else {
+        let normalized = crate::core::pathutil::normalize_tool_path(target);
+        (
+            crate::core::agent_lease::AgentLeaseResourceKindV1::Path,
+            format!("pathref:{}", blake3::hash(normalized.as_bytes()).to_hex()),
+        )
     }
 }

@@ -1,12 +1,14 @@
 //! OCLA (Open Context Layer Architecture) — trait definitions and built-in impls.
 //!
-//! This module defines the 5 OCLA traits that P3 implements:
+//! This module defines the 6 OCLA traits:
 //! - `EfficiencyAnalyzer` (LEARN) — read-only efficiency recommendations
 //! - `ConfigTuner` (ACT) — proposal → approval → apply → changelog
 //! - `ExperimentRunner` (ACT) — deterministic experiments with auto-rollback
 //! - `IntentClassifier` (OBSERVE) — classifies user intent into personas/tiers
 //! - `OutcomeTracker` (OBSERVE) — captures explicit accept/reject signals
+//! - `AgentGateway` (SHARED/DIM4) — validated agent relay boundary (P11)
 
+pub mod agent_gateway;
 pub mod builtin;
 
 use serde::{Deserialize, Serialize};
