@@ -14,7 +14,7 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use fs2::FileExt;
 
-use super::event::{SavingsEvent, compute_hash};
+use super::event::{EvidenceClass, MeasurementMethod, SavingsEvent, compute_hash};
 use super::evidence_projection::{
     LedgerProjectionErrorV2, MAX_LEDGER_SNAPSHOT_BYTES_V2, VerifiedLedgerSnapshotV2,
 };
@@ -145,6 +145,22 @@ fn read_last_hash_from_tail(file: &mut fs::File) -> std::io::Result<String> {
 /// Appends one event, filling `prev_hash`/`entry_hash` under an exclusive lock.
 /// Returns the finalised event. Best-effort on serialise failure (no write, no error).
 pub fn append(path: &Path, mut ev: SavingsEvent) -> std::io::Result<SavingsEvent> {
+    if ev.measurement_method.is_none() {
+        ev.measurement_method = Some(match ev.mechanism.as_str() {
+            "compression" => MeasurementMethod::DirectCount,
+            "routing" => MeasurementMethod::BaselineEstimate,
+            "caching" => MeasurementMethod::ProviderReconciled,
+            _ => MeasurementMethod::Unknown,
+        });
+    }
+    if ev.evidence_class.is_none() {
+        ev.evidence_class = Some(match ev.mechanism.as_str() {
+            "compression" => EvidenceClass::Measured,
+            "routing" => EvidenceClass::Approximated,
+            "caching" => EvidenceClass::Measured,
+            _ => EvidenceClass::Unclassified,
+        });
+    }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -553,6 +569,53 @@ mod tests {
         let v = verify(&p);
         assert!(v.valid, "freshly built chain must verify");
         assert_eq!(v.total, 2);
+
+        let _ = fs::remove_file(&p);
+    }
+
+    #[test]
+    fn append_fills_p5_evidence_fields_from_mechanism() {
+        let p = temp_path("evidence-fallback");
+        let cases = [
+            (
+                "compression",
+                MeasurementMethod::DirectCount,
+                EvidenceClass::Measured,
+            ),
+            (
+                "routing",
+                MeasurementMethod::BaselineEstimate,
+                EvidenceClass::Approximated,
+            ),
+            (
+                "caching",
+                MeasurementMethod::ProviderReconciled,
+                EvidenceClass::Measured,
+            ),
+            (
+                "other",
+                MeasurementMethod::Unknown,
+                EvidenceClass::Unclassified,
+            ),
+        ];
+
+        for (mechanism, method, evidence) in cases {
+            let mut event = sample(1);
+            event.mechanism = mechanism.to_string();
+            let appended = append(&p, event).unwrap();
+            assert_eq!(appended.measurement_method, Some(method));
+            assert_eq!(appended.evidence_class, Some(evidence));
+        }
+
+        let mut explicit = sample(1);
+        explicit.measurement_method = Some(MeasurementMethod::Holdout);
+        explicit.evidence_class = Some(EvidenceClass::Statistical);
+        let appended = append(&p, explicit).unwrap();
+        assert_eq!(
+            appended.measurement_method,
+            Some(MeasurementMethod::Holdout)
+        );
+        assert_eq!(appended.evidence_class, Some(EvidenceClass::Statistical));
 
         let _ = fs::remove_file(&p);
     }
