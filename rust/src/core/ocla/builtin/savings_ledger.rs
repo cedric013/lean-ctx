@@ -4,8 +4,8 @@
 //! events to OclaBus. Evidence references are content-addressed (blake3 of
 //! the evidence payload), ensuring deterministic, replay-safe identifiers.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::core::ocla::traits::{OclaService, SavingsLedger};
 use crate::core::ocla::types::{OclaCapability, OclaCapabilityKind, OclaResult, SavingsEvidence};

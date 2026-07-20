@@ -1024,7 +1024,6 @@ impl Config {
         }
     }
 
-
     /// Provider prompt-cache hit rate for net-of-injection (#1104).
     /// Returns the configured value or None (caller picks the default).
     #[must_use]

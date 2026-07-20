@@ -27,6 +27,7 @@ mod ccr_robustness_tests;
 pub mod chatgpt;
 pub mod chatgpt_cookies;
 pub mod chatgpt_ws;
+mod codec;
 pub mod cold_prefix;
 pub mod compress;
 pub mod compress_api;

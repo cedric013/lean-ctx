@@ -5,11 +5,10 @@ use axum::{
     response::Response,
 };
 
-use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use std::borrow::Cow;
-use std::io::{Read, Write};
 
 use super::ProxyState;
+use super::codec::{decode_gzip_bounded, decode_zstd_bounded, encode_gzip, encode_zstd};
 
 /// Header set by Headroom when it has already compressed the request.
 const HEADROOM_COMPRESSED_HEADER: &str = "x-headroom-compressed";
@@ -664,55 +663,6 @@ fn request_body_encoding(parts: &Parts) -> RequestBodyEncoding {
     }
 }
 
-fn decode_zstd_bounded(data: &[u8], max_bytes: usize) -> Result<Vec<u8>, StatusCode> {
-    let decoder = zstd::Decoder::new(data).map_err(|e| {
-        tracing::warn!("lean-ctx proxy: invalid zstd request body: {e}");
-        StatusCode::BAD_REQUEST
-    })?;
-    read_bounded(decoder, max_bytes).inspect_err(|e| {
-        tracing::warn!("lean-ctx proxy: zstd request decode failed: {e}");
-    })
-}
-
-fn encode_zstd(data: &[u8]) -> Result<Vec<u8>, StatusCode> {
-    zstd::encode_all(data, 3).map_err(|e| {
-        tracing::error!("lean-ctx proxy: zstd request encode failed: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })
-}
-
-fn decode_gzip_bounded(data: &[u8], max_bytes: usize) -> Result<Vec<u8>, StatusCode> {
-    read_bounded(GzDecoder::new(data), max_bytes).inspect_err(|e| {
-        tracing::warn!("lean-ctx proxy: gzip request decode failed: {e}");
-    })
-}
-
-fn encode_gzip(data: &[u8]) -> Result<Vec<u8>, StatusCode> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(data).map_err(|e| {
-        tracing::error!("lean-ctx proxy: gzip request encode failed: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-    encoder.finish().map_err(|e| {
-        tracing::error!("lean-ctx proxy: gzip request encode failed: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })
-}
-
-fn read_bounded<R: Read>(reader: R, max_bytes: usize) -> Result<Vec<u8>, StatusCode> {
-    let mut limited = reader.take(max_bytes as u64 + 1);
-    let mut out = Vec::new();
-    limited
-        .read_to_end(&mut out)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-    if out.len() > max_bytes {
-        return Err(StatusCode::PAYLOAD_TOO_LARGE);
-    }
-    Ok(out)
-}
-
-/// Statuses safe to retry once (enterprise#51): the upstream explicitly did
-/// NOT process the request (429 rejected, 502/503 gateway/unavailable). 500 and
 /// 504 are excluded — the model may have already consumed/billed the call.
 fn is_retryable_status(status: reqwest::StatusCode) -> bool {
     matches!(status.as_u16(), 429 | 502 | 503)

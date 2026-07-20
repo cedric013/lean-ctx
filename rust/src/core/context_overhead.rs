@@ -244,7 +244,10 @@ mod tests {
         // With 75% cache: effective = 1000 * 0.25 = 250/turn.
         // 8 turns: total = 2000, net = 10000 - 2000 = 8000.
         let (total, net) = net_of_injection(10000, 3400, 8);
-        assert!(total < 3000, "cache + baseline must reduce tax, got {total}");
+        assert!(
+            total < 3000,
+            "cache + baseline must reduce tax, got {total}"
+        );
         assert!(net > 7000, "net must reflect reduced tax, got {net}");
     }
 

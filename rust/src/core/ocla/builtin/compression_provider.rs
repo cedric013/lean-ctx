@@ -316,7 +316,10 @@ mod tests {
             .unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("resolve") || msg.contains("No such file") || msg.contains("not found"),
+            msg.contains("resolve")
+                || msg.contains("No such file")
+                || msg.contains("not found")
+                || msg.contains("cannot find"),
             "unexpected error: {msg}"
         );
     }

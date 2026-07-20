@@ -169,7 +169,7 @@ fn open_content_file(root: &Path, relative: &str) -> io::Result<fs::File> {
         // SAFETY: openat is called with a valid parent fd and a NUL-terminated CString.
         // SAFETY: open is called with a NUL-terminated literal path.
         // SAFETY: openat with valid parent fd and NUL-terminated CString for the final component.
-    let fd = unsafe {
+        let fd = unsafe {
             libc::openat(
                 parent,
                 name.as_ptr(),
@@ -189,7 +189,7 @@ fn open_content_file(root: &Path, relative: &str) -> io::Result<fs::File> {
         // SAFETY: openat is called with a valid parent fd and a NUL-terminated CString.
         // SAFETY: open is called with a NUL-terminated literal path.
         // SAFETY: openat with valid parent fd and NUL-terminated CString for the final component.
-    let fd = unsafe {
+        let fd = unsafe {
             libc::open(
                 root_name.as_ptr(),
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
@@ -308,7 +308,11 @@ mod tests {
     fn resolve_rejects_traversal() {
         let (_dir, port) = make_port();
         let err = port.resolve("file:../etc/passwd").unwrap_err();
-        assert!(err.to_string().contains("jail"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("jail") || msg.contains("invalid relative path"),
+            "expected traversal rejection, got: {msg}"
+        );
     }
 
     #[test]

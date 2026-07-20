@@ -48,10 +48,14 @@ impl EfficiencyAnalyzer for BuiltinEfficiencyAnalyzer {
         } else {
             0
         };
-        
+
         #[allow(clippy::cast_possible_truncation)]
-        let cache_hit_rate = sample.cache_hits.saturating_mul(1000)
-            .checked_div(sample.cache_reads).unwrap_or(0).min(1000) as u16;
+        let cache_hit_rate = sample
+            .cache_hits
+            .saturating_mul(1000)
+            .checked_div(sample.cache_reads)
+            .unwrap_or(0)
+            .min(1000) as u16;
 
         Ok(EfficiencyAnalysis {
             etpao_milli: etpao,
