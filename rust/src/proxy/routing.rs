@@ -26,7 +26,6 @@
 use crate::core::config::{
     ResolvedProvider, RoutingRules, Upstreams, WireShape, parse_route_target,
 };
-use crate::core::intent_engine::{classify, route_intent};
 
 /// What the router decided for one request. Applied by the forward path:
 /// `model` already swapped in the body by [`route_request`]; the caller
@@ -89,11 +88,13 @@ pub fn route_request(
         return None;
     }
 
-    let target = rules
-        .aliases
-        .get(&requested)
-        .cloned()
-        .or_else(|| tier_target(parsed, request_shape, rules))?;
+    let target = rules.aliases.get(&requested).cloned().or_else(|| {
+        let decision = super::model_router::route(parsed, rules)?;
+        Some(match decision.routed_provider {
+            Some(provider) => format!("{provider}:{}", decision.routed_model),
+            None => decision.routed_model,
+        })
+    })?;
     let (provider, new_model) = parse_route_target(&target)?;
     let new_model = new_model.to_string();
 
@@ -217,28 +218,6 @@ fn can_translate(
     _local: Option<bool>,
 ) -> bool {
     false
-}
-
-/// Intent-tier target: classify the last user message, look the tier up in the
-/// `tiers` table. Any gap (no tiers, no extractable query, tier unset/empty)
-/// returns `None`.
-fn tier_target(
-    parsed: &serde_json::Value,
-    shape: WireShape,
-    rules: &RoutingRules,
-) -> Option<String> {
-    if rules.tiers.is_empty() {
-        return None;
-    }
-    let query = extract_user_query(parsed, shape)?;
-    let classification = classify(&query);
-    let tier = route_intent(&query, &classification).model_tier;
-    rules
-        .tiers
-        .get(tier.as_str())
-        .map(|t| t.trim())
-        .filter(|t| !t.is_empty())
-        .map(str::to_string)
 }
 
 /// Extracts the newest user-authored text from a request body — the router's
