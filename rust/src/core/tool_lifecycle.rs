@@ -201,6 +201,7 @@ fn record_read_learning(
         .ok()
         .and_then(|bt| bt.bounce_rate_for_extension(path))
         .is_none_or(|rate| rate < 0.30);
+    let saved = original_tokens.saturating_sub(output_tokens);
 
     // Route the realized read through the OCLA efficiency capability so the
     // production CLI path records the same ETPAO semantics as the contract.
@@ -210,6 +211,14 @@ fn record_read_learning(
         resolved_mode,
         original_tokens,
         output_tokens,
+        task_completed,
+        project_root,
+    );
+    record_outcome(
+        path,
+        resolved_mode,
+        original_tokens,
+        saved,
         task_completed,
         project_root,
     );
@@ -238,7 +247,6 @@ fn record_read_learning(
     // Compression feedback: the per-language outcome the adaptive thresholds and
     // bounce-aware tuning learn from. `total_turns`/`total_reads` are 1 — the
     // accurate count for this single-shot invocation, not a placeholder.
-    let saved = original_tokens.saturating_sub(output_tokens);
     let ext = std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -270,6 +278,34 @@ fn record_read_learning(
     // marker starts at 0), so the single shadow read persists before exit.
     crate::core::anomaly::record_metric("tokens_per_call", output_tokens as f64);
     crate::core::anomaly::save_debounced();
+}
+
+fn record_outcome(
+    path: &str,
+    resolved_mode: &str,
+    original_tokens: usize,
+    saved: usize,
+    task_completed: bool,
+    project_root: &str,
+) {
+    let context = crate::core::ocla::OclaRequestContext {
+        request_id: format!("cli-read:{path}:{resolved_mode}"),
+        session_id: SessionState::load_latest()
+            .map_or_else(|| "cli-read".to_string(), |session| session.id),
+        agent_id: "lean-ctx".to_string(),
+        content_ref: format!("file:{path}"),
+        tenant_id: None,
+    };
+    let outcome = crate::core::ocla::Outcome {
+        context,
+        accepted: Some(task_completed),
+        quality_score_milli: (original_tokens > 0)
+            .then(|| ((saved as u64 * 1000) / original_tokens as u64).min(1000) as u16),
+        outcome_ref: Some(format!("read:{project_root}:{resolved_mode}")),
+    };
+    let _ = crate::core::ocla::OclaRegistry::global()
+        .outcome_tracker
+        .record_outcome(outcome);
 }
 
 /// Compute read density through the production OCLA efficiency capability.
@@ -702,7 +738,8 @@ fn project_ocla_savings(path: &str, original_tokens: u64, output_tokens: u64) {
 
     let context = OclaRequestContext {
         request_id: format!("cli-read-{}", path.len()),
-        session_id: SessionState::load_latest().map_or_else(|| "cli-read".to_string(), |session| session.id),
+        session_id: SessionState::load_latest()
+            .map_or_else(|| "cli-read".to_string(), |session| session.id),
         agent_id: "lean-ctx".to_string(),
         content_ref: format!("file:{path}"),
         tenant_id: None,

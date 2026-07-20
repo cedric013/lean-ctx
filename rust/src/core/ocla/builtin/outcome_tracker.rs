@@ -10,7 +10,7 @@ use crate::core::ocla::traits::{OclaService, OutcomeTracker};
 use crate::core::ocla::types::{OclaCapability, OclaCapabilityKind, OclaResult, Outcome};
 use crate::core::ocla_bus::{self, OclaEvent};
 
-const MAX_OUTCOMES: usize = 256;
+const MAX_OUTCOMES: usize = 500;
 
 pub struct BuiltinOutcomeTracker {
     outcomes: Mutex<VecDeque<Outcome>>,
@@ -104,9 +104,46 @@ mod tests {
     #[test]
     fn bounded_capacity() {
         let tracker = BuiltinOutcomeTracker::new();
-        for _ in 0..300 {
-            tracker.record_outcome(outcome(true)).unwrap();
+        for index in 0..=MAX_OUTCOMES {
+            let mut item = outcome(true);
+            item.context.request_id = index.to_string();
+            tracker.record_outcome(item).unwrap();
         }
         assert_eq!(tracker.recent(500).len(), MAX_OUTCOMES);
+        assert_eq!(tracker.recent(MAX_OUTCOMES)[0].context.request_id, "1");
+        assert_eq!(
+            tracker
+                .recent(MAX_OUTCOMES)
+                .last()
+                .unwrap()
+                .context
+                .request_id,
+            MAX_OUTCOMES.to_string()
+        );
+    }
+
+    #[test]
+    fn concurrent_record_and_recent_are_panic_free() {
+        let tracker = std::sync::Arc::new(BuiltinOutcomeTracker::new());
+        let mut workers = Vec::new();
+
+        for worker in 0..8 {
+            let tracker = std::sync::Arc::clone(&tracker);
+            workers.push(std::thread::spawn(move || {
+                for index in 0..100 {
+                    tracker
+                        .record_outcome(outcome((worker + index) % 2 == 0))
+                        .unwrap();
+                    let recent = tracker.recent(32);
+                    assert!(recent.len() <= 32);
+                }
+            }));
+        }
+
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        assert_eq!(tracker.recent(MAX_OUTCOMES).len(), MAX_OUTCOMES);
     }
 }
