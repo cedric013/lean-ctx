@@ -40,7 +40,7 @@ impl Config {
             }
         }
 
-        // Declarative merge helpers (#870): every field below follows one of a
+        // Declarative merge helpers (#1080): every field below follows one of a
         // handful of shapes (opt-in bool, opt-out bool, scalar-if-not-default,
         // extend-list, replace-list, override-if-Some). Spelling each out by hand
         // made `merge_local` an 800%-over-budget, 96-cognitive-complexity function
