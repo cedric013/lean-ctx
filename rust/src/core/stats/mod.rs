@@ -120,11 +120,14 @@ pub fn flush_if_due() {
 
 /// Adjust saved tokens after post-processing (terse, hints) changed the output size.
 /// Positive delta = savings were over-reported, negative = under-reported.
+///
+/// Persist immediately: this adjustment follows a durable `record()` and must not
+/// be lost when a short-lived MCP process exits before the periodic CEP flush.
 pub fn adjust_savings(command: &str, over_report_delta: i64) {
     let mut guard = STATS_BUFFER
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some((store, _, _)) = guard.as_mut() else {
+    let Some((store, baseline, last_flush)) = guard.as_mut() else {
         return;
     };
     if over_report_delta > 0 {
@@ -140,6 +143,10 @@ pub fn adjust_savings(command: &str, over_report_delta: i64) {
             cmd.output_tokens = cmd.output_tokens.saturating_sub(adj);
         }
     }
+    let merged = io::merge_and_save(store, baseline);
+    *store = merged.clone();
+    *baseline = merged;
+    *last_flush = Instant::now();
 }
 
 pub fn record(command: &str, input_tokens: usize, output_tokens: usize) {
@@ -154,7 +161,7 @@ pub fn record(command: &str, input_tokens: usize, output_tokens: usize) {
         return;
     };
 
-    let is_first_command = store.total_commands == baseline.total_commands;
+    // Tool-call accounting is durable per event, matching the savings ledger.
     let now = chrono::Local::now();
     let today = now.format("%Y-%m-%d").to_string();
     let timestamp = now.to_rfc3339();
@@ -210,14 +217,13 @@ pub fn record(command: &str, input_tokens: usize, output_tokens: usize) {
             .drain(..store.daily.len() - MAX_DAILY_HISTORY_DAYS);
     }
 
-    if is_first_command {
-        let merged = io::merge_and_save(store, baseline);
-        *store = merged.clone();
-        *baseline = merged;
-        *last_flush = Instant::now();
-    } else {
-        maybe_flush(store, baseline, last_flush);
-    }
+    // MCP stdio servers are routinely terminated without a graceful shutdown.
+    // Delaying this write made the append-only ledger survive while aggregate
+    // stats disappeared, so persist every completed accounting event.
+    let merged = io::merge_and_save(store, baseline);
+    *store = merged.clone();
+    *baseline = merged;
+    *last_flush = Instant::now();
 }
 
 pub fn reset_cep() {

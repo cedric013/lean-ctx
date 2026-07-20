@@ -371,10 +371,7 @@ class CockpitRoi extends HTMLElement {
     );
   }
 
-  /**
-   * "Why is this number smaller than Home?" — the two surfaces count
-   * differently on purpose (GL #479). Static copy, no user data involved.
-   */
+  /** Explain why Home and ROI are independent accounting surfaces. */
   _renderMethodology() {
     return (
       '<div class="card" style="margin-bottom:16px">' +
@@ -383,13 +380,12 @@ class CockpitRoi extends HTMLElement {
       'Only <b>measured</b> compression: raw bytes that actually entered a tool vs. what was sent. ' +
       'No counterfactual multipliers. Append-only, hash-chained, signable.</span></div>' +
       '<div class="sr"><span class="sl">Home (estimated)</span><span class="sv">' +
-      'All-time stats including modelled baselines: search assumes a native grep costs ' +
-      '<b>2.5\u00d7</b> the raw matched output (refinement runs, wider context), and a cache hit ' +
-      'counts the full original as saved (the re-read counterfactual).</span></div>' +
-      '<div class="sr"><span class="sl">Why smaller here</span><span class="sv">' +
-      'The ledger starts later than the all-time stats, skips zero-saving calls and never ' +
-      'applies estimate factors \u2014 so the verified total is the conservative floor, ' +
-      'not a contradiction.</span></div>' +
+      'Aggregate tool stats, including modelled baselines: search assumes a native grep costs ' +
+      '<b>2.5\u00d7</b> the raw matched output, and a cache hit counts the full original as saved.' +
+      '</span></div>' +
+      '<div class="sr"><span class="sl">Why totals differ</span><span class="sv">' +
+      'They use independent stores, start dates, event filters and baselines. Either total may be ' +
+      'larger; compare each number within its stated scope.</span></div>' +
       '</div>'
     );
   }
@@ -413,9 +409,7 @@ class CockpitRoi extends HTMLElement {
     var energyWh = F.ewh ? F.ewh(roi.net_saved_tokens) : 0;
     var energy = F.fe ? F.fe(energyWh) : '\u2014';
 
-    // The signed ledger starts later than the all-time stats on Home, so the
-    // totals legitimately differ. Say so prominently, or the numbers look
-    // contradictory next to Home's estimated all-time figures.
+    // The two totals have independent stores, periods and accounting rules.
     var trend = this._data.trend || [];
     var since = trend.length && trend[0] && trend[0][0] ? String(trend[0][0]) : null;
 
@@ -424,12 +418,10 @@ class CockpitRoi extends HTMLElement {
       '<span class="tag tg">verified</span>' +
       '<span>These numbers come from the <b>signed ledger</b>' +
       (since ? ' (recording since <b>' + esc(since) + '</b>)' : '') +
-      ' \u2014 it only counts <b>measured</b> compression: actual tokens observed ' +
-      'before vs. after, per event, hash-chained. The totals on ' +
-      '<a href="#overview" style="color:var(--accent)">Home</a> are an <b>estimate</b> ' +
-      'of what agents would have loaded without lean-ctx \u2014 they include the full ' +
-      'history and a modeled baseline for search results. Estimated is the bigger ' +
-      'picture; this page is the auditable floor.</span>' +
+      ' and count <b>measured</b> compression per hash-chained event. The totals on ' +
+      '<a href="#overview" style="color:var(--accent)">Home</a> come from aggregate ' +
+      'tool stats and may use modeled baselines. These are independent accounting ' +
+      'surfaces, so either total may be larger.</span>' +
       '</div>';
 
     return (

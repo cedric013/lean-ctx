@@ -371,9 +371,9 @@ class CockpitOverview extends HTMLElement {
       '<p class="hs cko-bridge" id="cko-verifiedBridge" role="link" tabindex="0" ' +
       'title="Open ROI & Plan" style="cursor:pointer;margin-top:6px">' +
       '<span class="tag tg">verified</span> ' +
-      'of which <b>' + esc(ff(roi.net_saved_tokens)) + '</b> tokens \u00b7 <b>' +
-      esc(fu(roi.saved_usd)) + '</b> are signed in the local ledger' +
-      (since ? ' (since ' + esc(since) + ')' : '') +
+      '<b>' + esc(ff(roi.net_saved_tokens)) + '</b> tokens \u00b7 <b>' +
+      esc(fu(roi.saved_usd)) + '</b> in the independent local ledger' +
+      (since ? ' (recording since ' + esc(since) + ')' : '') +
       ' <span class="hc-health-go">ROI &amp; Plan \u2192</span></p>'
     );
   }
