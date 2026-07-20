@@ -2,7 +2,7 @@ use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
 use crate::core::a2a::task::TaskStore;
 use crate::core::agents::{AgentDiary, AgentRegistry, AgentStatus, DiaryEntryType};
 use crate::core::evidence_ledger::EvidenceLedgerV1;
-use crate::core::ocla::builtin::agent_gateway::BuiltinAgentGateway;
+use crate::core::ocla::registry::OclaRegistry;
 
 #[allow(clippy::too_many_arguments)]
 pub fn handle(
@@ -81,7 +81,7 @@ pub fn handle(
             if msg_privacy == PrivacyLevel::Private && to_agent.is_none() {
                 return "Error: private messages require to_agent".to_string();
             }
-            match BuiltinAgentGateway::new().route_message(
+            match OclaRegistry::global().agent_gateway.route_message(
                 from,
                 to_agent,
                 cat,

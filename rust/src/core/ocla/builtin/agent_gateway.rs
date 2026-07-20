@@ -92,6 +92,21 @@ impl AgentGateway for BuiltinAgentGateway {
 
         Ok(envelope)
     }
+
+    fn route_message(
+        &self,
+        from: &str,
+        to: Option<&str>,
+        category: &str,
+        message: &str,
+        privacy: PrivacyLevel,
+        priority: MessagePriority,
+        ttl_hours: Option<u64>,
+    ) -> OclaResult<String> {
+        BuiltinAgentGateway::route_message(
+            self, from, to, category, message, privacy, priority, ttl_hours,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -169,5 +184,25 @@ mod tests {
         );
 
         assert_eq!(registry.read_unread("agent-b").len(), 1);
+    }
+
+    #[test]
+    fn registry_routes_message_through_agent_gateway() {
+        let _dir = crate::core::data_dir::isolated_data_dir();
+        let registry = crate::core::ocla::registry::OclaRegistry::with_builtins();
+        let message_id = registry
+            .agent_gateway
+            .route_message(
+                "agent-a",
+                Some("agent-b"),
+                "request",
+                "Please review",
+                PrivacyLevel::Private,
+                MessagePriority::High,
+                Some(2),
+            )
+            .unwrap();
+
+        assert!(!message_id.is_empty());
     }
 }

@@ -1,3 +1,5 @@
+use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
+
 use super::types::{
     AgentEnvelope, CompressionRequest, CompressionResult, ConfigProposal, ConfigTuningRequest,
     ConnectorJob, EfficiencyAnalysis, EfficiencySample, ExperimentRequest, ExperimentResult,
@@ -68,6 +70,16 @@ pub trait ConnectorScheduler: OclaService {
 
 pub trait AgentGateway: OclaService {
     fn relay_agent(&self, envelope: AgentEnvelope) -> OclaResult<AgentEnvelope>;
+    fn route_message(
+        &self,
+        from: &str,
+        to: Option<&str>,
+        category: &str,
+        message: &str,
+        privacy: PrivacyLevel,
+        priority: MessagePriority,
+        ttl_hours: Option<u64>,
+    ) -> OclaResult<String>;
 }
 
 #[cfg(test)]
