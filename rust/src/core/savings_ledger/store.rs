@@ -156,9 +156,8 @@ pub fn append(path: &Path, mut ev: SavingsEvent) -> std::io::Result<SavingsEvent
     }
     if ev.evidence_class.is_none() {
         ev.evidence_class = Some(match ev.mechanism.as_str() {
-            "compression" => EvidenceClass::Measured,
+            "compression" | "caching" => EvidenceClass::Measured,
             "routing" => EvidenceClass::Approximated,
-            "caching" => EvidenceClass::Measured,
             _ => EvidenceClass::Unclassified,
         });
     }
@@ -505,9 +504,7 @@ pub fn query_by_attribution_group(path: &Path, group: &str) -> Vec<SavingsEvent>
 pub fn summarize_by_mechanism(path: &Path) -> BTreeMap<String, MechanismSummary> {
     let mut summaries: BTreeMap<String, MechanismSummary> = BTreeMap::new();
     for event in load(path) {
-        let summary = summaries
-            .entry(event.mechanism)
-            .or_insert_with(Default::default);
+        let summary = summaries.entry(event.mechanism).or_default();
         summary.count += 1;
         summary.saved_tokens = summary.saved_tokens.saturating_add(event.saved_tokens);
         summary.saved_usd += event.saved_usd;
