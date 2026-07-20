@@ -115,6 +115,11 @@ fn tokenizer() -> &'static str {
 /// Chain hashes are computed by `store::append`.
 fn new_event(tool: &str) -> SavingsEvent {
     let (model_id, price_per_m) = model_and_price();
+    let evidence_class = if tool == "proxy_route" {
+        event::EvidenceClass::Approximated
+    } else {
+        event::EvidenceClass::Measured
+    };
     SavingsEvent {
         ts: chrono::Utc::now().to_rfc3339(),
         tool: tool.to_string(),
@@ -141,8 +146,8 @@ fn new_event(tool: &str) -> SavingsEvent {
         response_delivered_tokens: None,
         agent_chain_id: None,
         chain_depth: None,
-        measurement_method: None,
-        evidence_class: None,
+        measurement_method: Some(event::MeasurementMethod::DirectCount),
+        evidence_class: Some(evidence_class),
         confidence: None,
         quality_signal: None,
         attribution_group: None,
@@ -184,6 +189,7 @@ pub fn record_tool_event(tool: &str, baseline_tokens: usize, actual_tokens: usiz
     event.actual_tokens = actual_tokens as u64;
     event.saved_tokens = saved as u64;
     event.saved_usd = saved as f64 / 1_000_000.0 * event.unit_price_per_m_usd;
+    event.confidence = Some(1.0);
     let _ = store::append(&path, event);
 }
 
@@ -219,8 +225,11 @@ pub fn record_routing_event(requested_model: &str, serving_model: &str, input_to
     let quote = pricing.quote(Some(serving_model));
     event.model_id = quote.model_key;
     event.unit_price_per_m_usd = quote.cost.input_per_m;
+    event.model_original = Some(requested_model.to_string());
+    event.model_routed = Some(serving_model.to_string());
     event.baseline_tokens = input_tokens;
     event.actual_tokens = input_tokens;
+    event.routing_savings = Some(event.baseline_tokens.saturating_sub(event.actual_tokens));
     // saved_tokens stays 0: routing saves dollars at equal tokens. Token
     // savings remain the compression mechanism's dimension.
     event.saved_usd = saved_usd;
@@ -392,6 +401,12 @@ mod tests {
         assert_eq!(ev.baseline_tokens, 5000, "raw baseline, no estimate factor");
         assert_eq!(ev.actual_tokens, 800);
         assert_eq!(ev.saved_tokens, 4200);
+        assert_eq!(
+            ev.measurement_method,
+            Some(event::MeasurementMethod::DirectCount)
+        );
+        assert_eq!(ev.evidence_class, Some(event::EvidenceClass::Measured));
+        assert_eq!(ev.confidence, Some(1.0));
     }
 
     /// enterprise#19: a gateway route (requested ≠ serving) lands as a
@@ -424,6 +439,14 @@ mod tests {
         assert_eq!(ev.tool, "proxy_route");
         assert_eq!(ev.mechanism, MECHANISM_ROUTING);
         assert_eq!(ev.model_id, "phi-4", "denominated in the serving model");
+        assert_eq!(ev.model_original.as_deref(), Some("claude-opus-4.5"));
+        assert_eq!(ev.model_routed.as_deref(), Some("phi-4"));
+        assert_eq!(ev.routing_savings, Some(0));
+        assert_eq!(
+            ev.measurement_method,
+            Some(event::MeasurementMethod::DirectCount)
+        );
+        assert_eq!(ev.evidence_class, Some(event::EvidenceClass::Approximated));
         assert_eq!(ev.saved_tokens, 0, "routing saves dollars, not tokens");
         // 10k tokens × (5.00 − 0.125)/MTok = $0.04875.
         assert!((ev.saved_usd - 0.048_75).abs() < 1e-9);
