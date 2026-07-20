@@ -739,13 +739,9 @@ fn handle_exec(args: &[String], rest: &[String]) -> ! {
         passthrough(&command);
     }
     if raw {
-        // SAFETY: CLI dispatch is single-threaded; this runs before any worker
-        // threads start (the process hands off to shell::exec below).
-        unsafe { std::env::set_var("LEAN_CTX_RAW", "1") };
+        core::runtime_flags::enable_raw();
     } else {
-        // SAFETY: CLI dispatch is single-threaded; this runs before any worker
-        // threads start (the process hands off to shell::exec below).
-        unsafe { std::env::set_var("LEAN_CTX_COMPRESS", "1") };
+        core::runtime_flags::enable_compress();
     }
     let code = shell::exec(&command);
     core::tool_lifecycle::flush_all();
@@ -879,9 +875,7 @@ fn handle_raw(args: &[String], rest: &[String]) -> ! {
     } else {
         shell::join_command(&args[2..])
     };
-    // SAFETY: CLI dispatch is single-threaded; this runs before the process
-    // hands off to shell::exec and exits below.
-    unsafe { std::env::set_var("LEAN_CTX_RAW", "1") };
+    core::runtime_flags::enable_raw();
     let code = shell::exec(&command);
     std::process::exit(code);
 }
