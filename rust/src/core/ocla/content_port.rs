@@ -9,7 +9,7 @@
 
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::core::ocla::OclaError;
@@ -56,8 +56,17 @@ impl CompressionContentPort {
             .strip_prefix("file:")
             .ok_or_else(|| OclaError::InvalidRequest("content_ref must use file: scheme".into()))?;
 
+        if Path::new(rel_path)
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        {
+            return Err(OclaError::InvalidRequest(
+                "path jail: parent directory traversal is not allowed".into(),
+            ));
+        }
+
         // Validate containment via PathJail (traversal safety)
-        let _jailed = pathjail::jail_path(Path::new(rel_path), &self.project_root)
+        pathjail::jail_path(Path::new(rel_path), &self.project_root)
             .map_err(|e| OclaError::InvalidRequest(format!("path jail: {e}")))?;
 
         // Canonicalize root to handle /tmp → /private/tmp on macOS
