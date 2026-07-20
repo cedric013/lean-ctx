@@ -13,11 +13,13 @@ use crate::core::eval_ab::footprint::{
 };
 use crate::core::eval_ab::model::{ModelRunner, OpenAiRunner, RecordedRunner, RecordingRunner};
 use crate::core::eval_ab::report::ReportConfig;
-use crate::core::eval_ab::routing_eval::{RoutingEvalConfig, run_routing_eval};
 use crate::core::eval_ab::suite::EvalSuite;
 use crate::core::eval_ab::testbench::lockfile::TestbenchLock;
 use crate::core::eval_ab::testbench::{self, TestbenchConfig, TestbenchReport, findings};
 use crate::core::eval_ab::{AbRunConfig, run_ab};
+use crate::core::ocla::registry::OclaRegistry;
+use crate::core::ocla::traits::ExperimentRunner;
+use crate::core::ocla::types::{ExperimentRequest, OclaRequestContext};
 
 /// Entry point dispatched from `cli::dispatch`.
 pub fn cmd_eval(args: &[String]) {
@@ -220,36 +222,30 @@ fn cmd_routing(args: &[String]) {
         std::process::exit(2);
     };
     let suite_path = PathBuf::from(suite_path);
-    let suite = match EvalSuite::load(&suite_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("eval routing: {e:#}");
-            std::process::exit(1);
-        }
-    };
+    if let Err(e) = EvalSuite::load(&suite_path) {
+        eprintln!("eval routing: {e:#}");
+        std::process::exit(1);
+    }
     let suite_name = suite_path
         .file_name()
         .map_or_else(|| "suite".to_string(), |s| s.to_string_lossy().into_owned());
 
-    let config = crate::core::config::Config::load();
-    let requested_model = flag_value(args, "--requested")
-        .map(str::to_string)
-        .or_else(|| config.proxy.baseline.reference_model.clone());
-    let Some(requested_model) = requested_model else {
-        eprintln!(
-            "eval routing: no requested model — pass --requested <model> or set \
-             [proxy.baseline].reference_model in config.toml"
-        );
-        std::process::exit(2);
+    let request = ExperimentRequest {
+        context: OclaRequestContext {
+            request_id: format!("eval-routing:{suite_name}"),
+            session_id: "cli:eval-routing".into(),
+            agent_id: crate::core::agent_identity::current_agent_id().to_string(),
+            content_ref: suite_path.to_string_lossy().into_owned(),
+            tenant_id: None,
+        },
+        experiment_ref: suite_path.to_string_lossy().into_owned(),
+        cohort_ref: "cohort:routing-eval".into(),
     };
-
-    let cfg = RoutingEvalConfig {
-        requested_model,
-        rules: config.proxy.routing.clone(),
-    };
-    let pricing = crate::core::gain::model_pricing::ModelPricing::load();
-    let report = match run_routing_eval(&suite, &suite_name, &pricing, &cfg) {
-        Ok(r) => r,
+    let result = match OclaRegistry::global()
+        .experiment_runner
+        .run_experiment(request)
+    {
+        Ok(result) => result,
         Err(e) => {
             eprintln!("eval routing: {e:#}");
             std::process::exit(1);
@@ -257,18 +253,16 @@ fn cmd_routing(args: &[String]) {
     };
 
     if has_flag(args, "--json") {
-        println!("{}", report.to_json());
-    } else {
-        println!("{}", report.render());
-    }
-    println!("determinism digest: {}", report.determinism_digest());
-
-    if has_flag(args, "--gate") && !report.gate_passes() {
-        eprintln!(
-            "\nrouting gate FAILED: {} premium task(s) downgraded",
-            report.premium_downgrades
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).expect("experiment result serializes")
         );
-        std::process::exit(1);
+    } else {
+        println!("routing experiment: {}", result.experiment_ref);
+        println!("outcome ref:         {}", result.outcome_ref);
+        if let Some(rollback_ref) = result.rollback_ref {
+            println!("rollback ref:        {rollback_ref}");
+        }
     }
 }
 

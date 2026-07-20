@@ -92,4 +92,13 @@ mod tests {
         let result = runner.run_experiment(experiment("exp-b"));
         assert!(result.is_err());
     }
+
+    #[test]
+    fn registry_builtins_route_experiment_requests_to_runner() {
+        let registry = crate::core::ocla::registry::OclaRegistry::with_builtins();
+        let result = registry
+            .experiment_runner
+            .run_experiment(experiment("/definitely/missing-suite.ndjson"));
+        assert!(result.is_err());
+    }
 }
