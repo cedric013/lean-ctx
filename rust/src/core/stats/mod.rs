@@ -80,8 +80,9 @@ pub fn save(store: &StatsStore) {
 }
 
 fn maybe_flush(store: &mut StatsStore, baseline: &mut StatsStore, last_flush: &mut Instant) {
-    if last_flush.elapsed().as_secs() >= FLUSH_INTERVAL_SECS {
-        let merged = io::merge_and_save(store, baseline);
+    if last_flush.elapsed().as_secs() >= FLUSH_INTERVAL_SECS
+        && let Some(merged) = io::merge_and_save(store, baseline)
+    {
         *store = merged.clone();
         *baseline = merged;
         *last_flush = Instant::now();
@@ -92,8 +93,9 @@ pub fn flush() {
     let mut guard = STATS_BUFFER
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((ref mut store, ref mut baseline, ref mut last_flush)) = *guard {
-        let merged = io::merge_and_save(store, baseline);
+    if let Some((ref mut store, ref mut baseline, ref mut last_flush)) = *guard
+        && let Some(merged) = io::merge_and_save(store, baseline)
+    {
         *store = merged.clone();
         *baseline = merged;
         *last_flush = Instant::now();
@@ -143,10 +145,11 @@ pub fn adjust_savings(command: &str, over_report_delta: i64) {
             cmd.output_tokens = cmd.output_tokens.saturating_sub(adj);
         }
     }
-    let merged = io::merge_and_save(store, baseline);
-    *store = merged.clone();
-    *baseline = merged;
-    *last_flush = Instant::now();
+    if let Some(merged) = io::merge_and_save(store, baseline) {
+        *store = merged.clone();
+        *baseline = merged;
+        *last_flush = Instant::now();
+    }
 }
 
 pub fn record(command: &str, input_tokens: usize, output_tokens: usize) {
@@ -220,10 +223,11 @@ pub fn record(command: &str, input_tokens: usize, output_tokens: usize) {
     // MCP stdio servers are routinely terminated without a graceful shutdown.
     // Delaying this write made the append-only ledger survive while aggregate
     // stats disappeared, so persist every completed accounting event.
-    let merged = io::merge_and_save(store, baseline);
-    *store = merged.clone();
-    *baseline = merged;
-    *last_flush = Instant::now();
+    if let Some(merged) = io::merge_and_save(store, baseline) {
+        *store = merged.clone();
+        *baseline = merged;
+        *last_flush = Instant::now();
+    }
 }
 
 pub fn reset_cep() {
@@ -512,6 +516,23 @@ mod tests {
         assert_eq!(merged.total_commands, 35);
         assert_eq!(merged.total_input_tokens, 1100);
         assert_eq!(merged.total_output_tokens, 700);
+    }
+
+    #[test]
+    fn merge_and_save_keeps_delta_when_lock_is_busy() {
+        let dir = crate::core::data_dir::isolated_data_dir();
+        let baseline = make_store(10, 200, 100);
+        let current = make_store(11, 300, 120);
+        let lock_path = dir.path().join(".stats.lock");
+        std::fs::write(&lock_path, "busy").unwrap();
+
+        assert!(io::merge_and_save(&current, &baseline).is_none());
+
+        std::fs::remove_file(lock_path).unwrap();
+        let merged = io::merge_and_save(&current, &baseline).unwrap();
+        assert_eq!(merged.total_commands, 1);
+        assert_eq!(merged.total_input_tokens, 100);
+        assert_eq!(merged.total_output_tokens, 20);
     }
 
     #[test]

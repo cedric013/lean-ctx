@@ -85,20 +85,18 @@ pub(super) fn load_from_dir(dir: &std::path::Path) -> StatsStore {
     }
 }
 
-fn write_to_disk(store: &StatsStore) {
-    let Some(dir) = stats_dir() else { return };
+fn write_to_disk(store: &StatsStore) -> bool {
+    let Some(dir) = stats_dir() else { return false };
 
-    if !dir.exists() {
-        let _ = std::fs::create_dir_all(&dir);
+    if !dir.exists() && std::fs::create_dir_all(&dir).is_err() {
+        return false;
     }
 
     let path = dir.join("stats.json");
-    if let Ok(json) = serde_json::to_string(store) {
-        let tmp = dir.join(".stats.json.tmp");
-        if std::fs::write(&tmp, &json).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
-        }
-    }
+    let tmp = dir.join(".stats.json.tmp");
+    serde_json::to_string(store).is_ok_and(|json| {
+        std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, &path).is_ok()
+    })
 }
 
 pub(super) fn locked_write(store: &StatsStore) {
@@ -108,26 +106,17 @@ pub(super) fn locked_write(store: &StatsStore) {
     if _lock.is_none() {
         return;
     }
-    write_to_disk(store);
+    let _ = write_to_disk(store);
 }
 
-pub(super) fn merge_and_save(current: &StatsStore, baseline: &StatsStore) -> StatsStore {
-    let Some(dir) = stats_dir() else {
-        let disk = load_from_disk();
-        return apply_deltas(&disk, current, baseline);
-    };
-
+pub(super) fn merge_and_save(current: &StatsStore, baseline: &StatsStore) -> Option<StatsStore> {
+    let dir = stats_dir()?;
     let lock_path = dir.join(".stats.lock");
-    let _lock = acquire_file_lock(&lock_path);
+    let _lock = acquire_file_lock(&lock_path)?;
 
     let disk = load_from_disk();
     let merged = apply_deltas(&disk, current, baseline);
-
-    if _lock.is_some() {
-        write_to_disk(&merged);
-    }
-
-    merged
+    write_to_disk(&merged).then_some(merged)
 }
 
 struct FileLockGuard(PathBuf);
