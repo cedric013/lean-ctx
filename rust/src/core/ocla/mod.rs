@@ -11,6 +11,7 @@ pub mod traits;
 pub mod types;
 pub mod unified_ledger;
 pub mod wire;
+pub mod wire_stream;
 
 pub use registry::OclaRegistry;
 pub use traits::*;
