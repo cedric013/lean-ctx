@@ -57,6 +57,7 @@ impl OclaRegistry {
             (!ptr.is_null()).then(|| {
                 // Test registries are leaked until process exit and scoped to the
                 // calling thread, so this pointer remains valid for the call.
+                // SAFETY: The pointer references a leaked, thread-local registry.
                 unsafe { &*ptr }
             })
         }) {
@@ -111,10 +112,12 @@ mod tests {
         EfficiencyAnalyzer, ObservationHook, OclaService, OutcomeTracker, SavingsLedger, UsageSink,
     };
     use crate::core::ocla::types::{
-        EfficiencyAnalysis, EfficiencySample, Observation, OclaCapabilityKind,
-        OclaCapabilityStatus, OclaRequestContext, OclaResult, Outcome, SavingsEvidence,
-        UsageRecord,
+        AgentEnvelope, CompressionRequest, ConfigTuningRequest, ConnectorJob, EfficiencyAnalysis,
+        EfficiencySample, ExperimentRequest, IntentRequest, MetricPoint, ModelRouteRequest,
+        Observation, OclaCapabilityKind, OclaCapabilityStatus, OclaRequestContext, OclaResult,
+        Outcome, ResponseOptimizationRequest, SavingsEvidence, UsageRecord,
     };
+    use std::collections::BTreeMap;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -219,6 +222,178 @@ mod tests {
             reg.savings_ledger.capability().status,
             OclaCapabilityStatus::Available
         );
+    }
+
+    #[test]
+    fn global_registry_exposes_all_capabilities_as_available() {
+        let reg = OclaRegistry::global();
+        let capabilities = [
+            (
+                reg.observation_hook.capability(),
+                OclaCapabilityKind::ObservationHook,
+            ),
+            (reg.usage_sink.capability(), OclaCapabilityKind::UsageSink),
+            (
+                reg.metrics_exporter.capability(),
+                OclaCapabilityKind::MetricsExporter,
+            ),
+            (
+                reg.savings_ledger.capability(),
+                OclaCapabilityKind::SavingsLedger,
+            ),
+            (
+                reg.intent_classifier.capability(),
+                OclaCapabilityKind::IntentClassifier,
+            ),
+            (
+                reg.outcome_tracker.capability(),
+                OclaCapabilityKind::OutcomeTracker,
+            ),
+            (
+                reg.compression_provider.capability(),
+                OclaCapabilityKind::CompressionProvider,
+            ),
+            (
+                reg.response_optimizer.capability(),
+                OclaCapabilityKind::ResponseOptimizer,
+            ),
+            (
+                reg.model_router.capability(),
+                OclaCapabilityKind::ModelRouter,
+            ),
+            (
+                reg.efficiency_analyzer.capability(),
+                OclaCapabilityKind::EfficiencyAnalyzer,
+            ),
+            (
+                reg.config_tuner.capability(),
+                OclaCapabilityKind::ConfigTuner,
+            ),
+            (
+                reg.experiment_runner.capability(),
+                OclaCapabilityKind::ExperimentRunner,
+            ),
+            (
+                reg.connector_scheduler.capability(),
+                OclaCapabilityKind::ConnectorScheduler,
+            ),
+            (
+                reg.agent_gateway.capability(),
+                OclaCapabilityKind::AgentGateway,
+            ),
+        ];
+
+        assert_eq!(capabilities.len(), OclaCapabilityKind::ALL.len());
+        for (capability, expected_kind) in capabilities {
+            assert_eq!(capability.kind, expected_kind);
+            assert_eq!(capability.status, OclaCapabilityStatus::Available);
+        }
+    }
+
+    #[test]
+    fn global_registry_is_a_singleton() {
+        assert!(std::ptr::eq(OclaRegistry::global(), OclaRegistry::global()));
+    }
+
+    #[test]
+    fn every_builtin_main_method_can_be_called_without_panicking() {
+        let _dir = crate::core::data_dir::isolated_data_dir();
+        let reg = OclaRegistry::with_builtins();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = reg.observation_hook.observe(Observation {
+                context: context(),
+                name: "registry-smoke".into(),
+                attributes: BTreeMap::new(),
+            });
+            let _ = reg.usage_sink.record_usage(UsageRecord {
+                context: context(),
+                model: "test-model".into(),
+                input_tokens: 10,
+                output_tokens: 5,
+                provider_billed_tokens: 15,
+            });
+            let _ = reg.metrics_exporter.export_metrics(vec![MetricPoint {
+                context: context(),
+                name: "registry-smoke".into(),
+                value_milli: 1,
+                dimensions: BTreeMap::new(),
+            }]);
+            let _ = reg.savings_ledger.record_savings(SavingsEvidence {
+                context: context(),
+                original_tokens: 10,
+                delivered_tokens: 5,
+                quality_ref: None,
+                evidence_ref: "evidence:registry-smoke".into(),
+            });
+            let _ = reg.intent_classifier.classify_intent(IntentRequest {
+                context: context(),
+                candidate_intents: vec!["review".into()],
+            });
+            let _ = reg.outcome_tracker.record_outcome(Outcome {
+                context: context(),
+                accepted: Some(true),
+                quality_score_milli: Some(900),
+                outcome_ref: Some("outcome:registry-smoke".into()),
+            });
+            let _ = reg.compression_provider.compress(CompressionRequest {
+                context: context(),
+                source_ref: "mem:registry-smoke".into(),
+                source_tokens: 10,
+                target_tokens: 5,
+                quality_policy_ref: None,
+            });
+            let _ = reg
+                .response_optimizer
+                .optimize_response(ResponseOptimizationRequest {
+                    context: context(),
+                    response_ref: "response:registry-smoke".into(),
+                    original_tokens: 10,
+                    target_tokens: 5,
+                });
+            let _ = reg.model_router.route_model(ModelRouteRequest {
+                context: context(),
+                candidate_models: vec!["gpt-4o".into()],
+                maximum_cost_micros: None,
+                maximum_latency_ms: None,
+            });
+            let _ = reg
+                .efficiency_analyzer
+                .analyze_efficiency(EfficiencySample {
+                    context: context(),
+                    original_tokens: 10,
+                    delivered_tokens: 5,
+                    accepted: Some(true),
+                    cache_hits: 0,
+                    cache_reads: 0,
+                });
+            let _ = reg.config_tuner.propose_tuning(ConfigTuningRequest {
+                context: context(),
+                config_ref: "standard".into(),
+                objective_ref: "minimize_tokens".into(),
+            });
+            let _ = reg.experiment_runner.run_experiment(ExperimentRequest {
+                context: context(),
+                experiment_ref: "missing-suite.ndjson".into(),
+                cohort_ref: "cohort:registry-smoke".into(),
+            });
+            let _ = reg.connector_scheduler.schedule_connector(ConnectorJob {
+                context: context(),
+                connector_id: "registry-smoke".into(),
+                payload_ref: "payload:registry-smoke".into(),
+                deadline_ms: Some(1_000),
+            });
+            let _ = reg.agent_gateway.relay_agent(AgentEnvelope {
+                schema_version: 1,
+                relay_id: "agent-relay:registry-smoke".into(),
+                context: context(),
+                from_agent_id: "agent-1".into(),
+                to_agent_id: "agent-2".into(),
+                capsule_ref: "capsule:registry-smoke".into(),
+                budget_tokens: 100,
+            });
+        }));
+
+        assert!(result.is_ok(), "builtin method panicked");
     }
 
     #[test]
