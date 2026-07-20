@@ -166,7 +166,10 @@ fn open_content_file(root: &Path, relative: &str) -> io::Result<fs::File> {
     fn open_directory(parent: libc::c_int, name: &std::ffi::OsStr) -> io::Result<OwnedFd> {
         let name = CString::new(name.as_bytes())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
-        let fd = unsafe {
+        // SAFETY: openat is called with a valid parent fd and a NUL-terminated CString.
+        // SAFETY: open is called with a NUL-terminated literal path.
+        // SAFETY: openat with valid parent fd and NUL-terminated CString for the final component.
+    let fd = unsafe {
             libc::openat(
                 parent,
                 name.as_ptr(),
@@ -176,13 +179,17 @@ fn open_content_file(root: &Path, relative: &str) -> io::Result<fs::File> {
         if fd < 0 {
             Err(normalize_open_error(io::Error::last_os_error()))
         } else {
+            // SAFETY: fd is a valid, non-negative file descriptor just returned by openat.
             Ok(unsafe { OwnedFd::from_raw_fd(fd) })
         }
     }
 
     fn open_root(root: &Path) -> io::Result<OwnedFd> {
         let root_name = CString::new("/").expect("literal has no NUL");
-        let fd = unsafe {
+        // SAFETY: openat is called with a valid parent fd and a NUL-terminated CString.
+        // SAFETY: open is called with a NUL-terminated literal path.
+        // SAFETY: openat with valid parent fd and NUL-terminated CString for the final component.
+    let fd = unsafe {
             libc::open(
                 root_name.as_ptr(),
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
@@ -191,6 +198,7 @@ fn open_content_file(root: &Path, relative: &str) -> io::Result<fs::File> {
         if fd < 0 {
             return Err(normalize_open_error(io::Error::last_os_error()));
         }
+        // SAFETY: fd is a valid, non-negative file descriptor just returned by open.
         let mut current = unsafe { OwnedFd::from_raw_fd(fd) };
         for component in root.components() {
             if let std::path::Component::Normal(name) = component {
@@ -224,6 +232,7 @@ fn open_content_file(root: &Path, relative: &str) -> io::Result<fs::File> {
     }
     let name = CString::new(last.as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
+    // SAFETY: openat with valid parent fd and NUL-terminated CString for the final component.
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),
@@ -234,6 +243,7 @@ fn open_content_file(root: &Path, relative: &str) -> io::Result<fs::File> {
     if fd < 0 {
         return Err(normalize_open_error(io::Error::last_os_error()));
     }
+    // SAFETY: fd is a valid, non-negative file descriptor just returned by openat.
     Ok(fs::File::from(unsafe { OwnedFd::from_raw_fd(fd) }))
 }
 

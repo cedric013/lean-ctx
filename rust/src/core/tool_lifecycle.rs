@@ -317,6 +317,8 @@ fn read_density_with_analyzer(
             original_tokens: original_tokens as u64,
             delivered_tokens: output_tokens as u64,
             accepted: Some(task_completed),
+            cache_reads: 0,
+            cache_hits: 0,
         })
         .ok()
         .and_then(|analysis| analysis.etpao_milli)
@@ -475,6 +477,8 @@ mod tests {
             Ok(crate::core::ocla::EfficiencyAnalysis {
                 etpao_milli: sample.accepted.map(|_| 375),
                 duplicate_ratio_milli: 625,
+                compression_rate_milli: 625,
+                cache_hit_rate_milli: 0,
                 recommendation_refs: Vec::new(),
             })
         }
@@ -670,7 +674,6 @@ mod tests {
 /// constructed. This is the canonical production callsite for the compression capability.
 fn project_ocla_compression(path: &str, source_tokens: u64, output_tokens: u64) {
     use crate::core::ocla::OclaRegistry;
-    use crate::core::ocla::traits::CompressionProvider;
     use crate::core::ocla::types::{CompressionRequest, OclaRequestContext};
 
     let reg = OclaRegistry::global();
@@ -695,14 +698,11 @@ fn project_ocla_compression(path: &str, source_tokens: u64, output_tokens: u64) 
 
 fn project_ocla_savings(path: &str, original_tokens: u64, output_tokens: u64) {
     use crate::core::ocla::OclaRegistry;
-    use crate::core::ocla::traits::SavingsLedger;
     use crate::core::ocla::types::{OclaRequestContext, SavingsEvidence};
 
     let context = OclaRequestContext {
         request_id: format!("cli-read-{}", path.len()),
-        session_id: SessionState::load_latest()
-            .map(|session| session.id)
-            .unwrap_or_else(|| "cli-read".to_string()),
+        session_id: SessionState::load_latest().map_or_else(|| "cli-read".to_string(), |session| session.id),
         agent_id: "lean-ctx".to_string(),
         content_ref: format!("file:{path}"),
         tenant_id: None,

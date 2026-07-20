@@ -55,6 +55,7 @@ pub struct RouteDecision {
 
 /// Maximum user-message prefix fed to the intent classifier. Classification is
 /// keyword/structure based; a bounded prefix keeps it O(1) per request.
+#[allow(dead_code)]
 const CLASSIFY_QUERY_CAP: usize = 2000;
 
 /// Applies the routing rules to a parsed request body. On a routing decision
@@ -227,6 +228,7 @@ fn can_translate(
 ///   content as string or text-part array.
 /// - OpenAI Responses: `input` as string, or `input[]` items with
 ///   `role == "user"` and `content[]` parts (`input_text`/`text`).
+#[allow(dead_code)]
 fn extract_user_query(parsed: &serde_json::Value, shape: WireShape) -> Option<String> {
     debug_assert!(matches!(shape, WireShape::Anthropic | WireShape::OpenAi));
     let items = parsed.get("messages").or_else(|| parsed.get("input"))?;
@@ -265,6 +267,7 @@ fn extract_user_query(parsed: &serde_json::Value, shape: WireShape) -> Option<St
     non_empty_prefix(&buf)
 }
 
+#[allow(dead_code)]
 fn non_empty_prefix(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {

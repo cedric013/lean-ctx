@@ -58,11 +58,8 @@ impl BuiltinObservationHook {
             .unwrap_or(0)
             .min(original);
         let delivered = original.saturating_sub(saved);
-        let ratio = if original == 0 {
-            0
-        } else {
-            saved.saturating_mul(1000) / original
-        };
+        
+        let ratio = saved.saturating_mul(1000).checked_div(original).unwrap_or(0);
 
         observation
             .attributes

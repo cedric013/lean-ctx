@@ -32,6 +32,7 @@ impl BuiltinConfigTuner {
         self.tune_with_policy(request, &policy)
     }
 
+    #[allow(clippy::unnecessary_wraps, clippy::needless_pass_by_value)]
     fn tune_with_policy(
         &self,
         request: ConfigTuningRequest,

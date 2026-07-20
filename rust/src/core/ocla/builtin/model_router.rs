@@ -50,22 +50,20 @@ impl ModelRouter for BuiltinModelRouter {
             "messages": [{"role": "user", "content": request.context.content_ref}]
         });
         let routed = crate::proxy::model_router::route(&body, &self.rules);
-        let (model, provider, tier, model_changed) = routed
-            .map(|decision| {
-                let model = decision.routed_model;
-                let provider = decision
-                    .routed_provider
-                    .unwrap_or_else(|| infer_provider(&model));
-                let changed = decision.model_changed;
-                (model, provider, decision.tier, changed)
-            })
-            .unwrap_or_else(|| {
+        let (model, provider, tier, model_changed) = routed.map_or_else(|| {
                 (
                     requested_model.clone(),
                     infer_provider(&requested_model),
                     "standard".to_string(),
                     false,
                 )
+            }, |decision| {
+                let model = decision.routed_model;
+                let provider = decision
+                    .routed_provider
+                    .unwrap_or_else(|| infer_provider(&model));
+                let changed = decision.model_changed;
+                (model, provider, decision.tier, changed)
             });
 
         ocla_bus::emit(OclaEvent::ModelRouted {

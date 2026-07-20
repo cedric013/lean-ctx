@@ -44,7 +44,7 @@ fn port_from_project_root(root_str: Option<String>) -> Option<CompressionContent
         return None;
     }
     let canonical = root.canonicalize().ok()?;
-    Some(CompressionContentPort::new(canonical))
+    CompressionContentPort::new(canonical)
 }
 
 fn try_default_port() -> Option<&'static CompressionContentPort> {

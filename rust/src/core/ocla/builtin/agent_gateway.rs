@@ -21,7 +21,7 @@ impl BuiltinAgentGateway {
     }
 
     pub fn route_message(
-        &self,
+        &self, // used for trait impl method grouping
         from_agent: &str,
         to_agent: Option<&str>,
         category: &str,
@@ -44,8 +44,10 @@ impl BuiltinAgentGateway {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::unused_self)]
     fn route_message_in_registry(
-        &self,
+        &self, // used for trait impl method grouping
         registry: &mut AgentRegistry,
         from_agent: &str,
         to_agent: Option<&str>,
