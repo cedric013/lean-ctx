@@ -222,6 +222,7 @@ tokio = { version = "1.52", features = [
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+clap = "4.5"
 subtle = "2.6"
 md-5 = "0.11"
 anyhow = "1.0"
@@ -491,4 +492,3 @@ harness = false
 [patch.crates-io]
 rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "67a3085", package = "rmcp" }
 rmcp-macros = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "67a3085", package = "rmcp-macros" }
-
