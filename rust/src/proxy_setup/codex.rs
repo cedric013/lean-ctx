@@ -6,7 +6,8 @@ use super::util::is_proxy_reachable;
 
 pub(crate) fn uninstall_codex_env(home: &Path, quiet: bool) {
     let codex_dir = crate::core::home::resolve_codex_dir().unwrap_or_else(|| home.join(".codex"));
-    let config_path = codex_dir.join("config.toml");
+    let config_path = crate::core::home::resolve_codex_config_path()
+        .unwrap_or_else(|| codex_dir.join("config.toml"));
     let existing = match std::fs::read_to_string(&config_path) {
         Ok(s) if !s.trim().is_empty() => s,
         _ => return,
@@ -43,7 +44,9 @@ pub(crate) fn install_codex_env(home: &Path, port: u16, quiet: bool) {
     let chatgpt_proxy = crate::core::config::Config::load()
         .proxy
         .codex_chatgpt_proxy_enabled();
-    install_codex_env_at_mode(&config_dir, port, quiet, mode, chatgpt_proxy);
+    let config_path = crate::core::home::resolve_codex_config_path()
+        .unwrap_or_else(|| config_dir.join("config.toml"));
+    install_codex_env_at_path(&config_path, port, quiet, mode, chatgpt_proxy);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +66,22 @@ pub(crate) fn install_codex_env_at(config_dir: &Path, port: u16, quiet: bool) {
 
 pub(crate) fn install_codex_env_at_mode(
     config_dir: &Path,
+    port: u16,
+    quiet: bool,
+    mode: CodexProxyMode,
+    chatgpt_proxy: bool,
+) {
+    install_codex_env_at_path(
+        &config_dir.join("config.toml"),
+        port,
+        quiet,
+        mode,
+        chatgpt_proxy,
+    );
+}
+
+fn install_codex_env_at_path(
+    config_path: &Path,
     port: u16,
     quiet: bool,
     mode: CodexProxyMode,
@@ -109,11 +128,10 @@ pub(crate) fn install_codex_env_at_mode(
         return;
     }
 
-    if !config_dir.exists() {
+    if !config_path.parent().is_some_and(std::path::Path::exists) {
         return;
     }
 
-    let config_path = config_dir.join("config.toml");
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
     let updated = render_codex_config(&existing, &entries, provider_block.as_deref());
 

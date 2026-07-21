@@ -172,16 +172,13 @@ pub(crate) fn agent_mcp_targets(
             home.join(".codeium/windsurf/mcp_config.json"),
             ConfigType::McpJson,
         ),
-        "codex" => {
-            let codex_dir =
-                crate::core::home::resolve_codex_dir().unwrap_or_else(|| home.join(".codex"));
-            push(
-                &mut targets,
-                "Codex CLI",
-                codex_dir.join("config.toml"),
-                ConfigType::Codex,
-            );
-        }
+        "codex" => push(
+            &mut targets,
+            "Codex CLI",
+            crate::core::home::resolve_codex_config_path()
+                .unwrap_or_else(|| home.join(".codex/config.toml")),
+            ConfigType::Codex,
+        ),
         "grok" => push(
             &mut targets,
             "Grok",
@@ -435,16 +432,13 @@ pub fn disable_agent_mcp(agent: &str, overwrite_invalid: bool) -> Result<(), Str
             home.join(".codeium/windsurf/mcp_config.json"),
             ConfigType::McpJson,
         ),
-        "codex" => {
-            let codex_dir =
-                crate::core::home::resolve_codex_dir().unwrap_or_else(|| home.join(".codex"));
-            push(
-                &mut targets,
-                "Codex CLI",
-                codex_dir.join("config.toml"),
-                ConfigType::Codex,
-            );
-        }
+        "codex" => push(
+            &mut targets,
+            "Codex CLI",
+            crate::core::home::resolve_codex_config_path()
+                .unwrap_or_else(|| home.join(".codex/config.toml")),
+            ConfigType::Codex,
+        ),
         "grok" => push(
             &mut targets,
             "Grok",

@@ -12,7 +12,7 @@ pub(crate) fn check_codex_toml(path: &std::path::Path, binary: &str) -> NamedChe
             detail: format!("missing ({})", path.display()),
         };
     }
-    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let content = read_effective_codex_config(path);
     let parsed: Result<toml::Value, _> = toml::from_str(&content);
     let Ok(v) = parsed else {
         return NamedCheck {
@@ -38,14 +38,53 @@ pub(crate) fn check_codex_toml(path: &std::path::Path, binary: &str) -> NamedChe
     }
 }
 
+fn merge_toml(base: &mut toml::Value, overlay: toml::Value) {
+    if let (Some(base), Some(overlay)) = (base.as_table_mut(), overlay.as_table()) {
+        for (key, value) in overlay {
+            if let Some(existing) = base.get_mut(key) {
+                merge_toml(existing, value.clone());
+            } else {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    } else {
+        *base = overlay;
+    }
+}
+
+fn read_effective_codex_config(path: &std::path::Path) -> String {
+    let Some(parent) = path.parent() else {
+        return std::fs::read_to_string(path).unwrap_or_default();
+    };
+    let base_path = parent.join("config.toml");
+    if path == base_path {
+        return std::fs::read_to_string(path).unwrap_or_default();
+    }
+
+    let Ok(base) = std::fs::read_to_string(&base_path) else {
+        return std::fs::read_to_string(path).unwrap_or_default();
+    };
+    let Ok(overlay) = std::fs::read_to_string(path) else {
+        return base;
+    };
+    let Ok(mut base_value) = toml::from_str::<toml::Value>(&base) else {
+        return overlay;
+    };
+    let Ok(overlay_value) = toml::from_str::<toml::Value>(&overlay) else {
+        return base;
+    };
+    merge_toml(&mut base_value, overlay_value);
+    toml::to_string(&base_value).unwrap_or(base)
+}
+
 /// ChatGPT subscription routing needs the generated provider pin plus the
 /// backend rail. A lone provider pin, a lone local `chatgpt_base_url`, or an
 /// `openai_base_url` aimed at `/backend-api` is stale/broken config. Per-profile
 /// entries are the user's own choice.
 pub(crate) fn check_codex_history_visibility(home: &std::path::Path) -> NamedCheck {
-    let codex_dir = crate::core::home::resolve_codex_dir().unwrap_or_else(|| home.join(".codex"));
-    let path = codex_dir.join("config.toml");
-    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let path = crate::core::home::resolve_codex_config_path()
+        .unwrap_or_else(|| home.join(".codex/config.toml"));
+    let content = read_effective_codex_config(&path);
     let (ok, detail) = match classify_codex_proxy_entries(&content) {
         CodexProxyState::Artifact => (
             false,
@@ -133,8 +172,8 @@ pub(crate) fn classify_codex_proxy_entries(config: &str) -> CodexProxyState {
 }
 
 pub(crate) fn check_codex_hooks_enabled(home: &std::path::Path) -> NamedCheck {
-    let codex_dir = crate::core::home::resolve_codex_dir().unwrap_or_else(|| home.join(".codex"));
-    let path = codex_dir.join("config.toml");
+    let path = crate::core::home::resolve_codex_config_path()
+        .unwrap_or_else(|| home.join(".codex/config.toml"));
     if !path.exists() {
         return NamedCheck {
             name: "Codex hooks".to_string(),
@@ -142,7 +181,7 @@ pub(crate) fn check_codex_hooks_enabled(home: &std::path::Path) -> NamedCheck {
             detail: format!("missing ({})", path.display()),
         };
     }
-    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let content = read_effective_codex_config(&path);
     let parsed: Result<toml::Value, _> = toml::from_str(&content);
     let Ok(v) = parsed else {
         return NamedCheck {

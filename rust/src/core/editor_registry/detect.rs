@@ -74,9 +74,8 @@ pub fn build_targets(home: &Path) -> Vec<EditorTarget> {
         EditorTarget {
             name: "Codex CLI",
             agent_key: "codex".to_string(),
-            config_path: crate::core::home::resolve_codex_dir()
-                .unwrap_or_else(|| home.join(".codex"))
-                .join("config.toml"),
+            config_path: crate::core::home::resolve_codex_config_path()
+                .unwrap_or_else(|| home.join(".codex/config.toml")),
             detect_path: detect_codex_path(home),
             config_type: ConfigType::Codex,
         },
