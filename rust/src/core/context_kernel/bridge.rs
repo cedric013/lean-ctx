@@ -1,6 +1,7 @@
 //! Runtime integration helpers for the Context Control Kernel.
 
 use super::orchestrator::ContextKernel;
+#[allow(clippy::wildcard_imports)]
 use super::types::*;
 
 /// Result of kernel enrichment for compose integration.
@@ -40,10 +41,11 @@ pub fn kernel_enrich(
         .filter(|entry| entry.provider != "context.ledger")
         .collect();
 
-    (!enrichments.is_empty()).then(|| KernelEnrichment {
-        blocks: format_enrichment_blocks(&enrichments),
-        plan,
-    })
+    if enrichments.is_empty() {
+        return None;
+    }
+    let blocks = format_enrichment_blocks(&enrichments);
+    Some(KernelEnrichment { plan, blocks })
 }
 
 fn format_enrichment_blocks(entries: &[&PlanEntry]) -> String {
@@ -155,7 +157,7 @@ pub fn format_plan_summary(plan: &ContextPlanV1) -> String {
     ));
 
     let mut providers: Vec<_> = plan.provider_stats.iter().collect();
-    providers.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    providers.sort_unstable_by_key(|(left, _)| *left);
     for (provider, stat) in providers {
         out.push_str(&format!(
             "  {provider}: {}/{} candidates, {} tokens\n",

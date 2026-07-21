@@ -151,6 +151,7 @@ gateway-server = [
 shape-xlat = ["http-server"]
 secure-update = []
 experimental = []
+context_kernel = []
 cloud-server = [
   "http-server",
   "dep:deadpool-postgres",
