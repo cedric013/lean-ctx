@@ -49,6 +49,11 @@ pub struct IdempotencyLayer {
     cache: Arc<Mutex<LruCache<String, CachedResponse>>>,
 }
 
+impl Default for IdempotencyLayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl IdempotencyLayer {
     /// Creates an idempotency cache with a 1024-entry, five-minute policy.
     pub fn new() -> Self {
