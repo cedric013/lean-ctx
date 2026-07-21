@@ -888,7 +888,6 @@ fn xlat_response_bytes(resp_bytes: &[u8], _status: StatusCode) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::intent::ProxyIntentClassification;
     use super::*;
     use crate::core::ocla::registry::with_test_registry;
     use crate::core::ocla::traits::{IntentClassifier, OclaService};
