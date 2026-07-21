@@ -77,6 +77,21 @@ const _: () = assert!(DEFAULT_BM25_PERSIST_MB >= 512);
 /// so it is left available; users wanting it gone can add it to `disabled_tools`.
 pub const EDIT_TOOL_NAMES: &[&str] = &["ctx_edit", "ctx_patch"];
 
+/// Default locations for shell output capture.
+///
+/// `/private/tmp` is the canonical target behind macOS's `/tmp` symlink, while
+/// `temp_dir()` also covers per-user scratch directories such as `$TMPDIR`.
+pub(crate) fn default_shell_write_allow_paths() -> Vec<String> {
+    let mut paths = vec![std::env::temp_dir().to_string_lossy().into_owned()];
+    #[cfg(unix)]
+    for path in ["/tmp", "/private/tmp", "/var/tmp"] {
+        if !paths.iter().any(|existing| existing == path) {
+            paths.push(path.to_string());
+        }
+    }
+    paths
+}
+
 /// Global lean-ctx configuration loaded from `config.toml`, merged with project-local overrides.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -703,6 +718,11 @@ pub struct Config {
     /// via `LEAN_CTX_SHELL_ALLOW_WRITES=1`.
     #[serde(default)]
     pub shell_allow_writes: bool,
+    /// Absolute paths where shell redirects and `tee` may capture output.
+    /// Empty uses the operating system's temporary directories. Project files
+    /// remain denied even when a configured path overlaps the project root.
+    #[serde(default)]
+    pub write_allow_paths: Vec<String>,
 
     /// #814: opt-in to allow `python3 -c`, `node -e`, etc. in ctx_shell.
     /// Default `false` — inline code is blocked because it leaves no auditable
@@ -839,6 +859,7 @@ impl Default for Config {
             shell_heavy_timeout_secs: None,
             shell_heavy_prefixes: Vec::new(),
             shell_allow_writes: false,
+            write_allow_paths: Vec::new(),
             shell_allow_inline_scripts: false,
             setup: SetupConfig::default(),
         }
@@ -891,6 +912,10 @@ fn strip_sensitive_overrides(local: &mut Config) -> Vec<&'static str> {
     if !local.allow_paths.is_empty() {
         local.allow_paths.clear();
         withheld.push("allow_paths");
+    }
+    if !local.write_allow_paths.is_empty() {
+        local.write_allow_paths.clear();
+        withheld.push("write_allow_paths");
     }
     if !local.extra_roots.is_empty() {
         local.extra_roots.clear();
@@ -1246,6 +1271,16 @@ impl Config {
                 "1" | "true" | "yes" | "on"
             ),
             Err(_) => self.shell_allow_writes,
+        }
+    }
+
+    /// Returns the effective paths where shell output capture may write.
+    /// Empty configuration intentionally falls back to OS temp directories.
+    pub fn shell_write_allow_paths_effective(&self) -> Vec<String> {
+        if self.write_allow_paths.is_empty() {
+            default_shell_write_allow_paths()
+        } else {
+            self.write_allow_paths.clone()
         }
     }
 

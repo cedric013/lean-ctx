@@ -107,8 +107,16 @@ impl McpTool for CtxShellTool {
         // is an MCP-payload-safety convention, not a security boundary, so it is
         // opt-out via `shell_allow_writes` (#523). The real command gating
         // (`check_shell_allowlist`, below) is NOT affected by this flag.
-        if !crate::core::config::Config::load().shell_allow_writes_effective()
-            && let Some(rejection) = crate::tools::ctx_shell::validate_command(&command)
+        let config = crate::core::config::Config::load();
+        let write_allow_paths = config.shell_write_allow_paths_effective();
+        let project_root = crate::core::config::Config::find_project_root();
+        if !config.shell_allow_writes_effective()
+            && let Some(rejection) =
+                crate::tools::ctx_shell::validate_command_with_write_allow_paths(
+                    &command,
+                    &write_allow_paths,
+                    project_root.as_deref(),
+                )
         {
             // The command never ran — report as a tool error so MCP clients
             // (guards, retry logic) can detect it programmatically (#389).

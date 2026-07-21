@@ -746,6 +746,14 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             "LEAN_CTX_SHELL_ALLOW_WRITES",
         ),
     );
+    root.insert(
+        "write_allow_paths".into(),
+        key(
+            "string[]",
+            serde_json::json!(cfg.write_allow_paths),
+            "Absolute paths allowed for ctx_shell redirects and tee output; empty = OS temp directories",
+        ),
+    );
 
     sections.insert(
         "root".into(),

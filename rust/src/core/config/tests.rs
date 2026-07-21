@@ -1795,6 +1795,40 @@ mod shell_timeout_and_writes_tests {
             crate::test_env::set_var("LEAN_CTX_SHELL_ALLOW_WRITES", v);
         }
     }
+
+    #[test]
+    fn write_allow_paths_default_to_os_temp() {
+        let cfg = Config::default();
+        assert!(cfg.write_allow_paths.is_empty());
+        let effective = cfg.shell_write_allow_paths_effective();
+        assert!(
+            effective
+                .iter()
+                .any(|path| { path == &std::env::temp_dir().to_string_lossy() })
+        );
+    }
+
+    #[test]
+    fn write_allow_paths_parse_from_toml() {
+        let cfg: Config =
+            toml::from_str("write_allow_paths = [\"/var/agent-scratch\", \"/opt/logs\"]").unwrap();
+        assert_eq!(
+            cfg.write_allow_paths,
+            vec!["/var/agent-scratch", "/opt/logs"]
+        );
+        assert_eq!(cfg.shell_write_allow_paths_effective().len(), 2);
+    }
+
+    #[test]
+    fn write_allow_paths_round_trip_through_toml() {
+        let cfg = Config {
+            write_allow_paths: vec!["/var/agent-scratch".to_string()],
+            ..Default::default()
+        };
+        let serialized = toml::to_string(&cfg).expect("Config must serialize to TOML");
+        let restored: Config = toml::from_str(&serialized).expect("Config must round-trip");
+        assert_eq!(restored.write_allow_paths, cfg.write_allow_paths);
+    }
 }
 
 #[cfg(test)]

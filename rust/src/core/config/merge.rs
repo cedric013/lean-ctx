@@ -257,6 +257,7 @@ impl Config {
             memory.embeddings.max_facts
         );
         extend_if_nonempty!(allow_paths);
+        extend_if_nonempty!(write_allow_paths);
         extend_if_nonempty!(extra_roots);
         // Project-local config may only ADD read-only roots (tighten the write
         // boundary), never remove them — merge mirrors extra_roots (#475).
