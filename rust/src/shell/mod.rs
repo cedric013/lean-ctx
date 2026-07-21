@@ -1,9 +1,9 @@
 pub(crate) mod agent_wrapper;
 pub mod compress;
 mod exec;
-mod pipeline;
 mod interactive;
 pub mod output_policy;
+mod pipeline;
 pub(crate) mod platform;
 mod redact;
 pub(crate) mod reentry;

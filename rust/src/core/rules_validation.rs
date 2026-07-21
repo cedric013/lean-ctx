@@ -1,9 +1,7 @@
 //! Rules-file parsing, validation, and merge helpers.
 use crate::core::config::CompressionLevel;
 
-use super::rules_canonical::{
-    render, END_MARK, RULES_VERSION, START_MARK, Wrapper,
-};
+use super::rules_canonical::{END_MARK, RULES_VERSION, START_MARK, Wrapper, render};
 
 /// A parsed lean-ctx rules section from a file on disk.
 ///

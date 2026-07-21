@@ -5,6 +5,7 @@
 //! that fits within the attention budget. Tracks metrics for observability.
 //!
 //! Determinism (#498): same rules + same context + same budget → same output.
+#![allow(dead_code)]
 
 use super::rule_scorer::{AgentRule, BudgetAllocation, SessionContext};
 

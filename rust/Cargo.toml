@@ -150,6 +150,7 @@ gateway-server = [
 # upstreams (Foundry, vLLM, Ollama…). LOCAL_OPTIONAL: compile-gated only.
 shape-xlat = ["http-server"]
 secure-update = []
+experimental = []
 cloud-server = [
   "http-server",
   "dep:deadpool-postgres",

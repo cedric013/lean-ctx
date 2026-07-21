@@ -8,6 +8,7 @@
 //!
 //! Determinism (#498): same response bytes → same shaped output. All pattern
 //! matching is deterministic (static regex set, no randomness).
+#![allow(dead_code)]
 
 use regex::Regex;
 use std::sync::LazyLock;

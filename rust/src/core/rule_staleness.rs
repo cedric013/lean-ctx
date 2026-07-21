@@ -6,6 +6,7 @@
 //! and may actively mislead the agent.
 //!
 //! Determinism (#498): same rules + same filesystem → same staleness report.
+#![allow(dead_code)]
 
 use std::path::Path;
 

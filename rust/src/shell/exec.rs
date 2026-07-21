@@ -1,11 +1,9 @@
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, IsTerminal, Read};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::config;
-use crate::core::slow_log;
-use crate::core::tokens::count_tokens;
 
 /// Wait for a child process with output-size and time limits.
 /// Kills the process if either limit is exceeded, returning what was

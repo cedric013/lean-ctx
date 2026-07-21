@@ -7,7 +7,12 @@ use crate::core::tokens::count_tokens;
 
 use super::exec::{combine_streams, exec_limits, wait_with_limits};
 
-pub(super) fn exec_buffered(command: &str, shell: &str, shell_flag: &str, cfg: &config::Config) -> i32 {
+pub(super) fn exec_buffered(
+    command: &str,
+    shell: &str,
+    shell_flag: &str,
+    cfg: &config::Config,
+) -> i32 {
     #[cfg(windows)]
     super::platform::set_console_utf8();
 
