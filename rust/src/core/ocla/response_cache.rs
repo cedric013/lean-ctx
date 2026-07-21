@@ -1,7 +1,7 @@
 //! Bounded in-memory cache for identical model responses.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 /// Maximum number of responses retained by a response cache.
@@ -16,6 +16,12 @@ pub enum CachePolicy {
     Uniform,
     /// Per-model TTL overrides selected by model-prefix match.
     ModelAware { overrides: HashMap<String, Duration> },
+}
+
+static GLOBAL_RESPONSE_CACHE: OnceLock<ResponseCache> = OnceLock::new();
+
+pub(crate) fn global_response_cache() -> &'static ResponseCache {
+    GLOBAL_RESPONSE_CACHE.get_or_init(ResponseCache::default)
 }
 
 /// Stable cache key derived from response-defining request fields.
@@ -169,6 +175,7 @@ impl ResponseCache {
         let state = self.lock_state();
         let total = state.hits + state.misses;
         CacheStats {
+            entries: state.entries.len(),
             hits: state.hits,
             misses: state.misses,
             evictions: state.evictions,
@@ -237,6 +244,7 @@ fn record_eviction(state: &mut CacheState, reason: &str) {
 /// Snapshot of cache activity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CacheStats {
+    pub entries: usize,
     pub hits: u64,
     pub misses: u64,
     pub evictions: u64,
