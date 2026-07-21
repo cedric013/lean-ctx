@@ -140,8 +140,8 @@ pub(crate) fn execute_command_with_env_cancellable(
     let (err_bytes, err_trunc) = snapshot(&err_buf);
     let reader_incomplete = !out_complete || !err_complete;
 
-    let stdout = crate::shell::decode_output(&out_bytes);
-    let stderr = crate::shell::decode_output(&err_bytes);
+    let stdout = crate::shell::resolve_carriage_returns(&crate::shell::decode_output(&out_bytes));
+    let stderr = crate::shell::resolve_carriage_returns(&crate::shell::decode_output(&err_bytes));
     // On failure both streams are labeled so the agent can attribute the error
     // (#812); success keeps the plain join.
     let mut text = crate::shell::combine_streams(&stdout, &stderr, code);

@@ -40,6 +40,31 @@ pub fn decode_output(bytes: &[u8]) -> String {
         }
     }
 }
+/// Resolve carriage-return (`\r`) progress overwrites in captured output.
+///
+/// CLI tools like `git`, `cargo`, and `npm` use `\r` to draw in-place progress
+/// updates. When stdout is captured (not a TTY), these bytes survive as literal
+/// `\r` characters and produce glued-together lines (#1140). This function
+/// emulates terminal behaviour: for each line, only the content after the last
+/// `\r` is kept.
+pub fn resolve_carriage_returns(s: &str) -> String {
+    if !s.contains('\r') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    for (i, line) in s.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if let Some(pos) = line.rfind('\r') {
+            out.push_str(&line[pos + 1..]);
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
 
 #[cfg(windows)]
 fn decode_windows_output(bytes: &[u8]) -> String {
@@ -900,5 +925,61 @@ mod posix_shell_gate_tests {
             Some(v) => crate::test_env::set_var("LEAN_CTX_SHELL", v),
             None => crate::test_env::remove_var("LEAN_CTX_SHELL"),
         }
+    }
+}
+
+#[cfg(test)]
+mod carriage_return_tests {
+    use super::resolve_carriage_returns;
+
+    #[test]
+    fn no_cr_passthrough() {
+        assert_eq!(resolve_carriage_returns("hello\nworld\n"), "hello\nworld\n");
+    }
+
+    #[test]
+    fn progress_overwrite_keeps_last_segment() {
+        assert_eq!(resolve_carriage_returns("first\rsecond"), "second");
+    }
+
+    #[test]
+    fn git_rebase_progress() {
+        let input = "Rebasing (1/1)\rSuccessfully rebased and updated refs/heads/feat.";
+        assert_eq!(
+            resolve_carriage_returns(input),
+            "Successfully rebased and updated refs/heads/feat."
+        );
+    }
+
+    #[test]
+    fn crlf_line_endings_stripped() {
+        assert_eq!(
+            resolve_carriage_returns("line1\r\nline2\r\n"),
+            "line1\nline2\n"
+        );
+    }
+
+    #[test]
+    fn multiple_cr_on_one_line() {
+        assert_eq!(resolve_carriage_returns("a\rb\rc"), "c");
+    }
+
+    #[test]
+    fn mixed_lines() {
+        let input = "clean line\nprogress\rdone\nalso clean\n";
+        assert_eq!(
+            resolve_carriage_returns(input),
+            "clean line\ndone\nalso clean\n"
+        );
+    }
+
+    #[test]
+    fn trailing_cr_stripped_as_crlf() {
+        assert_eq!(resolve_carriage_returns("visible\r"), "visible");
+    }
+
+    #[test]
+    fn empty_string_passthrough() {
+        assert_eq!(resolve_carriage_returns(""), "");
     }
 }

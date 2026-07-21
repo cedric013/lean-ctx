@@ -961,8 +961,10 @@ fn exec_buffered(command: &str, shell: &str, shell_flag: &str, cfg: &config::Con
 
     let duration_ms = start.elapsed().as_millis();
     let exit_code = output.status.code().unwrap_or(1);
-    let stdout = super::platform::decode_output(&output.stdout);
-    let stderr = super::platform::decode_output(&output.stderr);
+    let stdout =
+        super::platform::resolve_carriage_returns(&super::platform::decode_output(&output.stdout));
+    let stderr =
+        super::platform::resolve_carriage_returns(&super::platform::decode_output(&output.stderr));
 
     let full_output = combine_streams(&stdout, &stderr, exit_code);
     let input_tokens = count_tokens(&full_output);

@@ -16,7 +16,7 @@ pub use interactive::interactive;
 pub use output_policy::{OutputPolicy, classify as classify_output};
 pub use platform::{
     decode_output, is_container, is_non_interactive, join_command, join_command_for,
-    shell_and_flag, shell_name,
+    resolve_carriage_returns, shell_and_flag, shell_name,
 };
 pub(crate) use redact::cleanup_old_tee_logs;
 pub use redact::save_tee;
