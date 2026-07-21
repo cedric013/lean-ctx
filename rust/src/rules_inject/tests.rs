@@ -509,6 +509,7 @@ fn match_agent_name_basic() {
     assert!(match_agent_name("gemini", "Gemini CLI"));
     assert!(match_agent_name("augment", "Augment"));
     assert!(match_agent_name("openclaw", "OpenClaw"));
+    assert!(match_agent_name("qodercli", "Qoder"));
 }
 
 #[test]

@@ -138,6 +138,46 @@ pub struct ArchiveConfig {
     /// Minimum output tokens before the ephemeral firewall replaces an inline tool
     /// result with a summary + retrieval ref. Outputs below this stay fully inline.
     pub ephemeral_min_tokens: usize,
+    /// Maximum output size that `ctx_shell(inline=true)` returns verbatim before
+    /// the archive/firewall path takes over.
+    pub inline_max_bytes: usize,
+}
+
+/// Opt-in conversation-history compression settings (#1123).
+///
+/// The proxy leaves conversation history byte-for-byte unchanged unless
+/// `compression_enabled` is true and the configured token threshold is met.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConversationConfig {
+    /// Enable message-level compression in the proxy. Default: false.
+    pub compression_enabled: bool,
+    /// Number of recent user turns (and their following messages) to preserve.
+    pub preserve_last_n_turns: usize,
+    /// Minimum estimated message-array size before compression starts.
+    pub compression_threshold_tokens: usize,
+    /// Minimum score for verbatim preservation.
+    pub min_score_to_preserve: f64,
+    /// Inclusive lower bound and exclusive upper bound for summaries.
+    pub summarize_score_range: [f64; 2],
+    /// Scores below this value are eligible for drop + CCR.
+    pub drop_score_below: f64,
+    /// Store dropped messages in the content-addressed recovery store.
+    pub ccr_store_dropped: bool,
+}
+
+impl Default for ConversationConfig {
+    fn default() -> Self {
+        Self {
+            compression_enabled: false,
+            preserve_last_n_turns: 10,
+            compression_threshold_tokens: 50_000,
+            min_score_to_preserve: 0.5,
+            summarize_score_range: [0.2, 0.5],
+            drop_score_below: 0.2,
+            ccr_store_dropped: true,
+        }
+    }
 }
 
 impl Default for ArchiveConfig {
@@ -149,6 +189,7 @@ impl Default for ArchiveConfig {
             max_disk_mb: 500,
             ephemeral: true,
             ephemeral_min_tokens: 2000,
+            inline_max_bytes: 32 * 1024,
         }
     }
 }
@@ -168,6 +209,15 @@ impl ArchiveConfig {
             return n;
         }
         self.ephemeral_min_tokens
+    }
+
+    pub fn inline_max_bytes_effective(&self) -> usize {
+        if let Ok(v) = std::env::var("LEAN_CTX_INLINE_MAX_BYTES")
+            && let Ok(n) = v.trim().parse::<usize>()
+        {
+            return n;
+        }
+        self.inline_max_bytes
     }
 }
 
@@ -327,6 +377,14 @@ pub struct ContextConfig {
     pub diet_relevance_threshold: f64,
     pub diet_rebalance_on_change: bool,
     pub diet_staleness_enabled: bool,
+    /// Inject matching CCR archives into later tool responses.
+    pub proactive_expansion: bool,
+    /// Maximum proactive archive content per tool response.
+    pub proactive_expansion_budget_tokens: usize,
+    /// Minimum normalized BM25 score required for an injection.
+    pub proactive_expansion_threshold: f64,
+    /// Ignore archived content older than this many seconds; 0 disables age expiry.
+    pub proactive_expansion_max_age_secs: u64,
 }
 
 impl Default for ContextConfig {
@@ -337,6 +395,10 @@ impl Default for ContextConfig {
             diet_relevance_threshold: 0.15,
             diet_rebalance_on_change: true,
             diet_staleness_enabled: true,
+            proactive_expansion: true,
+            proactive_expansion_budget_tokens: 2000,
+            proactive_expansion_threshold: 0.6,
+            proactive_expansion_max_age_secs: 3600,
         }
     }
 }

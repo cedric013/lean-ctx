@@ -185,7 +185,8 @@ pub fn cmd_init(args: &[String]) {
     qprintln!("  Supported: aider, amazonq, amp, antigravity, antigravity-cli, augment,");
     qprintln!("    claude, cline, codex, continue, copilot, crush, cursor, emacs, gemini,");
     qprintln!("    grok, hermes, jetbrains, kiro, neovim, openclaw, opencode, pi, qoder,");
-    qprintln!("    qoderwork, qwen, roo, sublime, trae, verdent, vscode, windsurf, zed");
+    qprintln!("    qodercli, qoderwork, qwen, roo, sublime, trae, verdent, vscode,");
+    qprintln!("    windsurf, zed");
     qprintln!("  Modes: mcp, hybrid, replace  (auto-detected per agent, override with --mode)");
 }
 

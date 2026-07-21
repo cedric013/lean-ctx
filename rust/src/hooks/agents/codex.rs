@@ -75,7 +75,8 @@ fn install_codex_hook_config(codex_dir: &std::path::Path) -> bool {
         changed = true;
     }
 
-    let config_toml_path = codex_dir.join("config.toml");
+    let config_toml_path = crate::core::home::resolve_codex_config_path()
+        .unwrap_or_else(|| codex_dir.join("config.toml"));
     let config_content = std::fs::read_to_string(&config_toml_path).unwrap_or_default();
 
     // Hybrid mode: ensure MCP server entry exists in config.toml so Codex

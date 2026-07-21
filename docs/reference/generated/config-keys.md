@@ -97,6 +97,7 @@ Top-level configuration keys
 - `tools_enabled` (string[], default `[]`) — Explicit list of enabled tool names. Used only when no tool_profile is pinned (tool_profile takes precedence); leave tool_profile unset to apply this list. The universal invoker ctx_call stays advertised so unlisted tools remain reachable — add it to disabled_tools (disabled_tools = ["ctx_call"]) to make this allowlist authoritative.
 - `ultra_compact` (bool, default `false`) — Legacy flag for maximum compression (use compression_level instead)
 - `update_check_disabled` (bool, default `false` — env `LEAN_CTX_NO_UPDATE_CHECK`) — Disable the daily version check
+- `write_allow_paths` (string[], default `[]`) — Absolute paths allowed for ctx_shell redirects and tee output; empty = OS temp directories
 
 ## `[addons]`
 
@@ -119,6 +120,7 @@ Settings for the zero-loss compression archive (large tool outputs saved to disk
 - `enabled` (bool, default `true`) — Enable zero-loss compression archive
 - `ephemeral` (bool, default `true`) — Replace large results with summary+ref (ctx_expand to retrieve). Env: LEAN_CTX_EPHEMERAL
 - `ephemeral_min_tokens` (usize, default `2000`) — Minimum output tokens before the ephemeral firewall replaces inline body with summary+ref. Env: LEAN_CTX_EPHEMERAL_MIN_TOKENS
+- `inline_max_bytes` (usize, default `32768`) — Maximum ctx_shell(inline=true) output size in bytes before archive/firewall handling. Env: LEAN_CTX_INLINE_MAX_BYTES
 - `max_age_hours` (u64, default `48`) — Maximum age of archived entries before cleanup
 - `max_disk_mb` (u64, default `500`) — Maximum total disk usage for the archive
 - `threshold_chars` (usize, default `800`) — Minimum output size (chars) to trigger archiving
@@ -162,6 +164,10 @@ Cloud feature settings
 Fixed-context budget accounting (#964)
 
 - `budget_tokens` (usize, default `8000` — env `LEAN_CTX_CONTEXT_BUDGET_TOKENS`) — Fixed per-session context budget (tool schemas + MCP instructions + auto-loaded rules + wakeup briefing). `doctor overhead` warns past this; `doctor overhead --gate` exits non-zero for CI. 0 disables the warning
+- `proactive_expansion` (bool, default `true`) — Inject relevant CCR archives into later tool responses
+- `proactive_expansion_budget_tokens` (usize, default `2000`) — Maximum proactive archive tokens per tool response
+- `proactive_expansion_max_age_secs` (u64, default `3600`) — Maximum age of CCR content eligible for proactive expansion
+- `proactive_expansion_threshold` (f64, default `0.6`) — Minimum normalized BM25 score for proactive expansion
 
 ## `[cost]`
 

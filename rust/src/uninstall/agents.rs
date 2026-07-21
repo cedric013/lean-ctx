@@ -375,6 +375,10 @@ pub(super) fn remove_mcp_configs(home: &Path, dry_run: bool) -> bool {
             crate::core::editor_registry::augment_vscode_mcp_path(home),
         ),
         ("Qoder", home.join(".qoder/mcp.json")),
+        (
+            "Qoder CLI",
+            crate::core::editor_registry::qodercli_settings_path(home),
+        ),
         ("QoderWork", home.join(".qoderwork/mcp.json")),
         ("Aider", home.join(".aider/mcp.json")),
         ("Continue", home.join(".continue/mcp.json")),

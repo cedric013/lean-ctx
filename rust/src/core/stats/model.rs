@@ -13,6 +13,92 @@ pub struct StatsStore {
     pub daily: Vec<DayStats>,
     #[serde(default)]
     pub cep: CepStats,
+    /// Delivery classification recorded for each command. Older stats files do
+    /// not have this map; callers infer classifications from the command key.
+    #[serde(default)]
+    pub command_classes: HashMap<String, TrafficClass>,
+}
+
+/// Whether a recorded command's output is controlled by compression.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrafficClass {
+    Compressible,
+    Passthrough,
+}
+
+/// Token totals for traffic that lean-ctx can compress.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CompressionTotals {
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+}
+
+impl CompressionTotals {
+    pub(crate) fn saved_tokens(self) -> u64 {
+        self.input_tokens.saturating_sub(self.output_tokens)
+    }
+
+    pub(crate) fn compression_pct(self) -> f64 {
+        if self.input_tokens == 0 {
+            0.0
+        } else {
+            self.saved_tokens() as f64 / self.input_tokens as f64 * 100.0
+        }
+    }
+}
+
+impl StatsStore {
+    /// Computes effective compression from tagged command rows.
+    pub(crate) fn compression_totals(&self) -> CompressionTotals {
+        self.commands
+            .iter()
+            .filter(|(command, _)| {
+                self.command_classes
+                    .get(*command)
+                    .copied()
+                    .unwrap_or_else(|| classify_command(command))
+                    == TrafficClass::Compressible
+            })
+            .fold(CompressionTotals::default(), |mut totals, (_, stats)| {
+                totals.input_tokens = totals.input_tokens.saturating_add(stats.input_tokens);
+                totals.output_tokens = totals.output_tokens.saturating_add(stats.output_tokens);
+                totals
+            })
+    }
+
+    /// Total reduction across both compressible and passthrough traffic.
+    pub(crate) fn total_reduction_pct(&self) -> f64 {
+        if self.total_input_tokens == 0 {
+            0.0
+        } else {
+            self.total_input_tokens
+                .saturating_sub(self.total_output_tokens) as f64
+                / self.total_input_tokens as f64
+                * 100.0
+        }
+    }
+}
+
+/// Classifies normalized stats keys, with an explicit passthrough default for
+/// control/listing tools so only read, shell, and search output drives the
+/// effective-compression denominator.
+pub(crate) fn classify_command(command: &str) -> TrafficClass {
+    match command {
+        "cli_full" | "cli_raw" | "cli_glob" | "cli_find" | "cli_deps" | "cli_ls"
+        | "ctx_compose" | "ctx_glob" | "ctx_tree" => TrafficClass::Passthrough,
+        c if c.starts_with("cli_") => TrafficClass::Compressible,
+        "ctx_shell" | "ctx_search" | "ctx_semantic_search" => TrafficClass::Compressible,
+        c if c.starts_with("ctx_read")
+            || c.starts_with("ctx_multi_read")
+            || c == "ctx_smart_read"
+            || c == "ctx_git_read"
+            || c == "ctx_url_read" =>
+        {
+            TrafficClass::Compressible
+        }
+        _ => TrafficClass::Passthrough,
+    }
 }
 
 /// Aggregated CEP (Cognitive Efficiency Protocol) metrics across sessions.
@@ -166,5 +252,71 @@ impl CostModel {
             estimated_output_tokens_with: est_output_with,
             output_tokens_saved: output_saved,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CompressionTotals, StatsStore, TrafficClass, classify_command};
+
+    #[test]
+    fn known_tools_are_classified_by_delivery_contract() {
+        assert_eq!(classify_command("ctx_read"), TrafficClass::Compressible);
+        assert_eq!(classify_command("ctx_shell"), TrafficClass::Compressible);
+        assert_eq!(classify_command("ctx_search"), TrafficClass::Compressible);
+        assert_eq!(classify_command("ctx_compose"), TrafficClass::Passthrough);
+        assert_eq!(classify_command("ctx_glob"), TrafficClass::Passthrough);
+        assert_eq!(classify_command("cli_full"), TrafficClass::Passthrough);
+    }
+
+    #[test]
+    fn compression_totals_fall_back_for_legacy_stats() {
+        let mut store = StatsStore::default();
+        store.commands.insert(
+            "ctx_read".into(),
+            super::CommandStats {
+                count: 1,
+                input_tokens: 1_000,
+                output_tokens: 400,
+            },
+        );
+        store.commands.insert(
+            "ctx_glob".into(),
+            super::CommandStats {
+                count: 1,
+                input_tokens: 500,
+                output_tokens: 500,
+            },
+        );
+
+        assert_eq!(store.compression_totals().saved_tokens(), 600);
+        assert_eq!(store.compression_totals().compression_pct(), 60.0);
+    }
+
+    #[test]
+    fn explicit_command_tag_overrides_legacy_inference() {
+        let mut store = StatsStore::default();
+        store.commands.insert(
+            "custom_tool".into(),
+            super::CommandStats {
+                count: 1,
+                input_tokens: 100,
+                output_tokens: 25,
+            },
+        );
+        store
+            .command_classes
+            .insert("custom_tool".into(), TrafficClass::Compressible);
+
+        assert_eq!(store.compression_totals().input_tokens, 100);
+        assert_eq!(store.total_reduction_pct(), 0.0);
+    }
+
+    #[test]
+    fn compression_totals_handle_zero_input_without_nan() {
+        let totals = CompressionTotals::default();
+        assert_eq!(totals.saved_tokens(), 0);
+        assert_eq!(totals.compression_pct(), 0.0);
+        assert_eq!(StatsStore::default().total_reduction_pct(), 0.0);
     }
 }

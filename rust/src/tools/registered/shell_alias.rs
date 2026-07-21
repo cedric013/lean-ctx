@@ -58,7 +58,14 @@ impl McpTool for ShellAliasTool {
         let command = get_str(args, "command")
             .ok_or_else(|| ErrorData::invalid_params("command is required", None))?;
 
-        if let Some(rejection) = crate::tools::ctx_shell::validate_command(&command) {
+        let write_allow_paths =
+            crate::core::config::Config::load().shell_write_allow_paths_effective();
+        let project_root = crate::core::config::Config::find_project_root();
+        if let Some(rejection) = crate::tools::ctx_shell::validate_command_with_write_allow_paths(
+            &command,
+            &write_allow_paths,
+            project_root.as_deref(),
+        ) {
             return Ok(ToolOutput::simple(rejection));
         }
 

@@ -625,13 +625,13 @@ Parameters: `action`*, `message`, `paths`, `to_agent`
 ## `ctx_shell`
 
 WORKFLOW: preferred — auto-compresses output (build/test/log).
-raw=true for verbatim output.
+raw=true for verbatim output; inline=true for moderately-sized verbatim output.
 [exit:N] on errors (lossless).
 POLICY (by design): allowlisted read-only path; ctx_execute is the trusted script path.
 A [BLOCKED] command is permanent — escalate to ctx_execute(language="shell"), do not retry here.
 ANTIPATTERN: multi-line scripts, sh/bash script.sh, $var-as-command → ctx_execute.
 
-Parameters: `background_action`, `command`, `cwd`, `env`, `job_id`, `raw`, `run_in_background`, `timeout_ms`
+Parameters: `background_action`, `command`, `cwd`, `env`, `inline`, `job_id`, `raw`, `run_in_background`, `timeout_ms`
 
 ## `ctx_skillify`
 

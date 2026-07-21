@@ -15,8 +15,13 @@ use super::codec::{
 use super::connector::schedule_provider_connector;
 use super::intent::classify_and_store_proxy_intent;
 
+#[cfg(feature = "shape-xlat")]
+#[path = "forward_xlat.rs"]
+mod forward_xlat;
 #[path = "forward_trace_id.rs"]
 mod trace_id;
+#[cfg(feature = "shape-xlat")]
+use forward_xlat::{translated_openai_body, xlat_response_bytes};
 /// Header set by Headroom when it has already compressed the request.
 const HEADROOM_COMPRESSED_HEADER: &str = "x-headroom-compressed";
 
@@ -531,18 +536,6 @@ fn prepare_request_body(
     })
 }
 
-/// The translated OpenAI body for a cross-shape route, or `None` when the
-/// route is within-shape / absent / the body is untranslatable.
-#[cfg(feature = "shape-xlat")]
-fn translated_openai_body(
-    route: Option<&super::routing::RouteDecision>,
-    parsed: &serde_json::Value,
-) -> Option<serde_json::Value> {
-    route
-        .filter(|r| r.xlat)
-        .and_then(|_| super::shape_xlat::messages_to_chat(parsed))
-}
-
 #[cfg(not(feature = "shape-xlat"))]
 fn translated_openai_body(
     _route: Option<&super::routing::RouteDecision>,
@@ -853,31 +846,6 @@ where
     S: futures::Stream<Item = Result<axum::body::Bytes, reqwest::Error>> + Send + Unpin + 'static,
 {
     Body::from_stream(teed)
-}
-
-/// Non-streaming translated response: chat.completion → Anthropic message on
-/// success, error envelope on failure. Unrecognizable bodies pass unchanged
-/// (better a shape-mismatched body than a dropped one).
-#[cfg(feature = "shape-xlat")]
-fn xlat_response_bytes(resp_bytes: &[u8], status: StatusCode) -> Vec<u8> {
-    let translated = serde_json::from_slice::<serde_json::Value>(resp_bytes)
-        .ok()
-        .and_then(|v| {
-            if status.is_success() {
-                super::shape_xlat::chat_to_messages(&v)
-            } else {
-                super::shape_xlat::error_to_anthropic(&v)
-            }
-        });
-    if let Some(v) = translated {
-        serde_json::to_vec(&v).unwrap_or_else(|_| resp_bytes.to_vec())
-    } else {
-        tracing::warn!(
-            "lean-ctx proxy: cross-shape response not translatable (status {status}) — \
-             forwarding raw body"
-        );
-        resp_bytes.to_vec()
-    }
 }
 
 #[cfg(not(feature = "shape-xlat"))]

@@ -4,6 +4,8 @@ mod footer;
 mod passthrough;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_engine;
 
 pub use engine::compress_if_beneficial_pub;
 pub use footer::shell_savings_footer;

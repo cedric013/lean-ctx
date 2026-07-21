@@ -181,6 +181,9 @@ pub fn record(command: &str, input_tokens: usize, output_tokens: usize) {
     store.last_use = Some(timestamp);
 
     let cmd_key = format::normalize_command(command);
+    store
+        .command_classes
+        .insert(cmd_key.clone(), classify_command(&cmd_key));
     let entry = store.commands.entry(cmd_key).or_default();
     entry.count = entry.count.saturating_add(1);
     entry.input_tokens = entry.input_tokens.saturating_add(input_tokens as u64);
@@ -484,6 +487,9 @@ mod tests {
                 output_tokens: 200,
             },
         );
+        current
+            .command_classes
+            .insert("ctx_read".into(), TrafficClass::Compressible);
 
         let mut disk = make_store(20, 500, 490);
         disk.commands.insert(
@@ -502,6 +508,10 @@ mod tests {
         assert_eq!(merged.total_output_tokens, 690);
         assert_eq!(merged.commands["ctx_read"].count, 5);
         assert_eq!(merged.commands["echo"].count, 20);
+        assert_eq!(
+            merged.command_classes["ctx_read"],
+            TrafficClass::Compressible
+        );
     }
 
     #[test]

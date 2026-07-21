@@ -161,6 +161,7 @@ const AGENT_KEYS: &[&str] = &[
     "opencode",
     "pi",
     "qoder",
+    "qodercli",
     "qoderwork",
     "qwen",
     "roo",

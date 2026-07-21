@@ -202,6 +202,14 @@ pub fn qoderwork_mcp_path(home: &Path) -> PathBuf {
     home.join(".qoderwork/mcp.json")
 }
 
+/// Qoder CLI stores user-scoped MCP servers in the shared Qoder settings file.
+/// This is intentionally separate from Qoder IDE's `mcp.json` locations: the
+/// two applications use the same `.qoder` state directory but do not consume
+/// the same MCP configuration file.
+pub fn qodercli_settings_path(home: &Path) -> PathBuf {
+    home.join(".qoder/settings.json")
+}
+
 pub fn claude_mcp_json_path(home: &Path) -> PathBuf {
     if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
         let dir = dir.trim();
@@ -353,6 +361,32 @@ mod augment_tests {
             ),
             "unexpected windows path: {s}"
         );
+    }
+}
+
+#[cfg(test)]
+mod qodercli_tests {
+    use super::*;
+
+    #[test]
+    fn qodercli_settings_path_uses_shared_qoder_settings_file() {
+        let home = Path::new("/home/tester");
+        assert_eq!(
+            qodercli_settings_path(home),
+            home.join(".qoder/settings.json")
+        );
+    }
+
+    #[test]
+    fn qodercli_settings_path_is_distinct_from_qoder_ide_mcp_path() {
+        let home = Path::new("/home/tester");
+        assert_ne!(qodercli_settings_path(home), qoder_mcp_path(home));
+    }
+
+    #[test]
+    fn qodercli_settings_path_is_distinct_from_qoderwork_path() {
+        let home = Path::new("/home/tester");
+        assert_ne!(qodercli_settings_path(home), qoderwork_mcp_path(home));
     }
 }
 

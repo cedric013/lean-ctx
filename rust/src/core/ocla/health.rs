@@ -279,10 +279,7 @@ fn check_tracing() -> ComponentHealth {
     let started_at = Instant::now();
     let (status, span_count) = match initialized_collector() {
         Some(collector) => (HealthStatus::Healthy, collector.span_count()),
-        None => (
-            HealthStatus::Degraded("span collector is not initialized".into()),
-            0,
-        ),
+        None => (HealthStatus::Healthy, 0),
     };
     ComponentHealth {
         name: "tracing".into(),

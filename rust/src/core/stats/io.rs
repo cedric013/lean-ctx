@@ -187,6 +187,12 @@ pub(super) fn apply_deltas(
         }
     }
 
+    // Tags are metadata rather than counters: carry the newest classification
+    // through disk merges and sibling-directory display aggregation.
+    for (cmd, class) in &current.command_classes {
+        merged.command_classes.insert(cmd.clone(), *class);
+    }
+
     merge_daily(&mut merged.daily, &current.daily, &baseline.daily);
 
     if let Some(ref ts) = current.last_use {

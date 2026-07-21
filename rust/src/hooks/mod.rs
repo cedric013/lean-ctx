@@ -86,6 +86,7 @@ pub const HYBRID_AGENTS: &[&str] = &[
     "openclaw",
     "pi",
     "qoder",
+    "qodercli",
     "windsurf",
     "amp",
     "cline",
@@ -161,7 +162,7 @@ use agents::{
     install_gemini_hook, install_gemini_hook_config, install_gemini_hook_scripts, install_grok_mcp,
     install_hermes_hook_with_mode, install_jetbrains_hook, install_kiro_hook,
     install_openclaw_hook, install_opencode_hook_with_mode, install_pi_hook_with_mode,
-    install_qoder_hook, install_qoder_hook_with_mode, install_vibe_hook, install_windsurf_hooks,
+    install_qoder_hook_with_mode, install_vibe_hook, install_windsurf_hooks,
     install_windsurf_hooks_replace, install_windsurf_rules,
 };
 use support::{
@@ -181,7 +182,7 @@ fn mcp_server_quiet_mode() -> bool {
 /// proves this list plus `REFRESH_EXEMPT_HYBRID_AGENTS` accounts for every
 /// Hybrid agent, so a newly added agent can never silently regress.
 const REFRESHABLE_HOOK_AGENTS: &[&str] = &[
-    "claude", "cursor", "gemini", "codex", "windsurf", "copilot", "qoder",
+    "claude", "cursor", "gemini", "codex", "windsurf", "copilot", "qoder", "qodercli",
 ];
 
 /// Hybrid agents intentionally NOT auto-refreshed, with the reason each is safe
@@ -263,7 +264,7 @@ fn hooks_installed_for(agent: &str, home: &std::path::Path) -> bool {
             file_contains_lean_ctx(&home.join(".copilot/hooks/hooks.json"))
                 || file_contains_lean_ctx(&home.join(".github/hooks/hooks.json"))
         }
-        "qoder" => file_contains_lean_ctx(&home.join(".qoder/settings.json")),
+        "qoder" | "qodercli" => file_contains_lean_ctx(&home.join(".qoder/settings.json")),
         _ => false,
     }
 }
@@ -312,7 +313,7 @@ fn refresh_agent_hooks(agent: &str, home: &std::path::Path) {
             }
         }
         "copilot" => install_copilot_hook(true),
-        "qoder" => install_qoder_hook(),
+        "qoder" | "qodercli" => install_qoder_hook_with_mode(mode),
         _ => {}
     }
 }
@@ -1003,7 +1004,7 @@ pub fn install_agent_hook_with_mode(agent: &str, global: bool, mode: HookMode) {
         // user-global (`~/.copilot`), already covered by copilot/vscode.
         "vscode-insiders" => {}
         "pi" => install_pi_hook_with_mode(global, mode),
-        "qoder" => install_qoder_hook_with_mode(mode),
+        "qoder" | "qodercli" => install_qoder_hook_with_mode(mode),
         "qoderwork" => install_mcp_json_agent(
             "QoderWork",
             "~/.qoderwork/mcp.json",
@@ -1072,7 +1073,7 @@ pub fn install_agent_hook_with_mode(agent: &str, global: bool, mode: HookMode) {
                 "    grok-build, hermes, jetbrains, kiro, neovim, openclaw, opencode, pi, qoder,"
             );
             eprintln!(
-                "    qoderwork, qwen, roo, sublime, trae, verdent, vibe, vscode, windsurf, zed"
+                "    qodercli, qoderwork, qwen, roo, sublime, trae, verdent, vibe, vscode, windsurf, zed"
             );
             std::process::exit(1);
         }

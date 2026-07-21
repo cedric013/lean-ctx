@@ -188,7 +188,7 @@ fn resolve_entries(
 ) -> OclaResult<Vec<u8>> {
     let mut current = capsule_ref;
     let mut visited = HashSet::new();
-    let mut delta_layers: Vec<&[Delta]> = Vec::new();
+    let mut layers = Vec::new();
     loop {
         if !visited.insert(current) {
             return Err(invalid("capsule parent cycle detected"));
@@ -196,13 +196,15 @@ fn resolve_entries(
         let entry = entries
             .get(current)
             .ok_or_else(|| invalid(format!("unknown capsule: {capsule_ref}")))?;
-        delta_layers.push(&entry.deltas);
+        layers.push(entry.deltas.clone());
         if let Some(parent_ref) = entry.parent_ref.as_deref() {
             current = parent_ref;
         } else {
             let mut data = entry.data.clone();
-            for delta in delta_layers.into_iter().rev().flatten() {
-                apply_patch(&mut data, delta)?;
+            for layer in layers.iter().rev() {
+                for delta in layer {
+                    apply_patch(&mut data, delta)?;
+                }
             }
             return Ok(data);
         }
@@ -294,17 +296,25 @@ mod tests {
             .expect("delta applies");
         assert_eq!(store.resolve(&child_ref).expect("child resolves"), b"hallo");
     }
+
     #[test]
-    fn later_delta_wins_on_overlapping_range() {
+    fn later_overlapping_delta_wins_within_layer() {
         let store = CapsuleStore::new();
         let parent_ref = store.register(b"hello");
-        let child_ref = store.fork(&parent_ref, 100).expect("fork succeeds");
+        let fork_ref = store.fork(&parent_ref, 100).expect("fork succeeds");
+
         store
-            .apply_delta(&child_ref, test_delta())
+            .apply_delta(
+                &fork_ref,
+                Delta {
+                    offset: 1,
+                    data: vec![b'a'],
+                },
+            )
             .expect("first delta applies");
         store
             .apply_delta(
-                &child_ref,
+                &fork_ref,
                 Delta {
                     offset: 1,
                     data: vec![b'u'],
@@ -312,17 +322,24 @@ mod tests {
             )
             .expect("second delta applies");
 
-        assert_eq!(store.resolve(&child_ref).expect("child resolves"), b"hullo");
+        assert_eq!(store.resolve(&fork_ref).expect("fork resolves"), b"hullo");
     }
+
     #[test]
-    fn child_delta_applies_after_parent_delta() {
+    fn child_delta_overrides_parent_delta() {
         let store = CapsuleStore::new();
         let root_ref = store.register(b"hello");
         let parent_ref = store.fork(&root_ref, 100).expect("parent fork succeeds");
         store
-            .apply_delta(&parent_ref, test_delta())
+            .apply_delta(
+                &parent_ref,
+                Delta {
+                    offset: 1,
+                    data: vec![b'a'],
+                },
+            )
             .expect("parent delta applies");
-        let child_ref = store.fork(&parent_ref, 50).expect("child fork succeeds");
+        let child_ref = store.fork(&parent_ref, 100).expect("child fork succeeds");
         store
             .apply_delta(
                 &child_ref,
@@ -333,9 +350,39 @@ mod tests {
             )
             .expect("child delta applies");
 
+        assert_eq!(store.resolve(&child_ref).expect("child resolves"), b"hullo");
+    }
+
+    #[test]
+    fn merge_back_preserves_chronological_delta_order() {
+        let store = CapsuleStore::new();
+        let root_ref = store.register(b"hello");
+        let parent_ref = store.fork(&root_ref, 100).expect("parent fork succeeds");
+        store
+            .apply_delta(
+                &parent_ref,
+                Delta {
+                    offset: 1,
+                    data: vec![b'a'],
+                },
+            )
+            .expect("parent delta applies");
+        let child_ref = store.fork(&parent_ref, 100).expect("child fork succeeds");
+        store
+            .apply_delta(
+                &child_ref,
+                Delta {
+                    offset: 1,
+                    data: vec![b'u'],
+                },
+            )
+            .expect("child delta applies");
+
+        store.merge_back(&child_ref).expect("merge succeeds");
+
         assert_eq!(
             store.resolve(&parent_ref).expect("parent resolves"),
-            b"hallo"
+            b"hullo"
         );
         assert_eq!(store.resolve(&child_ref).expect("child resolves"), b"hullo");
     }
@@ -347,21 +394,12 @@ mod tests {
         store
             .apply_delta(&child_ref, test_delta())
             .expect("delta applies");
-        store
-            .apply_delta(
-                &child_ref,
-                Delta {
-                    offset: 1,
-                    data: vec![b'u'],
-                },
-            )
-            .expect("second delta applies");
         store.merge_back(&child_ref).expect("merge succeeds");
         assert_eq!(
             store.resolve(&parent_ref).expect("parent resolves"),
-            b"hullo"
+            b"hallo"
         );
-        assert_eq!(store.resolve(&child_ref).expect("child resolves"), b"hullo");
+        assert_eq!(store.resolve(&child_ref).expect("child resolves"), b"hallo");
     }
     #[test]
     fn stats_report_entries_storage_and_depth() {

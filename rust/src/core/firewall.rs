@@ -47,6 +47,12 @@ pub fn should_firewall(tool: &str, output_tokens: usize, config: &Config) -> boo
         && output_tokens >= min_tokens(config)
 }
 
+/// Whether an explicitly requested `ctx_shell(inline=true)` result fits the
+/// configured verbatim-delivery cap.
+pub fn should_inline_shell(inline_requested: bool, output_bytes: usize, config: &Config) -> bool {
+    inline_requested && output_bytes <= config.archive.inline_max_bytes_effective()
+}
+
 /// Build the inline digest that replaces a firewalled output. Deterministic (no LLM):
 /// a head/tail excerpt for multi-line output, or a char-bounded excerpt for output with
 /// few but very long lines (e.g. a single giant JSON line), followed by drilldown
@@ -149,6 +155,38 @@ mod tests {
         assert!(should_firewall("ctx_shell", 5000, &cfg));
         assert!(!should_firewall("ctx_shell", 1000, &cfg)); // below threshold
         assert!(!should_firewall("ctx_read", 5000, &cfg)); // not firewallable
+    }
+
+    #[test]
+    fn inline_shell_stays_inline_under_byte_cap() {
+        let mut cfg = Config::default();
+        cfg.archive.inline_max_bytes = 1024;
+        crate::test_env::remove_var("LEAN_CTX_INLINE_MAX_BYTES");
+
+        assert!(should_inline_shell(true, 1024, &cfg));
+        assert!(should_inline_shell(true, 0, &cfg));
+    }
+
+    #[test]
+    fn inline_shell_over_byte_cap_uses_archive_path() {
+        let mut cfg = Config::default();
+        cfg.archive.inline_max_bytes = 1024;
+        crate::test_env::remove_var("LEAN_CTX_INLINE_MAX_BYTES");
+
+        assert!(!should_inline_shell(true, 1025, &cfg));
+    }
+
+    #[test]
+    fn inline_shell_requires_explicit_request_and_honors_env_cap() {
+        let mut cfg = Config::default();
+        cfg.archive.inline_max_bytes = 1024;
+        crate::test_env::set_var("LEAN_CTX_INLINE_MAX_BYTES", "2048");
+
+        assert!(!should_inline_shell(false, 1, &cfg));
+        assert!(should_inline_shell(true, 2048, &cfg));
+        assert!(!should_inline_shell(true, 2049, &cfg));
+
+        crate::test_env::remove_var("LEAN_CTX_INLINE_MAX_BYTES");
     }
 
     #[test]

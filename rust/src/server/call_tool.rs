@@ -275,6 +275,12 @@ impl LeanCtxServer {
             return Ok(result);
         }
 
+        let inline_shell = name == "ctx_shell"
+            && crate::core::firewall::should_inline_shell(
+                helpers::get_bool(args, "inline").unwrap_or(false),
+                result_text.len(),
+                &config,
+            );
         let is_raw_shell = name == "ctx_shell" && {
             let arg_raw = helpers::get_bool(args, "raw").unwrap_or(false);
             let arg_bypass = helpers::get_bool(args, "bypass").unwrap_or(false);
@@ -282,6 +288,7 @@ impl LeanCtxServer {
                 || arg_bypass
                 || std::env::var("LEAN_CTX_DISABLED").is_ok()
                 || crate::core::runtime_flags::raw_enabled()
+                || inline_shell
         };
 
         let pre_terse_len = result_text.len();

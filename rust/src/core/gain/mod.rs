@@ -30,6 +30,19 @@ pub struct GainSummary {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub tokens_saved: u64,
+    /// Tokens removed from traffic whose output lean-ctx controls.
+    #[serde(default)]
+    pub effective_input_tokens: u64,
+    #[serde(default)]
+    pub effective_output_tokens: u64,
+    #[serde(default)]
+    pub effective_tokens_saved: u64,
+    /// Compression percentage over compressible traffic only.
+    #[serde(default)]
+    pub effective_compression_pct: f64,
+    /// Reduction percentage over all recorded traffic, including passthrough.
+    #[serde(default)]
+    pub total_reduction_pct: f64,
     pub gain_rate_pct: f64,
     /// Fixed per-turn context lean-ctx injects (tool schemas + server
     /// instructions + rules block). On a provider WITHOUT prompt caching this
@@ -115,16 +128,15 @@ impl GainEngine {
 
     pub fn summary(&self, model: Option<&str>) -> GainSummary {
         let quote = self.pricing.quote(model);
-        let tokens_saved = self
+        let total_tokens_saved = self
             .stats
             .total_input_tokens
             .saturating_sub(self.stats.total_output_tokens);
-        let gain_rate_pct = if self.stats.total_input_tokens > 0 {
-            tokens_saved as f64 / self.stats.total_input_tokens as f64 * 100.0
-        } else {
-            0.0
-        };
-        let avoided_usd = quote.cost.estimate_usd(tokens_saved, 0, 0, 0);
+        let effective = self.stats.compression_totals();
+        let effective_tokens_saved = effective.saved_tokens();
+        let effective_compression_pct = effective.compression_pct();
+        let total_reduction_pct = self.stats.total_reduction_pct();
+        let avoided_usd = quote.cost.estimate_usd(effective_tokens_saved, 0, 0, 0);
         let tool_spend_usd = self.costs.total_cost().max(0.0);
         let roi = if tool_spend_usd > 0.0 {
             Some(avoided_usd / tool_spend_usd)
@@ -157,7 +169,7 @@ impl GainEngine {
         let turns = crate::core::context_overhead::observed_turns();
         let (injected_overhead_total_tokens, net_tokens_saved) =
             crate::core::context_overhead::net_of_injection(
-                tokens_saved,
+                effective_tokens_saved,
                 injected_overhead_tokens_per_turn,
                 turns,
             );
@@ -173,8 +185,13 @@ impl GainEngine {
             total_commands: self.stats.total_commands,
             input_tokens: self.stats.total_input_tokens,
             output_tokens: self.stats.total_output_tokens,
-            tokens_saved,
-            gain_rate_pct,
+            tokens_saved: total_tokens_saved,
+            effective_input_tokens: effective.input_tokens,
+            effective_output_tokens: effective.output_tokens,
+            effective_tokens_saved,
+            effective_compression_pct,
+            total_reduction_pct,
+            gain_rate_pct: effective_compression_pct,
             injected_overhead_tokens_per_turn,
             turns,
             injected_overhead_total_tokens,
@@ -182,8 +199,8 @@ impl GainEngine {
             injected_overhead_budget_tokens,
             over_budget,
             avoided_usd,
-            energy_wh: crate::core::energy::wh_for_tokens(tokens_saved),
-            co2_grams: crate::core::energy::co2_grams_for_tokens(tokens_saved),
+            energy_wh: crate::core::energy::wh_for_tokens(effective_tokens_saved),
+            co2_grams: crate::core::energy::co2_grams_for_tokens(effective_tokens_saved),
             tool_spend_usd,
             roi,
             score,

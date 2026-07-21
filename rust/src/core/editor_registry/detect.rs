@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 
 use super::paths::{
     augment_cli_settings_path, augment_vscode_mcp_path, claude_mcp_json_path, cline_mcp_path,
-    codebuddy_mcp_json_path, detect_vibe_path, qoder_all_mcp_paths, qoderwork_mcp_path,
-    roo_mcp_path, vibe_config_path, vscode_insiders_mcp_path, vscode_mcp_path, zed_config_dir,
-    zed_settings_path,
+    codebuddy_mcp_json_path, detect_vibe_path, qoder_all_mcp_paths, qodercli_settings_path,
+    qoderwork_mcp_path, roo_mcp_path, vibe_config_path, vscode_insiders_mcp_path, vscode_mcp_path,
+    zed_config_dir, zed_settings_path,
 };
 use super::types::{ConfigType, EditorTarget};
 
@@ -74,9 +74,8 @@ pub fn build_targets(home: &Path) -> Vec<EditorTarget> {
         EditorTarget {
             name: "Codex CLI",
             agent_key: "codex".to_string(),
-            config_path: crate::core::home::resolve_codex_dir()
-                .unwrap_or_else(|| home.join(".codex"))
-                .join("config.toml"),
+            config_path: crate::core::home::resolve_codex_config_path()
+                .unwrap_or_else(|| home.join(".codex/config.toml")),
             detect_path: detect_codex_path(home),
             config_type: ConfigType::Codex,
         },
@@ -228,6 +227,13 @@ pub fn build_targets(home: &Path) -> Vec<EditorTarget> {
             config_type: ConfigType::McpJson,
         },
         EditorTarget {
+            name: "Qoder CLI",
+            agent_key: "qodercli".to_string(),
+            config_path: qodercli_settings_path(home),
+            detect_path: detect_qodercli_path(home),
+            config_type: ConfigType::QoderSettings,
+        },
+        EditorTarget {
             name: "Hermes Agent",
             agent_key: "hermes".to_string(),
             config_path: home.join(".hermes/config.yaml"),
@@ -341,6 +347,24 @@ fn detect_qoderwork_path(home: &Path) -> PathBuf {
             }
         }
     }
+    PathBuf::from("/nonexistent")
+}
+
+fn detect_qodercli_path(home: &Path) -> PathBuf {
+    let which_cmd = if cfg!(windows) { "where" } else { "which" };
+    if let Ok(output) = std::process::Command::new(which_cmd)
+        .arg("qodercli")
+        .output()
+        && output.status.success()
+    {
+        return PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    }
+
+    let settings_path = qodercli_settings_path(home);
+    if settings_path.exists() {
+        return settings_path;
+    }
+
     PathBuf::from("/nonexistent")
 }
 
@@ -792,6 +816,19 @@ mod augment_tests {
         assert_eq!(target.agent_key, "augment");
         assert_eq!(target.config_path, augment_vscode_mcp_path(home));
         assert!(matches!(target.config_type, ConfigType::AugmentVsCode));
+    }
+
+    #[test]
+    fn build_targets_includes_qodercli_settings_entry() {
+        let home = Path::new("/home/tester");
+        let target = build_targets(home)
+            .into_iter()
+            .find(|t| t.agent_key == "qodercli")
+            .expect("qodercli target should be registered");
+
+        assert_eq!(target.name, "Qoder CLI");
+        assert_eq!(target.config_path, home.join(".qoder/settings.json"));
+        assert!(matches!(target.config_type, ConfigType::QoderSettings));
     }
 
     // Writer-layer round-trip: verifies the McpJson writer preserves unrelated

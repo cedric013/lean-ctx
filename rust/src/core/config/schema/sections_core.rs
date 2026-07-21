@@ -746,6 +746,14 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             "LEAN_CTX_SHELL_ALLOW_WRITES",
         ),
     );
+    root.insert(
+        "write_allow_paths".into(),
+        key(
+            "string[]",
+            serde_json::json!(cfg.write_allow_paths),
+            "Absolute paths allowed for ctx_shell redirects and tee output; empty = OS temp directories",
+        ),
+    );
 
     sections.insert(
         "root".into(),
@@ -851,9 +859,13 @@ pub(super) fn build(sections: &mut BTreeMap<String, SectionSchema>) {
             key("bool", serde_json::json!(cfg.archive.ephemeral), "Replace large results with summary+ref (ctx_expand to retrieve). Env: LEAN_CTX_EPHEMERAL"),
         );
     archive.insert(
-            "ephemeral_min_tokens".into(),
-            key("usize", serde_json::json!(cfg.archive.ephemeral_min_tokens), "Minimum output tokens before the ephemeral firewall replaces inline body with summary+ref. Env: LEAN_CTX_EPHEMERAL_MIN_TOKENS"),
-        );
+        "ephemeral_min_tokens".into(),
+        key("usize", serde_json::json!(cfg.archive.ephemeral_min_tokens), "Minimum output tokens before the ephemeral firewall replaces inline body with summary+ref. Env: LEAN_CTX_EPHEMERAL_MIN_TOKENS"),
+    );
+    archive.insert(
+        "inline_max_bytes".into(),
+        key("usize", serde_json::json!(cfg.archive.inline_max_bytes), "Maximum ctx_shell(inline=true) output size in bytes before archive/firewall handling. Env: LEAN_CTX_INLINE_MAX_BYTES"),
+    );
     sections.insert(
         "archive".into(),
         SectionSchema {

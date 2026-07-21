@@ -5,6 +5,16 @@ const MAX_COMMAND_BYTES: usize = 8192;
 /// Validates a shell command before execution. Returns Some(error_message) if
 /// the command should be rejected, None if it's safe to run.
 pub fn validate_command(command: &str) -> Option<String> {
+    let write_allow_paths = crate::core::config::default_shell_write_allow_paths();
+    let project_root = crate::core::config::Config::find_project_root();
+    validate_command_with_write_allow_paths(command, &write_allow_paths, project_root.as_deref())
+}
+
+pub(crate) fn validate_command_with_write_allow_paths(
+    command: &str,
+    write_allow_paths: &[String],
+    project_root: Option<&str>,
+) -> Option<String> {
     if command.len() > MAX_COMMAND_BYTES {
         return Some(format!(
             "ERROR: Command too large ({} bytes, limit {}). \
@@ -18,7 +28,7 @@ pub fn validate_command(command: &str) -> Option<String> {
     // #931: strip heredoc bodies before the redirect scanner — a `>` inside a
     // heredoc body is opaque data, not a file-write redirect.
     let cmd_no_heredoc = crate::core::shell_allowlist::strip_all_heredoc_bodies(command);
-    if has_file_write_redirect(&cmd_no_heredoc) {
+    if has_file_write_redirect(&cmd_no_heredoc, write_allow_paths, project_root) {
         return Some(
             "ERROR: ctx_shell detected a file-write command (shell redirect > or >>). \
              Use the native Write tool to create/modify files. \
@@ -33,8 +43,7 @@ pub fn validate_command(command: &str) -> Option<String> {
     // `cmd | tee file` (piped) is output capture, not file authoring — the
     // primary output still goes to stdout for the agent. Only bare `tee file`
     // (not piped) is blocked as it is equivalent to `cat > file`.
-    let cmd_no_heredoc_lower = cmd_no_heredoc.to_lowercase();
-    if cmd_no_heredoc_lower.starts_with("tee ") && !cmd_no_heredoc_lower.contains("| tee ") {
+    if has_disallowed_tee_target(&cmd_no_heredoc, write_allow_paths, project_root) {
         return Some(
             "ERROR: ctx_shell detected a file-write command (tee without pipe). \
              Use the native Write tool to create/modify files. \
@@ -44,7 +53,7 @@ pub fn validate_command(command: &str) -> Option<String> {
         );
     }
 
-    if is_heredoc_file_write(command) {
+    if is_heredoc_file_write(command, write_allow_paths, project_root) {
         return Some(
             "ERROR: ctx_shell detected a heredoc writing to a file. \
              Use the native Write tool to create/modify files. \
@@ -165,7 +174,11 @@ fn download_to_file_reason(command: &str) -> Option<String> {
 
 /// Returns true only for heredocs that redirect to files (the dangerous pattern).
 /// Legitimate heredoc uses (input piping, inline scripts) are allowed through.
-fn is_heredoc_file_write(command: &str) -> bool {
+fn is_heredoc_file_write(
+    command: &str,
+    write_allow_paths: &[String],
+    project_root: Option<&str>,
+) -> bool {
     let has_heredoc = command.contains("<<");
     if !has_heredoc {
         return false;
@@ -179,7 +192,7 @@ fn is_heredoc_file_write(command: &str) -> bool {
     // #931: strip heredoc bodies so `>` / `>>` inside the body are not
     // mistaken for file-write redirects.
     let stripped = crate::core::shell_allowlist::strip_all_heredoc_bodies(command);
-    has_file_write_redirect(&stripped)
+    has_file_write_redirect(&stripped, write_allow_paths, project_root)
 }
 
 /// Detects shell redirect operators (`>` or `>>`) that write to files.
@@ -192,18 +205,112 @@ fn is_heredoc_file_write(command: &str) -> bool {
 /// variables (which we cannot resolve at parse time) is output capture,
 /// not file authoring.
 pub fn is_temp_redirect_target(target: &str) -> bool {
-    let t = target.trim_start_matches(['>', '&']);
-    let lower = t.to_lowercase();
-    lower.starts_with("/tmp/")
-        || lower.starts_with("/tmp")
-        || lower.contains("\\temp\\")
-        || lower.contains("\\tmp\\")
-        || lower.starts_with("$tmpdir/")
-        || lower.starts_with("${tmpdir}")
-        || t.starts_with('$')
-        || t.starts_with("${")
+    let write_allow_paths = crate::core::config::default_shell_write_allow_paths();
+    is_write_allowed_redirect_target(target, &write_allow_paths, None)
 }
-fn has_file_write_redirect(command: &str) -> bool {
+
+fn is_write_allowed_redirect_target(
+    target: &str,
+    write_allow_paths: &[String],
+    project_root: Option<&str>,
+) -> bool {
+    let t = target.trim_start_matches(['>', '&']);
+    if t.starts_with('$') || t.starts_with("${") {
+        // Preserve #989's escape hatch for harness-provided scratch paths.
+        return true;
+    }
+
+    let path = std::path::Path::new(t);
+    if !path.is_absolute() {
+        return false;
+    }
+    let resolved = resolve_path_for_comparison(path);
+    if project_root.is_some_and(|root| {
+        resolved.starts_with(resolve_path_for_comparison(std::path::Path::new(root)))
+    }) {
+        return false;
+    }
+    write_allow_paths.iter().any(|allowed| {
+        resolved.starts_with(resolve_path_for_comparison(std::path::Path::new(allowed)))
+    })
+}
+
+fn resolve_path_for_comparison(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::{Component, PathBuf};
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+
+    let mut unresolved = Vec::new();
+    let mut existing = normalized.clone();
+    while !existing.exists() {
+        let Some(name) = existing.file_name() else {
+            break;
+        };
+        unresolved.push(name.to_os_string());
+        if !existing.pop() {
+            break;
+        }
+    }
+    let mut resolved = crate::core::pathutil::canonicalize_secure_or_self(&existing);
+    for component in unresolved.iter().rev() {
+        resolved.push(component);
+    }
+    resolved
+}
+
+fn tee_targets(command: &str) -> Vec<String> {
+    crate::core::shell_allowlist::extract_all_commands_pub(command)
+        .into_iter()
+        .filter_map(|segment| {
+            let tokens = crate::core::shell_allowlist::shell_tokenize(segment.trim());
+            let first = tokens.first()?;
+            if first.rsplit('/').next().unwrap_or(first) != "tee" {
+                return None;
+            }
+            let mut after_separator = false;
+            Some(
+                tokens
+                    .iter()
+                    .skip(1)
+                    .find(|token| {
+                        if *token == "--" {
+                            after_separator = true;
+                            return false;
+                        }
+                        after_separator || !token.starts_with('-')
+                    })
+                    .cloned()
+                    .unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
+fn has_disallowed_tee_target(
+    command: &str,
+    write_allow_paths: &[String],
+    project_root: Option<&str>,
+) -> bool {
+    tee_targets(command).into_iter().any(|target| {
+        !target.is_empty()
+            && !is_write_allowed_redirect_target(&target, write_allow_paths, project_root)
+    })
+}
+
+fn has_file_write_redirect(
+    command: &str,
+    write_allow_paths: &[String],
+    project_root: Option<&str>,
+) -> bool {
     let bytes = command.as_bytes();
     let len = bytes.len();
     let mut i = 0;
@@ -246,7 +353,7 @@ fn has_file_write_redirect(command: &str) -> bool {
             }
             // #848: allow redirects to temp directories — agents capture
             // build output for grepping, not writing persistent files.
-            if is_temp_redirect_target(&target) {
+            if is_write_allowed_redirect_target(&target, write_allow_paths, project_root) {
                 i += 1;
                 continue;
             }
@@ -411,8 +518,90 @@ mod tests {
     #[test]
     fn validate_blocks_file_writes() {
         assert!(validate_command("echo 'data' > output.txt").is_some());
-        assert!(validate_command("tee /tmp/file.txt").is_some());
+        assert!(validate_command("tee output.txt").is_some());
         assert!(validate_command("printf 'hello' > test.txt").is_some());
+    }
+
+    #[test]
+    fn validate_allows_literal_temp_redirect_and_tee_targets() {
+        let paths = crate::core::config::default_shell_write_allow_paths();
+        assert!(
+            validate_command_with_write_allow_paths(
+                "go test ./... > /private/tmp/agent-test.log 2>&1",
+                &paths,
+                None
+            )
+            .is_none()
+        );
+        assert!(
+            validate_command_with_write_allow_paths(
+                "tee /private/tmp/agent-test.log",
+                &paths,
+                None
+            )
+            .is_none()
+        );
+        assert!(
+            validate_command_with_write_allow_paths(
+                "go test ./... | tee /private/tmp/agent-test.log",
+                &paths,
+                None
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn validate_blocks_redirects_and_piped_tee_into_project_root() {
+        let root = std::env::current_dir().expect("test cwd");
+        let target = root.join("agent-test.log");
+        let target = target.to_string_lossy();
+        let paths = crate::core::config::default_shell_write_allow_paths();
+        assert!(
+            validate_command_with_write_allow_paths(
+                &format!("echo output > {target}"),
+                &paths,
+                Some(root.to_string_lossy().as_ref())
+            )
+            .is_some()
+        );
+        assert!(
+            validate_command_with_write_allow_paths(
+                &format!("go test | tee {target}"),
+                &paths,
+                Some(root.to_string_lossy().as_ref())
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn validate_allows_configured_external_write_path() {
+        let paths = vec!["/var/agent-scratch".to_string()];
+        assert!(
+            validate_command_with_write_allow_paths(
+                "go test ./... >> /var/agent-scratch/gotest.log",
+                &paths,
+                Some("/workspace/project")
+            )
+            .is_none()
+        );
+        assert!(
+            validate_command_with_write_allow_paths(
+                "go test ./... | tee /var/agent-scratch/gotest.log",
+                &paths,
+                Some("/workspace/project")
+            )
+            .is_none()
+        );
+        assert!(
+            validate_command_with_write_allow_paths(
+                "echo output > /var/other/gotest.log",
+                &paths,
+                Some("/workspace/project")
+            )
+            .is_some()
+        );
     }
 
     #[test]

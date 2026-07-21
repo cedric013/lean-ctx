@@ -172,16 +172,13 @@ pub(crate) fn agent_mcp_targets(
             home.join(".codeium/windsurf/mcp_config.json"),
             ConfigType::McpJson,
         ),
-        "codex" => {
-            let codex_dir =
-                crate::core::home::resolve_codex_dir().unwrap_or_else(|| home.join(".codex"));
-            push(
-                &mut targets,
-                "Codex CLI",
-                codex_dir.join("config.toml"),
-                ConfigType::Codex,
-            );
-        }
+        "codex" => push(
+            &mut targets,
+            "Codex CLI",
+            crate::core::home::resolve_codex_config_path()
+                .unwrap_or_else(|| home.join(".codex/config.toml")),
+            ConfigType::Codex,
+        ),
         "grok" => push(
             &mut targets,
             "Grok",
@@ -242,6 +239,12 @@ pub(crate) fn agent_mcp_targets(
             "QoderWork",
             crate::core::editor_registry::qoderwork_mcp_path(home),
             ConfigType::McpJson,
+        ),
+        "qodercli" => push(
+            &mut targets,
+            "Qoder CLI",
+            crate::core::editor_registry::qodercli_settings_path(home),
+            ConfigType::QoderSettings,
         ),
         "cline" => push(
             &mut targets,
@@ -435,16 +438,13 @@ pub fn disable_agent_mcp(agent: &str, overwrite_invalid: bool) -> Result<(), Str
             home.join(".codeium/windsurf/mcp_config.json"),
             ConfigType::McpJson,
         ),
-        "codex" => {
-            let codex_dir =
-                crate::core::home::resolve_codex_dir().unwrap_or_else(|| home.join(".codex"));
-            push(
-                &mut targets,
-                "Codex CLI",
-                codex_dir.join("config.toml"),
-                ConfigType::Codex,
-            );
-        }
+        "codex" => push(
+            &mut targets,
+            "Codex CLI",
+            crate::core::home::resolve_codex_config_path()
+                .unwrap_or_else(|| home.join(".codex/config.toml")),
+            ConfigType::Codex,
+        ),
         "grok" => push(
             &mut targets,
             "Grok",
@@ -506,6 +506,12 @@ pub fn disable_agent_mcp(agent: &str, overwrite_invalid: bool) -> Result<(), Str
             "QoderWork",
             crate::core::editor_registry::qoderwork_mcp_path(&home),
             ConfigType::McpJson,
+        ),
+        "qodercli" => push(
+            &mut targets,
+            "Qoder CLI",
+            crate::core::editor_registry::qodercli_settings_path(&home),
+            ConfigType::QoderSettings,
         ),
         "cline" => push(
             &mut targets,
@@ -637,4 +643,40 @@ pub fn disable_agent_mcp(agent: &str, overwrite_invalid: bool) -> Result<(), Str
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod qodercli_tests {
+    use super::*;
+
+    #[test]
+    fn qodercli_agent_target_uses_settings_json() {
+        let home = std::path::Path::new("/home/tester");
+        let targets = agent_mcp_targets("qodercli", home).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "Qoder CLI");
+        assert_eq!(targets[0].config_path, home.join(".qoder/settings.json"));
+    }
+
+    #[test]
+    fn qodercli_agent_target_uses_qoder_settings_writer() {
+        let home = std::path::Path::new("/home/tester");
+        let targets = agent_mcp_targets("qodercli", home).unwrap();
+
+        assert_eq!(targets[0].agent_key, "qodercli");
+        assert_eq!(targets[0].config_type, ConfigType::QoderSettings);
+    }
+
+    #[test]
+    fn qodercli_agent_target_is_separate_from_qoder_ide_targets() {
+        let home = std::path::Path::new("/home/tester");
+        let cli = agent_mcp_targets("qodercli", home).unwrap();
+        let ide = agent_mcp_targets("qoder", home).unwrap();
+
+        assert!(
+            ide.iter()
+                .all(|target| target.config_path != cli[0].config_path)
+        );
+    }
 }

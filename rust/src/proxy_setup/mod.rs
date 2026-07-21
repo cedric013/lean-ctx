@@ -79,8 +79,8 @@ pub fn preview_proxy_cleanup(home: &Path) {
         }
     }
 
-    let codex_dir = crate::core::home::resolve_codex_dir().unwrap_or_else(|| home.join(".codex"));
-    let codex_path = codex_dir.join("config.toml");
+    let codex_path = crate::core::home::resolve_codex_config_path()
+        .unwrap_or_else(|| home.join(".codex/config.toml"));
     if let Ok(content) = std::fs::read_to_string(codex_path)
         && codex_config_has_local_proxy_entry(&content)
     {
@@ -135,8 +135,8 @@ pub fn cleanup_stale_proxy_env(home: &Path) -> usize {
         cleaned += 1;
     }
 
-    let codex_dir = crate::core::home::resolve_codex_dir().unwrap_or_else(|| home.join(".codex"));
-    let codex_path = codex_dir.join("config.toml");
+    let codex_path = crate::core::home::resolve_codex_config_path()
+        .unwrap_or_else(|| home.join(".codex/config.toml"));
     if let Ok(content) = std::fs::read_to_string(&codex_path)
         && codex_config_has_local_proxy_entry(&content)
     {
