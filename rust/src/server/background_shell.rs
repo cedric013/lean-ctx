@@ -171,9 +171,7 @@ pub fn cancel(id: &str) -> Option<JobState> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ForegroundResult, JobState, cancel, run_foreground_or_detach, start, status,
-    };
+    use super::{ForegroundResult, JobState, cancel, run_foreground_or_detach, start, status};
     use std::time::Duration;
 
     #[test]
