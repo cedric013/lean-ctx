@@ -23,11 +23,15 @@
 //! shape mismatch, unextractable query — routes nothing: the request forwards
 //! unchanged. A routing bug can cost savings, never availability.
 
+use super::routing_feedback::RoutingFeedback;
 use crate::core::config::{
     ResolvedProvider, RoutingRules, Upstreams, WireShape, parse_route_target,
 };
 use crate::core::ocla::registry::OclaRegistry;
 use crate::core::ocla::types::{ModelRouteRequest, OclaRequestContext};
+use std::sync::OnceLock;
+
+static ROUTING_FEEDBACK: OnceLock<RoutingFeedback> = OnceLock::new();
 
 #[cfg(test)]
 use crate::core::ocla::builtin::model_router::BuiltinModelRouter;
@@ -83,6 +87,13 @@ pub fn route_request(
     rules: &RoutingRules,
     xlat_ok: bool,
 ) -> Option<RouteDecision> {
+    if ROUTING_FEEDBACK
+        .get_or_init(RoutingFeedback::new)
+        .should_use_fallback()
+    {
+        tracing::warn!("routing quality below threshold, using fallback");
+        return None;
+    }
     if !rules.is_active() {
         return None;
     }
@@ -149,7 +160,7 @@ pub fn route_request(
     }
 
     parsed["model"] = serde_json::Value::String(new_model.clone());
-    Some(RouteDecision {
+    let decision = RouteDecision {
         model: new_model,
         routed_from: requested,
         provider_id: resolved.provider_id,
@@ -157,7 +168,11 @@ pub fn route_request(
         credential: resolved.credential,
         local: resolved.local,
         xlat: resolved.xlat,
-    })
+    };
+    ROUTING_FEEDBACK
+        .get_or_init(RoutingFeedback::new)
+        .record_decision(&decision.routed_from, &decision.model, "routing");
+    Some(decision)
 }
 
 /// A resolved route target. `Default` = model-only rewrite (upstream unchanged).
@@ -655,5 +670,12 @@ mod tests {
                 "{label} must not route in M1"
             );
         }
+    }
+
+    #[test]
+    fn poor_feedback_triggers_fallback() {
+        let feedback = RoutingFeedback::new();
+        feedback.record_outcome("expensive", "fast", 0.4, 0, 0);
+        assert!(feedback.should_use_fallback());
     }
 }
