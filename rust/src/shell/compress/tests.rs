@@ -1657,3 +1657,25 @@ fn temp_redirect_target_allowed() {
         "/home/user/output.log"
     ));
 }
+
+// #1130: chained commands must not be pattern-compressed
+#[test]
+fn chained_command_detection() {
+    use super::engine::is_chained_command;
+    assert!(is_chained_command("git fetch && git worktree add /tmp/wt"));
+    assert!(is_chained_command("git status; git log --oneline -3"));
+    assert!(!is_chained_command("git status"));
+    assert!(!is_chained_command("echo 'a && b'"));
+    assert!(!is_chained_command("echo \"a; b\""));
+}
+
+#[test]
+fn chained_git_fetch_preserves_worktree_output() {
+    let cmd = "git fetch origin feat && git worktree add /tmp/wt -b feat origin/feat";
+    let output = "From github.com:org/repo\n * branch feat -> FETCH_HEAD\nPreparing worktree (new branch 'feat')\nHEAD is now at abc1234 initial commit\n";
+    let compressed = super::engine::compress_if_beneficial_pub(cmd, output);
+    assert!(
+        compressed.contains("worktree") || compressed.contains("Preparing"),
+        "#1130: worktree output must survive chain compression, got: {compressed}"
+    );
+}
