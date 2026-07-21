@@ -8,12 +8,6 @@ use super::types::{OclaError, OclaResult};
 static NEXT_FORK_ID: AtomicU64 = AtomicU64::new(1);
 static GLOBAL_CAPSULE_STORE: OnceLock<CapsuleStore> = OnceLock::new();
 
-pub(crate) fn global_capsule_store() -> &'static CapsuleStore {
-    GLOBAL_CAPSULE_STORE.get_or_init(CapsuleStore::new)
-}
-
-static GLOBAL_CAPSULE_STORE: OnceLock<CapsuleStore> = OnceLock::new();
-
 #[must_use]
 pub fn global_capsule_store() -> &'static CapsuleStore {
     GLOBAL_CAPSULE_STORE.get_or_init(CapsuleStore::new)
@@ -100,6 +94,7 @@ impl CapsuleStore {
         resolve_entries(&entries, capsule_ref)
     }
 
+    #[cfg(test)]
     pub(crate) fn budget_tokens(&self, capsule_ref: &str) -> OclaResult<u64> {
         let entries = self
             .entries

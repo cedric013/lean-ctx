@@ -82,6 +82,10 @@ pub(crate) fn verbatim_json_crush(
 /// Distinct-value ratio at/above which the lossy stage drops an all-present
 /// column. Conservative: only near-unique noise (timestamps, UUIDs) is dropped,
 /// so genuinely varying-but-meaningful columns are kept.
+/// #1129: minimum token savings to justify compression overhead (tee-log pointer
+/// + potential read-back round-trip). Below this floor, verbatim is cheaper.
+const MIN_USEFUL_SAVINGS: usize = 100;
+
 const LOSSY_DROP_ENTROPY: f64 = 0.9;
 
 /// Opt-in (#936) **lossy** escalation for a verbatim data command's JSON, used
@@ -320,11 +324,14 @@ fn compress_if_beneficial_with_exit(command: &str, output: &str, exit_code: i32)
 
     let original_tokens = count_tokens(output);
 
-    if original_tokens < 30 {
+    // #1129: small outputs are cheaper verbatim than compressed + tee-log round-trip.
+    // The tee-log pointer alone costs ~50 tokens; a second read-back call doubles
+    // the token cost. Outputs below this floor are never worth compressing.
+    if original_tokens < 200 {
         return output.to_string();
     }
 
-    let min_output_tokens = 5;
+    let min_output_tokens = 20;
 
     let cfg = crate::core::config::Config::load();
     let policy = crate::shell::output_policy::classify(command, &cfg.excluded_commands);
@@ -415,7 +422,11 @@ fn compress_if_beneficial_with_exit(command: &str, output: &str, exit_code: i32)
             && !compressed.trim().is_empty()
         {
             let compressed_tokens = count_tokens(&compressed);
-            if compressed_tokens >= min_output_tokens && compressed_tokens < original_tokens {
+            let savings = original_tokens.saturating_sub(compressed_tokens);
+            if compressed_tokens >= min_output_tokens
+                && compressed_tokens < original_tokens
+                && savings >= MIN_USEFUL_SAVINGS
+            {
                 return shell_savings_footer(&compressed, original_tokens, compressed_tokens);
             }
         }
@@ -436,7 +447,11 @@ fn compress_if_beneficial_with_exit(command: &str, output: &str, exit_code: i32)
         }
 
         let compressed_tokens = count_tokens(&compressed);
-        if compressed_tokens >= min_output_tokens && compressed_tokens < original_tokens {
+        let savings = original_tokens.saturating_sub(compressed_tokens);
+        if compressed_tokens >= min_output_tokens
+            && compressed_tokens < original_tokens
+            && savings >= MIN_USEFUL_SAVINGS
+        {
             let ratio = compressed_tokens as f64 / original_tokens as f64;
             if ratio < 0.05 && original_tokens > 100 && original_tokens < 2000 {
                 tracing::warn!("compression removed >95% of small output, returning original");

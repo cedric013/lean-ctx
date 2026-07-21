@@ -1679,3 +1679,18 @@ fn chained_git_fetch_preserves_worktree_output() {
         "#1130: worktree output must survive chain compression, got: {compressed}"
     );
 }
+
+// #1129: small output should NOT be compressed — verbatim is cheaper
+#[test]
+fn small_output_stays_verbatim() {
+    let cmd = "ls -la /tmp/templates";
+    let output: String = (0..59)
+        .map(|i| format!("template_{i:02}.yaml"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let compressed = super::engine::compress_if_beneficial_pub(cmd, &output);
+    assert_eq!(
+        compressed, output,
+        "#1129: output under 200 tokens must stay verbatim, got: {compressed}"
+    );
+}

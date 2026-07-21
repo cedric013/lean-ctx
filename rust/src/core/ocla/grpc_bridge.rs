@@ -98,15 +98,12 @@ pub async fn start_grpc_server(config: &GrpcConfig) -> OclaResult<()> {
         }
     });
 
-    let mut stored_task = match grpc_task().lock() {
-        Ok(guard) => guard,
-        Err(_) => {
-            task.abort();
-            GRPC_RUNNING.store(false, Ordering::Release);
-            return Err(OclaError::InvalidRequest(
-                "OCLA gRPC task state is unavailable".into(),
-            ));
-        }
+    let Ok(mut stored_task) = grpc_task().lock() else {
+        task.abort();
+        GRPC_RUNNING.store(false, Ordering::Release);
+        return Err(OclaError::InvalidRequest(
+            "OCLA gRPC task state is unavailable".into(),
+        ));
     };
     if GRPC_RUNNING.load(Ordering::Acquire)
         || stored_task
@@ -128,12 +125,11 @@ pub async fn start_grpc_server(config: &GrpcConfig) -> OclaResult<()> {
 
 /// Stop the OCLA gRPC listener task, if one is active.
 pub async fn stop_grpc_server() {
-    let task = match grpc_task().lock() {
-        Ok(mut stored_task) => stored_task.take(),
-        Err(_) => {
-            warn!("OCLA gRPC task state is unavailable during shutdown");
-            None
-        }
+    let task = if let Ok(mut stored_task) = grpc_task().lock() {
+        stored_task.take()
+    } else {
+        warn!("OCLA gRPC task state is unavailable during shutdown");
+        None
     };
     if let Some(task) = task {
         task.abort();

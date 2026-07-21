@@ -7,7 +7,8 @@ use tracing::{debug, warn};
 
 use crate::core::config::OclaConfig;
 
-use super::{OclaResult, ocla_router};
+use super::OclaResult;
+use super::wire_api::ocla_router;
 
 /// Owns the OCLA REST server task and its graceful-shutdown signal.
 pub struct OclaRuntime {
@@ -35,7 +36,7 @@ impl OclaRuntime {
         let shutdown = cancel.clone();
         let rest_handle = tokio::spawn(async move {
             if let Err(error) = serve(listener, ocla_router())
-                .with_graceful_shutdown(shutdown.cancelled())
+                .with_graceful_shutdown(shutdown.cancelled_owned())
                 .await
             {
                 warn!(error = %error, "OCLA REST server stopped with an error");

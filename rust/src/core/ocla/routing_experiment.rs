@@ -112,7 +112,7 @@ impl RoutingExperiment {
                 / sample_size as f64;
             let score = success_rate * avg_savings;
 
-            if best_score.map_or(true, |current| score > current) {
+            if best_score.is_none_or(|current| score > current) {
                 best_score = Some(score);
                 result = Some(ExperimentResult {
                     winner: variant.name.clone(),

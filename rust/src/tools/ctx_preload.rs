@@ -17,7 +17,7 @@ pub fn handle(
     cache: &mut SessionCache,
     task: &str,
     path: Option<&str>,
-    crp_mode: CrpMode,
+    _crp_mode: CrpMode,
 ) -> (String, bool) {
     if task.trim().is_empty() {
         return (

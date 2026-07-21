@@ -454,7 +454,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = json_response(response).await;
         assert_eq!(body["version"], OCLA_API_VERSION);
-        assert_eq!(body["components"].as_array().expect("components").len(), 18);
+        assert_eq!(body["components"].as_array().expect("components").len(), 21);
         assert!(body.get("overall").is_some());
         assert!(body.get("uptime_seconds").is_some());
     }

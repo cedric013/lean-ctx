@@ -15,7 +15,9 @@ pub enum CachePolicy {
     /// Global TTL for all models.
     Uniform,
     /// Per-model TTL overrides selected by model-prefix match.
-    ModelAware { overrides: HashMap<String, Duration> },
+    ModelAware {
+        overrides: HashMap<String, Duration>,
+    },
 }
 
 static GLOBAL_RESPONSE_CACHE: OnceLock<ResponseCache> = OnceLock::new();
@@ -282,7 +284,10 @@ mod tests {
     fn cache_hit_and_miss_update_stats() {
         let cache = ResponseCache::new(4, Duration::from_mins(1));
         let key = cache_key("model-a");
-        cache.put(key.clone(), response(b"answer", Instant::now(), Duration::ZERO));
+        cache.put(
+            key.clone(),
+            response(b"answer", Instant::now(), Duration::ZERO),
+        );
 
         assert_eq!(cache.get(&key).unwrap().body, b"answer");
         assert!(cache.get(&cache_key("model-b")).is_none());
@@ -323,10 +328,19 @@ mod tests {
         let second = cache_key("second");
         let third = cache_key("third");
 
-        cache.put(first.clone(), response(b"1", Instant::now(), Duration::ZERO));
-        cache.put(second.clone(), response(b"2", Instant::now(), Duration::ZERO));
+        cache.put(
+            first.clone(),
+            response(b"1", Instant::now(), Duration::ZERO),
+        );
+        cache.put(
+            second.clone(),
+            response(b"2", Instant::now(), Duration::ZERO),
+        );
         assert!(cache.get(&first).is_some());
-        cache.put(third.clone(), response(b"3", Instant::now(), Duration::ZERO));
+        cache.put(
+            third.clone(),
+            response(b"3", Instant::now(), Duration::ZERO),
+        );
 
         assert!(cache.get(&second).is_none());
         assert!(cache.get(&first).is_some());
@@ -378,9 +392,7 @@ mod tests {
         let mut cache = ResponseCache::new(4, Duration::from_secs(60));
         let gpt = cache_key("gpt-4o");
         let other = cache_key("other-model");
-        let created_at = Instant::now()
-            .checked_sub(Duration::from_secs(5))
-            .unwrap();
+        let created_at = Instant::now().checked_sub(Duration::from_secs(5)).unwrap();
 
         cache.put(gpt.clone(), response(b"gpt", created_at, Duration::ZERO));
         cache.put(
@@ -399,9 +411,7 @@ mod tests {
     #[test]
     fn uniform_policy_uses_global_ttl() {
         let cache = ResponseCache::new(4, Duration::from_secs(1));
-        let created_at = Instant::now()
-            .checked_sub(Duration::from_secs(2))
-            .unwrap();
+        let created_at = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
         let first = cache_key("gpt-4o");
         let second = cache_key("other-model");
 
@@ -423,9 +433,7 @@ mod tests {
     fn set_policy_changes_behavior() {
         let mut cache = ResponseCache::new(4, Duration::from_secs(60));
         let gpt = cache_key("gpt-4o");
-        let created_at = Instant::now()
-            .checked_sub(Duration::from_secs(5))
-            .unwrap();
+        let created_at = Instant::now().checked_sub(Duration::from_secs(5)).unwrap();
 
         cache.put(gpt.clone(), response(b"answer", created_at, Duration::ZERO));
         assert!(cache.get(&gpt).is_some());
