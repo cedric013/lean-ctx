@@ -1100,7 +1100,8 @@ mod gateway_server_tests {
 
 #[cfg(test)]
 mod ocla_tests {
-    use super::{GrpcConfig, OclaConfig};
+    use super::OclaConfig;
+    use crate::core::ocla::grpc_bridge::GrpcConfig;
     use crate::core::ocla::sidecar::SidecarConfig;
     use serde::Deserialize;
 

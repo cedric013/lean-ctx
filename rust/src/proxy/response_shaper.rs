@@ -149,7 +149,7 @@ fn is_protected_content(text: &str) -> bool {
         return true;
     }
     // Very short responses (overhead > savings)
-    if text.len() < 100 {
+    if text.len() < 50 {
         return true;
     }
     false
@@ -177,7 +177,7 @@ fn contains_error_indicators(text: &str) -> bool {
 
 static PREAMBLE_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
-        r"^(Great|Sure|Absolutely|Of course|Certainly|Perfect|Alright)[,!.]?\s*(I('ll| will| can)|Let me|I understand|I see)",
+        r"(?i)^(Great|Sure|Absolutely|Of course|Certainly|Perfect|Alright)[,!.]?\s*(I('ll| will| can)|Let me|I understand|I see)",
         r"^(Based on|Looking at|After reviewing|After reading|Having reviewed)\s+(my analysis|the code|your request|the file|the output|the error)",
         r"^I('d be happy to|'ll now|'m going to|'ll go ahead and|'ll start by|'ll take a look)\s+",
         r"^(Let me|Allow me to|I'll|I will)\s+(check|look|read|examine|inspect|analyze|review|investigate)\s+",
@@ -193,10 +193,9 @@ fn strip_preamble(text: &str) -> String {
     let first_line = &text[..first_line_end];
 
     for pattern in PREAMBLE_PATTERNS.iter() {
-        if let Some(m) = pattern.find(first_line) {
-            let remainder = text[m.end()..].trim_start();
+        if pattern.find(first_line).is_some() {
+            let remainder = text[first_line_end..].trim_start();
             if !remainder.is_empty() {
-                // Capitalize first char of remainder
                 let mut chars = remainder.chars();
                 if let Some(first) = chars.next() {
                     return format!("{}{}", first.to_uppercase(), chars.as_str());
