@@ -101,21 +101,24 @@ fn parse_one(obj: &Map<String, Value>) -> Result<AnchorOp, String> {
             let start_line = req_line(obj, "start_line")
                 .map_err(|e| missing.push(e))
                 .ok();
-            let start_hash = req_str(obj, "start_hash").map_err(|e| missing.push(e)).ok();
+            // #1114: hashes are optional — when omitted, the edit proceeds
+            // without conflict detection. This makes replace_lines usable
+            // from ctx_read(mode="lines:N-M") output which lacks anchors.
+            let start_hash = get_str(obj, "start_hash").unwrap_or_default();
             let end_line = req_line(obj, "end_line").map_err(|e| missing.push(e)).ok();
-            let end_hash = req_str(obj, "end_hash").map_err(|e| missing.push(e)).ok();
+            let end_hash = get_str(obj, "end_hash").unwrap_or_default();
             let new_text = req_new_text(obj).map_err(|e| missing.push(e)).ok();
             if !missing.is_empty() {
                 return Err(format!(
-                    "replace_lines requires start_line, start_hash, end_line, end_hash, new_text — {}",
+                    "replace_lines requires start_line, end_line, new_text                      (start_hash/end_hash optional for conflict detection) — {}",
                     missing.join("; ")
                 ));
             }
             Ok(AnchorOp::ReplaceLines {
                 start_line: start_line.unwrap(),
-                start_hash: start_hash.unwrap(),
+                start_hash,
                 end_line: end_line.unwrap(),
-                end_hash: end_hash.unwrap(),
+                end_hash,
                 new_text: new_text.unwrap(),
             })
         }

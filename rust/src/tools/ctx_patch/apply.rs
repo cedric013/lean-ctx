@@ -200,12 +200,16 @@ pub(crate) fn resolve_ops(
                     return Err(ResolveError::Invalid(e));
                 }
                 let span_len = end_line - start_line;
-                let start_ok = lines
-                    .get(*start_line - 1)
-                    .is_some_and(|cur| anchor::hash_matches(cur, start_hash));
-                let end_ok = lines
-                    .get(*end_line - 1)
-                    .is_some_and(|cur| anchor::hash_matches(cur, end_hash));
+                // #1114: empty hash = "no conflict check requested". This
+                // makes replace_lines usable without mode=anchored output.
+                let start_ok = start_hash.is_empty()
+                    || lines
+                        .get(*start_line - 1)
+                        .is_some_and(|cur| anchor::hash_matches(cur, start_hash));
+                let end_ok = end_hash.is_empty()
+                    || lines
+                        .get(*end_line - 1)
+                        .is_some_and(|cur| anchor::hash_matches(cur, end_hash));
                 if start_ok && end_ok {
                     edits.push(ResolvedEdit {
                         start_idx: start_line - 1,
