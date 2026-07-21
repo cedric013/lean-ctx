@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, ErrorKind, Seek, SeekFrom, Write};
@@ -35,7 +34,7 @@ pub struct UnifiedSavingsEventV2 {
 }
 
 /// Comparison of the legacy and unified savings ledgers.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReconciliationReport {
     pub matched: usize,
     pub unmatched_legacy: usize,
@@ -94,7 +93,6 @@ impl FileUnifiedLedger {
         result
     }
 
-    #[cfg(test)]
     fn read_legacy_events(&self) -> Vec<SavingsEvent> {
         let events_path = self.path.with_file_name("events.jsonl");
         if events_path.exists() {
@@ -104,7 +102,6 @@ impl FileUnifiedLedger {
         }
     }
 
-    #[cfg(test)]
     /// Compares legacy and unified entries by hash and reports accounting drift.
     pub(crate) fn reconcile(&self) -> OclaResult<ReconciliationReport> {
         let legacy = self.read_legacy_events();

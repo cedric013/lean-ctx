@@ -34,6 +34,15 @@ pub fn register(app: Command) -> Command {
             .about("Inspect Open Context & Token Lifecycle Architecture state")
             .subcommand(Command::new("status").about("Show OCLA status and ledger coverage"))
             .subcommand(
+                Command::new("reconcile")
+                    .about("Reconcile legacy and unified savings ledgers")
+                    .arg(
+                        clap::Arg::new("json")
+                            .long("json")
+                            .action(clap::ArgAction::SetTrue),
+                    ),
+            )
+            .subcommand(
                 Command::new("ledger")
                     .about("Inspect the savings ledger")
                     .subcommand(Command::new("summary").about("Per-mechanism breakdown"))
@@ -60,9 +69,36 @@ pub fn handle(matches: &ArgMatches) -> Result<()> {
     match matches.subcommand() {
         Some(("ocla", nested)) => return handle(nested),
         Some(("status", _)) | None => print_status(),
+        Some(("reconcile", nested)) => return handle_reconcile(nested),
         Some(("ledger", nested)) => return handle_ledger(nested),
         Some((name, _)) => bail!("unknown ocla subcommand: {name}"),
     }
+    Ok(())
+}
+
+fn handle_reconcile(matches: &ArgMatches) -> Result<()> {
+    let ledger = crate::core::ocla::unified_ledger::FileUnifiedLedger::from_data_dir()
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let report = ledger
+        .reconcile()
+        .map_err(|error| anyhow!(error.to_string()))?;
+
+    if matches.get_flag("json") {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("Reconciliation report");
+        println!("  Metric               Value");
+        println!("  -------------------  -----");
+        println!("  Matched              {}", report.matched);
+        println!("  Unmatched legacy     {}", report.unmatched_legacy);
+        println!("  Unmatched unified    {}", report.unmatched_unified);
+        println!("  Token drift          {}", report.token_drift);
+        println!("  Double-bookings      {}", report.double_bookings.len());
+        for hash in &report.double_bookings {
+            println!("    {hash}");
+        }
+    }
+
     Ok(())
 }
 
@@ -306,6 +342,16 @@ mod tests {
             .expect("status should parse");
         let (_, ocla) = matches.subcommand().expect("ocla subcommand");
         assert!(matches!(ocla.subcommand_name(), Some("status")));
+    }
+
+    #[test]
+    fn register_accepts_reconcile_json() {
+        let matches = register(Command::new("lean-ctx"))
+            .try_get_matches_from(["lean-ctx", "ocla", "reconcile", "--json"])
+            .expect("reconcile should parse");
+        let (_, ocla) = matches.subcommand().expect("ocla subcommand");
+        let (_, reconcile) = ocla.subcommand().expect("reconcile subcommand");
+        assert!(reconcile.get_flag("json"));
     }
 
     fn event(mechanism: &str, saved_tokens: u64) -> SavingsEvent {
