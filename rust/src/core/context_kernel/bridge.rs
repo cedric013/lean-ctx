@@ -1,8 +1,7 @@
 //! Runtime integration helpers for the Context Control Kernel.
 
 use super::orchestrator::ContextKernel;
-#[allow(clippy::wildcard_imports)]
-use super::types::*;
+use super::types::{ContextPlanV1, ContextReceiptV1, PlanEntry, ReceiptOutcome, RetrievalContext};
 
 /// Result of kernel enrichment for compose integration.
 #[derive(Debug, Clone)]
@@ -157,7 +156,7 @@ pub fn format_plan_summary(plan: &ContextPlanV1) -> String {
     ));
 
     let mut providers: Vec<_> = plan.provider_stats.iter().collect();
-    providers.sort_unstable_by_key(|(left, _)| *left);
+    providers.sort_unstable_by_key(|(k, _)| *k);
     for (provider, stat) in providers {
         out.push_str(&format!(
             "  {provider}: {}/{} candidates, {} tokens\n",
@@ -171,6 +170,7 @@ pub fn format_plan_summary(plan: &ContextPlanV1) -> String {
 mod tests {
     use std::collections::HashMap;
 
+    use super::super::types::{PlanBudget, ProviderStat};
     use super::*;
 
     fn plan() -> ContextPlanV1 {

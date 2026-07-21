@@ -8,8 +8,11 @@ use crate::core::context_field::{
     normalize_token_cost,
 };
 
-#[allow(clippy::wildcard_imports)]
-use super::types::*;
+use super::types::{
+    CandidateProvider, ContextObjectKind, ContextObjectV1, ContextPlanV1, ContextReceiptV1,
+    ExcludedEntry, PlanBudget, PlanEntry, ProviderStat, QualitySignal, ReceiptOutcome,
+    RetrievalContext,
+};
 
 /// The Context Control Kernel — orchestrates candidate gathering, Phi scoring,
 /// budget-optimal selection, and plan/receipt generation.
@@ -315,6 +318,7 @@ fn receipt_outcome_name(outcome: ReceiptOutcome) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::super::types::{Freshness, SensitivityLevel, SideEffectPolicy};
     use std::collections::HashMap;
 
     use crate::core::context_field::{ContextItemId, TokenBudget, ViewCosts};

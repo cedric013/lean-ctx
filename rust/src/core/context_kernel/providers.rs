@@ -10,8 +10,10 @@ use crate::core::procedural_memory::{ProceduralStore, Procedure};
 use crate::core::session::SessionState;
 use crate::core::tokens::count_tokens;
 
-#[allow(clippy::wildcard_imports)]
-use super::types::*;
+use super::types::{
+    CandidateProvider, ContextObjectKind, ContextObjectV1, Freshness, RetrievalContext,
+    SensitivityLevel, SideEffectPolicy,
+};
 
 const KNOWLEDGE_PROVIDER: &str = "knowledge.facts";
 const SESSION_PROVIDER: &str = "session.state";
