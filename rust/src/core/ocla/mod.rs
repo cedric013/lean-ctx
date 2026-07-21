@@ -13,6 +13,7 @@ pub mod registry;
 pub mod response_cache;
 pub mod routing_quality;
 pub mod sidecar;
+pub mod tracing;
 pub mod traits;
 pub mod types;
 pub mod unified_ledger;
