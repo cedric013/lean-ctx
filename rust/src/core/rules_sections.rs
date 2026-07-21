@@ -118,10 +118,16 @@ pub fn shadow_minimal_section(p: &ToolProfile) -> String {
         exclusives.push("ctx_knowledge / ctx_session (memory)");
     }
 
+    let edit_line = if has(p, "ctx_patch") {
+        "File editing → native Edit/StrReplace (lean-ctx only handles reads); if denied, use ctx_patch.\n"
+    } else {
+        "File editing → native Edit/StrReplace (lean-ctx only handles reads).\n"
+    };
+
     format!(
         "lean-ctx shadow mode: native read/search/shell calls auto-route to ctx_* \
          — no tool-mapping needed.\n\
-         File editing → native Edit/StrReplace (lean-ctx only handles reads); if denied, use ctx_patch.\n\
+         {edit_line}\
          Exclusive tools (no native trigger): {}.",
         exclusives.join(", ")
     )
