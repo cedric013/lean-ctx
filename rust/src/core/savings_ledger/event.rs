@@ -197,6 +197,18 @@ pub struct SavingsEvent {
     /// Settlement lifecycle state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement_status: Option<SettlementStatus>,
+
+    // ── G8 Token-Stream Attribution (#1191) ──
+    /// Whether this is a first-inject (turn 1 = cache_write rate) or re-read
+    /// (turn 2+ = cache_read rate). `None` for pre-G8 events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_first_inject: Option<bool>,
+    /// Cache-read rate for the model, if known at recording time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_per_m_usd: Option<f64>,
+    /// Cache-write rate for the model, if known at recording time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_per_m_usd: Option<f64>,
 }
 
 impl SavingsEvent {
@@ -408,6 +420,9 @@ mod tests {
             price_version: None,
             customer_approval: None,
             settlement_status: None,
+            is_first_inject: None,
+            cache_read_per_m_usd: None,
+            cache_write_per_m_usd: None,
         }
     }
 

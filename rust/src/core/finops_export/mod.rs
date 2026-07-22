@@ -173,6 +173,9 @@ mod tests {
             price_version: None,
             customer_approval: None,
             settlement_status: None,
+            is_first_inject: None,
+            cache_read_per_m_usd: None,
+            cache_write_per_m_usd: None,
         }
     }
 

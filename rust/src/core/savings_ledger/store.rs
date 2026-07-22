@@ -326,6 +326,9 @@ pub struct LedgerSummary {
     /// (mechanism, saved_tokens, saved_usd), descending by USD — the
     /// attribution slice (enterprise#19): compression | routing | caching.
     pub by_mechanism: Vec<(String, u64, f64)>,
+    /// G8 Token-Stream USD Attribution (#1191): (stream_name, saved_tokens, saved_usd).
+    /// Streams: "first_inject" (cache_write rate) and "re_read" (cache_read rate).
+    pub by_stream: Vec<(String, u64, f64)>,
 }
 
 impl LedgerSummary {
@@ -385,6 +388,8 @@ pub fn summarize(path: &Path) -> LedgerSummary {
     let mut by_tool: HashMap<String, u64> = HashMap::new();
     let mut by_mechanism: HashMap<String, (u64, f64)> = HashMap::new();
     let mut tokenizers: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut first_inject: (u64, f64) = (0, 0.0);
+    let mut re_read: (u64, f64) = (0, 0.0);
 
     for line in BufReader::new(file).lines().map_while(Result::ok) {
         let Ok(ev) = serde_json::from_str::<SavingsEvent>(&line) else {
@@ -424,6 +429,31 @@ pub fn summarize(path: &Path) -> LedgerSummary {
 
             *by_tool.entry(ev.tool.clone()).or_default() += ev.saved_tokens;
         }
+
+        // G8 Token-Stream Attribution (#1191): classify by first-inject vs re-read.
+        // For events with the G8 field, use it directly. For pre-G8 events,
+        // estimate based on cache_read rate vs input rate.
+        if ev.saved_tokens > 0 {
+            let is_first = ev.is_first_inject.unwrap_or(true);
+            let stream_usd = if is_first {
+                let rate = ev
+                    .cache_write_per_m_usd
+                    .unwrap_or(ev.unit_price_per_m_usd * 1.25);
+                ev.saved_tokens as f64 / 1_000_000.0 * rate
+            } else {
+                let rate = ev
+                    .cache_read_per_m_usd
+                    .unwrap_or(ev.unit_price_per_m_usd * 0.1);
+                ev.saved_tokens as f64 / 1_000_000.0 * rate
+            };
+            if is_first {
+                first_inject.0 = first_inject.0.saturating_add(ev.saved_tokens);
+                first_inject.1 += stream_usd;
+            } else {
+                re_read.0 = re_read.0.saturating_add(ev.saved_tokens);
+                re_read.1 += stream_usd;
+            }
+        }
     }
 
     s.by_model = by_model.into_iter().map(|(k, (t, u))| (k, t, u)).collect();
@@ -443,6 +473,16 @@ pub fn summarize(path: &Path) -> LedgerSummary {
         .sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
 
     s.tokenizers = tokenizers.into_iter().collect();
+
+    // G8 Token-Stream Attribution (#1191)
+    let mut streams = Vec::new();
+    if first_inject.0 > 0 {
+        streams.push(("first_inject".to_string(), first_inject.0, first_inject.1));
+    }
+    if re_read.0 > 0 {
+        streams.push(("re_read".to_string(), re_read.0, re_read.1));
+    }
+    s.by_stream = streams;
     s
 }
 
@@ -684,6 +724,9 @@ mod tests {
             price_version: None,
             customer_approval: None,
             settlement_status: None,
+            is_first_inject: None,
+            cache_read_per_m_usd: None,
+            cache_write_per_m_usd: None,
         }
     }
 

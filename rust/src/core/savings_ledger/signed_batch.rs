@@ -279,6 +279,7 @@ mod tests {
                 ("compression".into(), saved, usd * 0.8),
                 ("routing".into(), 0, usd * 0.2),
             ],
+            by_stream: vec![],
         }
     }
 

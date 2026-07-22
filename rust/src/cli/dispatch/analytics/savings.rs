@@ -533,6 +533,20 @@ fn format_savings_summary() -> String {
     }
     out.push(format!("  {}", t.box_bottom_square(w)));
 
+    // Bounce rate warning (#1193): alert when >5% of reads result in bounces.
+    if s.total_events > 10 && s.bounce_events > 0 {
+        let bounce_rate = s.bounce_events as f64 / s.total_events as f64 * 100.0;
+        if bounce_rate > 5.0 {
+            let wc = t.danger.fg();
+            out.push(String::new());
+            out.push(format!(
+                "  {wc}⚠ Bounce rate {bounce_rate:.1}% — compression may be too aggressive.{rst}",
+            ));
+            out.push(format!(
+                "  {wc}  Consider mode=full for frequently-bounced file types.{rst}",
+            ));
+        }
+    }
     if !s.by_model.is_empty() {
         out.push(String::new());
         out.push(format!("  {}", t.box_top_labeled(w, "BY MODEL")));
@@ -559,6 +573,23 @@ fn format_savings_summary() -> String {
         out.push(format!("  {}", t.box_bottom_square(w)));
     }
 
+    // G8 Token-Stream Attribution (#1191)
+    if !s.by_stream.is_empty() {
+        out.push(String::new());
+        out.push(format!("  {}", t.box_top_labeled(w, "BY TOKEN STREAM")));
+        for (stream, tok, usd) in &s.by_stream {
+            let label = match stream.as_str() {
+                "first_inject" => "First inject (cache_write)",
+                "re_read" => "Re-read (cache_read)",
+                other => other,
+            };
+            out.push(sl(&format!(
+                "  {m}{label:<30}{rst} {:>10} tok  {sc}${usd:.4}{rst}",
+                format_tokens(*tok)
+            )));
+        }
+        out.push(format!("  {}", t.box_bottom_square(w)));
+    }
     if s.by_day.len() >= 2 {
         out.push(String::new());
         out.push(format!("  {}", t.box_top_labeled(w, "RECENT DAYS")));

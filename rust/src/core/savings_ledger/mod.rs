@@ -161,6 +161,9 @@ fn new_event(tool: &str) -> SavingsEvent {
         price_version: None,
         customer_approval: None,
         settlement_status: None,
+        is_first_inject: None,
+        cache_read_per_m_usd: None,
+        cache_write_per_m_usd: None,
     }
 }
 
@@ -206,6 +209,36 @@ pub fn record_tool_event(tool: &str, baseline_tokens: usize, actual_tokens: usiz
     event.saved_tokens = saved as u64;
     event.saved_usd = saved as f64 / 1_000_000.0 * event.unit_price_per_m_usd;
     event.confidence = Some(1.0);
+    append_with_unified(&path, event);
+}
+
+/// Like `record_tool_event` but with G8 token-stream attribution (#1191).
+/// `is_first_inject`: `true` for first read of a path (cache_write rate),
+/// `false` for subsequent reads (cache_read rate).
+pub fn record_tool_event_with_stream(
+    tool: &str,
+    baseline_tokens: usize,
+    actual_tokens: usize,
+    is_first_inject: bool,
+) {
+    let saved = baseline_tokens.saturating_sub(actual_tokens);
+    if saved == 0 || !enabled() {
+        return;
+    }
+    let Some(path) = store::default_path() else {
+        return;
+    };
+
+    let quote = crate::core::gain::model_pricing::ModelPricing::load().quote(None);
+    let mut event = new_event(tool);
+    event.baseline_tokens = baseline_tokens as u64;
+    event.actual_tokens = actual_tokens as u64;
+    event.saved_tokens = saved as u64;
+    event.saved_usd = saved as f64 / 1_000_000.0 * event.unit_price_per_m_usd;
+    event.confidence = Some(1.0);
+    event.is_first_inject = Some(is_first_inject);
+    event.cache_read_per_m_usd = Some(quote.cost.cache_read_per_m);
+    event.cache_write_per_m_usd = Some(quote.cost.cache_write_per_m);
     append_with_unified(&path, event);
 }
 
