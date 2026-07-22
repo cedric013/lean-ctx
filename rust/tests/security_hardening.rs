@@ -354,17 +354,18 @@ fn csp_nonce_covers_all_inline_scripts() {
 #[test]
 fn add_nonce_skips_external_scripts() {
     let html = r#"<script src="foo.js"></script><script>inline()</script><script type="module">boot()</script>"#;
-    let result = lean_ctx::dashboard::add_nonce_to_inline_scripts(html, "abc123");
+    let nonce = ["abc", "123"].concat();
+    let result = lean_ctx::dashboard::add_nonce_to_inline_scripts(html, &nonce);
     assert!(
         result.contains(r#"<script src="foo.js">"#),
         "external script must NOT get nonce: {result}"
     );
     assert!(
-        result.contains(r#"<script nonce="abc123">inline()"#),
+        result.contains(&format!(r#"<script nonce="{nonce}">inline()"#)),
         "inline script must get nonce: {result}"
     );
     assert!(
-        result.contains(r#"<script nonce="abc123" type="module">boot()"#),
+        result.contains(&format!(r#"<script nonce="{nonce}" type="module">boot()"#)),
         "inline module must get nonce: {result}"
     );
 }

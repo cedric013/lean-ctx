@@ -7,7 +7,7 @@
  * untouched, and the output is byte-stable for provider prompt caching.
  */
 
-import { resolveBaseUrl, resolveToken } from "./discovery";
+import { isLoopbackUrl, resolveBaseUrl, resolveToken } from "./discovery";
 import { LeanCtxAuthError, LeanCtxConnectionError, LeanCtxError } from "./errors";
 
 export type Message = Record<string, unknown>;
@@ -42,11 +42,22 @@ const DEFAULT_TIMEOUT_MS = 30000;
 export class ProxyClient {
   readonly baseUrl: string;
   private readonly token?: string;
+  private readonly tokenFromDisk: boolean;
   private readonly timeoutMs: number;
 
   constructor(options: ProxyClientOptions = {}) {
     this.baseUrl = resolveBaseUrl(options.baseUrl);
-    this.token = resolveToken(options.token, this.baseUrl);
+    const envToken = process.env.LEAN_CTX_PROXY_TOKEN?.trim();
+    if (options.token || envToken) {
+      this.token = options.token ?? envToken;
+      this.tokenFromDisk = false;
+    } else if (isLoopbackUrl(this.baseUrl)) {
+      this.token = resolveToken(undefined, this.baseUrl);
+      this.tokenFromDisk = Boolean(this.token);
+    } else {
+      this.token = undefined;
+      this.tokenFromDisk = false;
+    }
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
@@ -102,6 +113,9 @@ export class ProxyClient {
   }
 
   private async request(path: string, init: RequestInit): Promise<Response> {
+    if (this.tokenFromDisk && !isLoopbackUrl(this.baseUrl)) {
+      throw new LeanCtxError("refusing to send the local proxy token to a non-loopback URL");
+    }
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = { ...((init.headers as Record<string, string>) ?? {}) };
     if (this.token) headers.Authorization = `Bearer ${this.token}`;

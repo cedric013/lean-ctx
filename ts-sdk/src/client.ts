@@ -8,11 +8,17 @@ import type {
 
 export type CapsuleData = { capsule_ref: string; data: string };
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
+}
+
 export class OclaClient {
   readonly baseUrl: string;
 
   constructor(baseUrl: string) {
-    const normalized = baseUrl.trim().replace(/\/+$/, "");
+    const normalized = stripTrailingSlashes(baseUrl.trim());
     if (!normalized) {
       throw new Error("OclaClient: baseUrl is required");
     }

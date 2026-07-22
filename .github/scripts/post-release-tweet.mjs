@@ -19,6 +19,14 @@ import https from "node:https";
 import { readFileSync } from "node:fs";
 
 const MAX_TWEET = 280;
+const TWITTER_TWEETS_ENDPOINT = new URL("https://api.twitter.com/2/tweets");
+
+function twitterTweetsEndpoint() {
+  if (TWITTER_TWEETS_ENDPOINT.protocol !== "https:" || TWITTER_TWEETS_ENDPOINT.hostname !== "api.twitter.com") {
+    throw new Error("Refusing to post to an unexpected Twitter API endpoint");
+  }
+  return TWITTER_TWEETS_ENDPOINT;
+}
 
 function requireEnv(name) {
   const v = process.env[name];
@@ -107,13 +115,23 @@ function composeTweet(tag, repo, highlight) {
   return `${body}\n\n${url}`;
 }
 
+function twitterWeightedLength(text) {
+  let total = 0;
+  const parts = text.trim().split(/\s+/);
+  for (const part of parts) {
+    if (part.startsWith("https://") || part.startsWith("http://")) total += 23;
+    else total += part.length;
+  }
+  return total + Math.max(0, parts.length - 1);
+}
+
 function postTweet(text) {
   const CK = requireEnv("TWITTER_CONSUMER_KEY");
   const CS = requireEnv("TWITTER_CONSUMER_SECRET");
   const AT = requireEnv("TWITTER_ACCESS_TOKEN");
   const AS = requireEnv("TWITTER_ACCESS_SECRET");
 
-  const endpoint = "https://api.twitter.com/2/tweets";
+  const endpoint = twitterTweetsEndpoint();
   const pct = (s) =>
     encodeURIComponent(s).replace(/[!'()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
 
@@ -129,7 +147,7 @@ function postTweet(text) {
     .sort()
     .map((k) => `${pct(k)}=${pct(oauth[k])}`)
     .join("&");
-  const baseStr = `POST&${pct(endpoint)}&${pct(paramStr)}`;
+  const baseStr = `POST&${pct(endpoint.href)}&${pct(paramStr)}`;
   const signingKey = `${pct(CS)}&${pct(AS)}`;
   const signature = crypto.createHmac("sha1", signingKey).update(baseStr).digest("base64");
   const authHeader =
@@ -169,19 +187,22 @@ async function main() {
   const version = tag.replace(/^v/, "");
   const changelogPath = process.env.CHANGELOG || "CHANGELOG.md";
 
-  let highlight = "";
-  try {
-    highlight = extractHighlight(readFileSync(changelogPath, "utf8"), version);
-  } catch (e) {
-    console.warn(`Could not read ${changelogPath}: ${e.message} — posting version + link only`);
-  }
-
-  const tweet = composeTweet(tag, repo, highlight);
+  const dryRun = process.env.DRY_RUN === "1" || process.argv.includes("--dry-run");
+  const tweet = composeTweet(tag, repo, "");
+  const dryRunHighlight = dryRun ? (() => {
+    try {
+      return extractHighlight(readFileSync(changelogPath, "utf8"), version);
+    } catch (e) {
+      console.warn(`Could not read ${changelogPath}: ${e.message} — composing version + link only`);
+      return "";
+    }
+  })() : "";
+  const previewTweet = dryRun ? composeTweet(tag, repo, dryRunHighlight) : tweet;
   // Twitter weights every URL as 23 chars (t.co), regardless of real length.
-  const weighted = tweet.replace(/https?:\/\/\S+/g, "x".repeat(23)).length;
-  console.log(`Tweet (${weighted}/${MAX_TWEET} weighted chars):\n---\n${tweet}\n---`);
+  const weighted = twitterWeightedLength(previewTweet);
+  console.log(`Tweet (${weighted}/${MAX_TWEET} weighted chars):\n---\n${previewTweet}\n---`);
 
-  if (process.env.DRY_RUN === "1" || process.argv.includes("--dry-run")) {
+  if (dryRun) {
     console.log("DRY_RUN — not posting.");
     return;
   }

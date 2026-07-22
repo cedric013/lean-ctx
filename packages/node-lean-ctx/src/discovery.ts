@@ -38,7 +38,7 @@ function stripTrailingSlashes(value: string): string {
  * attached to loopback proxies (see {@link resolveToken}) so a local credential
  * never rides along to a remote URL configured via `LEAN_CTX_PROXY_URL`.
  */
-function isLoopbackUrl(url: string): boolean {
+export function isLoopbackUrl(url: string): boolean {
   let host: string;
   try {
     host = new URL(url).hostname;
