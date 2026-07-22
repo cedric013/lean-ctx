@@ -14,14 +14,18 @@ pub mod degradation;
 pub mod enforce;
 pub mod etpao;
 pub mod feedback;
+pub mod hotpath_wiring;
 pub mod invalidation;
 pub mod knowledge_health;
 pub mod learning;
 pub mod multi_agent_e2e;
 pub mod orchestrator;
+pub mod outcome_signal;
 pub mod policy;
 pub mod providers;
+pub mod quality_e2e;
 pub mod recovery;
 pub mod result_fusion;
 pub mod shadow;
 pub mod types;
+
