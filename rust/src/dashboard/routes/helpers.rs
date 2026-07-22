@@ -172,10 +172,47 @@ fn promote_to_git_root(path: &str) -> String {
 fn git_root_for(path: &str) -> Option<String> {
     let mut p = Path::new(path);
     loop {
-        let git = p.join(".git");
-        if git.exists() {
+        if is_valid_git_boundary(&p.join(".git")) {
             return Some(p.to_string_lossy().to_string());
         }
         p = p.parent()?;
     }
+}
+
+fn is_valid_git_boundary(git: &Path) -> bool {
+    const MAX_GITFILE_BYTES: u64 = 4096;
+
+    let Ok(metadata) = git.metadata() else {
+        return false;
+    };
+    if metadata.is_dir() {
+        return true;
+    }
+    if !metadata.is_file() || metadata.len() > MAX_GITFILE_BYTES {
+        return false;
+    }
+
+    let Ok(contents) = std::fs::read_to_string(git) else {
+        return false;
+    };
+    let Some(gitdir) = contents
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("gitdir:"))
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return false;
+    };
+    let gitdir = Path::new(gitdir);
+    let target = if gitdir.is_absolute() {
+        gitdir.to_path_buf()
+    } else {
+        let Some(parent) = git.parent() else {
+            return false;
+        };
+        parent.join(gitdir)
+    };
+
+    target.is_dir()
 }

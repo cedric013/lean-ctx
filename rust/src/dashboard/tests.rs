@@ -22,6 +22,44 @@ fn dashboard_project_root_honors_general_env_override() {
 }
 
 #[test]
+fn dashboard_project_root_ignores_broken_ancestor_gitfile() {
+    let _g = ENV_LOCK.lock().expect("env lock");
+    let td = tempdir().expect("tempdir");
+    let workspace = td.path().join("workspace");
+    let root = workspace.join("project");
+    std::fs::create_dir_all(&root).expect("mkdir");
+    std::fs::write(workspace.join(".git"), "gitdir: ../missing/git-dir\n").expect("write gitfile");
+    let root_s = root.to_string_lossy().to_string();
+
+    crate::test_env::remove_var("LEAN_CTX_DASHBOARD_PROJECT");
+    crate::test_env::set_var("LEAN_CTX_PROJECT_ROOT", &root_s);
+    let detected = detect_project_root_for_dashboard();
+    crate::test_env::remove_var("LEAN_CTX_PROJECT_ROOT");
+
+    assert_eq!(detected, root_s);
+}
+
+#[test]
+fn dashboard_project_root_honors_resolvable_ancestor_gitfile() {
+    let _g = ENV_LOCK.lock().expect("env lock");
+    let td = tempdir().expect("tempdir");
+    let checkout = td.path().join("checkout");
+    let root = checkout.join("nested");
+    std::fs::create_dir_all(&root).expect("mkdir checkout");
+    std::fs::create_dir(td.path().join("git-data")).expect("mkdir gitdir");
+    std::fs::write(checkout.join(".git"), "gitdir: ../git-data\n").expect("write gitfile");
+    let root_s = root.to_string_lossy().to_string();
+    let checkout_s = checkout.to_string_lossy().to_string();
+
+    crate::test_env::remove_var("LEAN_CTX_DASHBOARD_PROJECT");
+    crate::test_env::set_var("LEAN_CTX_PROJECT_ROOT", &root_s);
+    let detected = detect_project_root_for_dashboard();
+    crate::test_env::remove_var("LEAN_CTX_PROJECT_ROOT");
+
+    assert_eq!(detected, checkout_s);
+}
+
+#[test]
 fn check_auth_with_valid_bearer() {
     let req = "GET /api/stats HTTP/1.1\r\nAuthorization: Bearer lctx_abc123\r\n\r\n";
     assert!(check_auth(req, "lctx_abc123"));
