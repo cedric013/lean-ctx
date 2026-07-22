@@ -51,12 +51,14 @@ mod tests {
 
     #[test]
     fn outcome_tracker_quality_trend() {
-        let mut tracker = outcome_signal::OutcomeTracker::new();
+        let mut tracker = outcome_signal::OutcomeTracker::default();
         for _ in 0..3 {
-            tracker.record(ReceiptOutcome::Accepted);
+            let inf = outcome_signal::infer_outcome(1, false, 100);
+            tracker.record(&inf);
         }
         for _ in 0..5 {
-            tracker.record(ReceiptOutcome::Rejected);
+            let inf = outcome_signal::infer_outcome(3, true, 100);
+            tracker.record(&inf);
         }
 
         assert_close(tracker.acceptance_rate(), 0.375);
@@ -79,7 +81,7 @@ mod tests {
                 compressed,
             );
 
-            assert!(integration.enrichment.verdict.budget_used <= 150);
+            assert!(integration.budget_used <= 150);
         }
     }
 }
