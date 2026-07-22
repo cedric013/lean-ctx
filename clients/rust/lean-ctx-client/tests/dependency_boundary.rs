@@ -14,17 +14,17 @@ fn release_identity_and_msrv_are_locked() {
     assert!(MANIFEST.contains("version = \"0.2.0\""));
     assert!(MANIFEST.contains("rust-version = \"1.74\""));
     for exact in [
-        "\"=2.9.7\"",
-        "\"=2.4.1\"",
+        "\"=2.12.1\"",
+        "\"=2.5.8\"",
         "\"=1.7.0\"",
         "\"=1.5.0\"",
-        "\"=1.0.193\"",
-        "\"=1.0.108\"",
+        "\"=1.0.220\"",
+        "\"=1.0.145\"",
         "\"=1.0.50\"",
         "\"=0.2.186\"",
         "\"=0.8.11\"",
         "\"=0.17.1\"",
-        "\"=0.3.36\"",
+        "\"=0.3.47\"",
         "\"=1.6.1\"",
     ] {
         assert!(MANIFEST.contains(exact), "MSRV-critical pin drift: {exact}");
