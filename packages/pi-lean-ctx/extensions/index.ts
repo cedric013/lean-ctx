@@ -733,7 +733,8 @@ export default async function (pi: ExtensionAPI) {
       if (params.literal) searchArgs.push("-F");
       if (params.context && params.context > 0) searchArgs.push(`-C${params.context}`);
       if (params.glob) searchArgs.push("--glob", params.glob);
-      if (params.limit && params.limit > 0) searchArgs.push("-m", String(params.limit));
+
+      const globalLimit = params.limit && params.limit > 0 ? params.limit : 100;
       searchArgs.push(params.pattern, absolutePath);
 
       const bin = resolveBinary();
@@ -742,8 +743,12 @@ export default async function (pi: ExtensionAPI) {
         const msg = (result.stderr || result.stdout || `lean-ctx grep failed: ${params.pattern}`).trim();
         throw new Error(msg);
       }
-      const output = result.code === 1 ? "(no matches)" : result.stdout;
-      const decorated = withFooter(output, { always: true });
+      const MAX_OUTPUT_BYTES = 512 * 1024;
+      let output = result.code === 1 ? "(no matches)" : result.stdout;
+      if (output.length > MAX_OUTPUT_BYTES) {
+        output = output.slice(0, MAX_OUTPUT_BYTES) + "\n\n[Output truncated: exceeded 512 KB byte limit]";
+      }
+      const decorated = withFooter(output, { limit: globalLimit, always: true });
       return {
         content: [{ type: "text", text: decorated.text }],
         details: { path: absolutePath, pattern: params.pattern, source: "lean-ctx", compression: decorated.stats },
