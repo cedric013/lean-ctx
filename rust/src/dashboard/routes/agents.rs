@@ -54,12 +54,10 @@ pub(super) fn handle(
     }
 }
 
-const LOGICAL_SESSION_TTL_SECONDS: u64 = 180;
-
 fn build_agents_json() -> String {
     let registry = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
         registry.cleanup_stale(24);
-        registry.cleanup_stale_logical_sessions(LOGICAL_SESSION_TTL_SECONDS);
+        registry.cleanup_stale_logical_sessions(crate::core::agents::LOGICAL_SESSION_TTL_SECONDS);
     })
     .map(|(registry, ())| registry)
     .unwrap_or_default();
@@ -174,27 +172,15 @@ fn handle_logical_session_presence(body: &str) -> (&'static str, &'static str, S
         );
     }
 
-    let result = crate::core::agents::AgentRegistry::mutate_locked(|registry| {
-        registry.cleanup_stale_logical_sessions(LOGICAL_SESSION_TTL_SECONDS);
-        match event {
-            "open" | "heartbeat" => registry.open_or_heartbeat_logical_session(
-                &request.source,
-                &request.workspace,
-                &request.session_id,
-            ),
-            "close" => {
-                registry.close_logical_session(
-                    &request.source,
-                    &request.workspace,
-                    &request.session_id,
-                );
-            }
-            _ => unreachable!("event validated above"),
-        }
-    });
+    let result = crate::core::agents::AgentRegistry::record_logical_session_presence(
+        event,
+        &request.source,
+        &request.workspace,
+        &request.session_id,
+    );
 
     match result {
-        Ok(_) => (
+        Ok(()) => (
             "200 OK",
             "application/json",
             serde_json::json!({"ok": true, "event": event}).to_string(),

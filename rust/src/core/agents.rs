@@ -7,6 +7,10 @@ use crate::core::a2a::message::{A2AMessage, MessageCategory, MessagePriority, Pr
 
 const MAX_SCRATCHPAD_ENTRIES: usize = 200;
 const MAX_DIARY_ENTRIES: usize = 100;
+pub(crate) const LOGICAL_SESSION_TTL_SECONDS: u64 = 180;
+const LOGICAL_SESSION_SOURCE_MAX_BYTES: usize = 64;
+const LOGICAL_SESSION_WORKSPACE_MAX_BYTES: usize = 4096;
+const LOGICAL_SESSION_ID_MAX_BYTES: usize = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentRegistry {
@@ -246,6 +250,41 @@ impl AgentRegistry {
         self.logical_sessions
             .retain(|session| session.last_heartbeat >= cutoff);
         self.updated_at = Utc::now();
+    }
+
+    pub fn record_logical_session_presence(
+        event: &str,
+        source: &str,
+        workspace: &str,
+        session_id: &str,
+    ) -> Result<(), String> {
+        let valid_field = |value: &str, max_bytes: usize| {
+            !value.is_empty() && value.len() <= max_bytes && !value.chars().any(char::is_control)
+        };
+        if !valid_field(source, LOGICAL_SESSION_SOURCE_MAX_BYTES)
+            || !valid_field(workspace, LOGICAL_SESSION_WORKSPACE_MAX_BYTES)
+            || !valid_field(session_id, LOGICAL_SESSION_ID_MAX_BYTES)
+        {
+            return Err(
+                "presence fields are empty, too long, or contain control characters".to_string(),
+            );
+        }
+        if !matches!(event, "open" | "heartbeat" | "close") {
+            return Err("event must be open, heartbeat, or close".to_string());
+        }
+
+        mutate_persistent(|registry| {
+            registry.cleanup_stale_logical_sessions(LOGICAL_SESSION_TTL_SECONDS);
+            match event {
+                "open" | "heartbeat" => {
+                    registry.open_or_heartbeat_logical_session(source, workspace, session_id);
+                }
+                "close" => {
+                    registry.close_logical_session(source, workspace, session_id);
+                }
+                _ => unreachable!("event validated above"),
+            }
+        })
     }
 
     pub fn list_active(&self, project_root: Option<&str>) -> Vec<&AgentEntry> {
@@ -1288,6 +1327,57 @@ mod presence_tests {
         assert!(registry.logical_session_telemetry_seen);
         assert!(registry.close_logical_session("vscode", "/project", "chat-b"));
         assert_eq!(registry.logical_sessions.len(), 1);
+    }
+
+    #[test]
+    fn persistent_logical_session_presence_validates_and_roundtrips() {
+        let _isolated = crate::core::data_dir::isolated_data_dir();
+
+        AgentRegistry::record_logical_session_presence(
+            "open",
+            "vscode",
+            "/project",
+            "editor-session-a",
+        )
+        .expect("open presence");
+
+        let registry = AgentRegistry::load().expect("persisted registry");
+        assert_eq!(registry.logical_sessions.len(), 1);
+        assert_eq!(registry.logical_sessions[0].session_id, "editor-session-a");
+        assert!(registry.logical_session_telemetry_seen);
+
+        assert!(
+            AgentRegistry::record_logical_session_presence(
+                "invalid",
+                "vscode",
+                "/project",
+                "editor-session-a",
+            )
+            .is_err()
+        );
+        assert!(
+            AgentRegistry::record_logical_session_presence(
+                "heartbeat",
+                "",
+                "/project",
+                "editor-session-a",
+            )
+            .is_err()
+        );
+
+        AgentRegistry::record_logical_session_presence(
+            "close",
+            "vscode",
+            "/project",
+            "editor-session-a",
+        )
+        .expect("close presence");
+        assert!(
+            AgentRegistry::load()
+                .expect("persisted registry")
+                .logical_sessions
+                .is_empty()
+        );
     }
 
     #[test]

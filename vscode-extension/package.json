@@ -132,6 +132,11 @@
           "type": "boolean",
           "default": true,
           "description": "Report the active editor file (path only, never content) to lean-ctx so context ranking can prioritize what you are looking at"
+        },
+        "leanctx.editorPresence.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Report this VS Code window lifecycle to the local lean-ctx agent dashboard (workspace path and editor session ID only)"
         }
       }
     }

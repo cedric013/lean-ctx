@@ -548,3 +548,19 @@ fn no_auth_allows_null_origin() {
     let req = "GET /api/stats HTTP/1.1\r\nHost: 127.0.0.1:3333\r\nOrigin: null\r\n\r\n";
     assert!(no_auth_request_ok(req, &allowed_loopback()));
 }
+
+#[test]
+fn topbar_uses_explicit_editor_presence_not_transport_alias() {
+    let function = COCKPIT_INDEX_HTML
+        .split_once("function applyAgentsToTop")
+        .expect("agent badge function")
+        .1
+        .split_once("function hasMeaningfulSession")
+        .expect("next dashboard function")
+        .0;
+
+    assert!(function.contains("logical_session_presence_available"));
+    assert!(function.contains("logical_session_count"));
+    assert!(!function.contains("total_active"));
+    assert!(function.contains("Sessions \\u2014"));
+}

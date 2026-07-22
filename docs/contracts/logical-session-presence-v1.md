@@ -39,6 +39,11 @@ Content-Type: application/json
 Fields must be non-empty, contain no control characters, and stay within these
 UTF-8 byte limits: source 64, workspace 4096, session ID 256.
 
+The official VS Code extension reports the lifecycle of the editor session in
+which it runs. VS Code does not expose a public API for enumerating Copilot chat
+tabs or agent runs owned by another extension, so those are never inferred or
+reported as separate sessions.
+
 ## Consumer response
 
 `GET /api/agents` exposes two independent collections:

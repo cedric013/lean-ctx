@@ -369,7 +369,7 @@
             <span id="daemonLabelTop">Daemon</span>
           </span>
           <span class="ts-sep"></span>
-          <span class="agent-badge" id="agentCountBadge" title="Active agents">0</span>
+          <span class="agent-badge" id="agentCountBadge" title="Editor session presence unavailable">Sessions —</span>
         </div>
         <div id="doctorSignal" class="doctor-signal"></div>
         <div class="seg-toggle" id="modeToggle" role="group" aria-label="View detail level">
@@ -770,12 +770,20 @@ function bootCockpit() {
 
   function applyAgentsToTop(agentsPayload) {
     var badge = document.getElementById('agentCountBadge');
-    var n = agentsPayload && typeof agentsPayload.total_active === 'number' ? agentsPayload.total_active : 0;
-    if (badge) {
-      // A bare number next to "Daemon" reads as noise — say what it counts.
-      badge.textContent = n === 1 ? '1 agent' : n + ' agents';
-      badge.title = (n === 1 ? '1 AI agent is' : n + ' AI agents are') + ' currently connected through lean-ctx';
+    if (!badge) return;
+    var available = !!(agentsPayload && agentsPayload.logical_session_presence_available);
+    var count = available && typeof agentsPayload.logical_session_count === 'number'
+      ? agentsPayload.logical_session_count
+      : null;
+    if (count == null) {
+      badge.textContent = 'Sessions \u2014';
+      badge.title = 'Editor session presence unavailable; update or enable the lean-ctx editor extension';
+      return;
     }
+    badge.textContent = count === 1 ? '1 editor session' : count + ' editor sessions';
+    badge.title = count === 1
+      ? '1 editor session is currently reporting presence to lean-ctx'
+      : count + ' editor sessions are currently reporting presence to lean-ctx';
   }
 
   function hasMeaningfulSession(sess) {

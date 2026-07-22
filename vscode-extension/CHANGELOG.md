@@ -8,6 +8,7 @@ All notable changes to the **lean-ctx** VS Code extension are documented here.
 
 - **Native dashboard tab** — “lean-ctx: Open Web Dashboard” now opens the dashboard as a real editor tab (`createWebviewPanel`) instead of an integrated terminal. The command starts a private dashboard server (random loopback port + Bearer token), embeds it in the tab, and tears the server down when you close the tab, so nothing is left running behind the editor. Works in remote/Codespaces via `asExternalUri`.
 - **Open the dashboard from the terminal** — the extension registers a deep-link handler, so `lean-ctx dashboard --vscode` (and the `vscode://LeanCTX.lean-ctx/dashboard` URL) opens the native tab without touching the command palette. Pairs with the matching schemes on forks (`cursor://`, `vscodium://`, `windsurf://`, `vscode-insiders://`).
+- **Editor-session presence** — the extension reports open, heartbeat, and close events for each VS Code window so the dashboard can distinguish live editor sessions from MCP transport processes. Disable with `leanctx.editorPresence.enabled`.
 
 ### Fixed
 
