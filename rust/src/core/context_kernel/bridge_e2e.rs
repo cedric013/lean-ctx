@@ -47,7 +47,7 @@ mod tests {
     fn proxy_records_etpao() {
         proxy_bridge::reset_state();
         for _ in 0..5 {
-            proxy_bridge::process_proxy_request(&request_for("alice"));
+            let _ = proxy_bridge::process_proxy_request(&request_for("alice"));
         }
 
         assert!(proxy_bridge::current_etpao() > 0.0);
@@ -57,7 +57,7 @@ mod tests {
     fn proxy_records_identity_ledger() {
         proxy_bridge::reset_state();
         for _ in 0..3 {
-            proxy_bridge::process_proxy_request(&request_for("bob"));
+            let _ = proxy_bridge::process_proxy_request(&request_for("bob"));
         }
 
         assert!(proxy_bridge::identity_summary().total_users >= 1);
@@ -108,7 +108,7 @@ mod tests {
         proxy_bridge::reset_state();
         for index in 0..10 {
             let user = format!("user-{}", index % 3);
-            proxy_bridge::process_proxy_request(&request_for(&user));
+            let _ = proxy_bridge::process_proxy_request(&request_for(&user));
         }
 
         assert!(proxy_bridge::identity_summary().total_users >= 3);

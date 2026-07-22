@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn process_records_identity() {
         let _guard = isolated_test();
-        process_proxy_request(&request());
+        let _ = process_proxy_request(&request());
 
         let summary = identity_summary();
         assert_eq!(summary.total_users, 1);
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn process_records_etpao() {
         let _guard = isolated_test();
-        process_proxy_request(&request());
+        let _ = process_proxy_request(&request());
 
         assert!(current_etpao() > 0.0);
         assert_eq!(etpao_summary().accepted_outcomes, 1);
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn reset_clears_state() {
         let _guard = isolated_test();
-        process_proxy_request(&request());
+        let _ = process_proxy_request(&request());
         reset_state();
 
         assert_eq!(current_etpao(), 0.0);

@@ -122,7 +122,7 @@ mod tests {
         let _guard = isolated_test();
         for _ in 0..3 {
             let request = proxy_request("gpt-5", 1_000, 300);
-            proxy_bridge::process_proxy_request(&request);
+            let _ = proxy_bridge::process_proxy_request(&request);
             let envelope = token_envelope::from_proxy_data(&request);
             usage_normalizer::record_envelope(&envelope);
             record_receipt(&envelope, ReceiptOutcome::Accepted, true);
@@ -182,7 +182,7 @@ mod tests {
     fn end_to_end_evidence_pipeline() {
         let _guard = isolated_test();
         let request = proxy_request("gpt-5", 1_000, 300);
-        proxy_bridge::process_proxy_request(&request);
+        let _ = proxy_bridge::process_proxy_request(&request);
         let envelope = token_envelope::from_proxy_data(&request);
         usage_normalizer::record_envelope(&envelope);
         record_receipt(&envelope, ReceiptOutcome::Accepted, true);
