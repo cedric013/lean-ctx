@@ -407,10 +407,20 @@ pub fn default_window_for_client(client: &str) -> usize {
     if let Some((_model, window)) = crate::hook_handlers::load_detected_model() {
         return window;
     }
-    match client.to_lowercase().as_str() {
-        "gemini" => 1_000_000,
-        "windsurf" | "zed" | "copilot" => 128_000,
-        _ => 200_000,
+    client_default_window(client)
+}
+
+fn client_default_window(client: &str) -> usize {
+    let client = client.to_lowercase();
+    if client.contains("gemini") {
+        1_000_000
+    } else if ["windsurf", "zed", "copilot"]
+        .iter()
+        .any(|name| client.contains(name))
+    {
+        128_000
+    } else {
+        200_000
     }
 }
 
@@ -486,6 +496,12 @@ mod tests {
         let display = radar.format_display();
         assert!(display.contains("CONTEXT RADAR"));
         assert!(display.contains("200k"));
+    }
+
+    #[test]
+    fn client_default_window_recognizes_composite_ids() {
+        assert_eq!(client_default_window("vscode-copilot"), 128_000);
+        assert_eq!(client_default_window("github-copilot/1.2"), 128_000);
     }
 
     #[test]

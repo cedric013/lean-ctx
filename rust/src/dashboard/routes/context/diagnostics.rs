@@ -229,18 +229,16 @@ fn transcript() -> (&'static str, &'static str, String) {
 }
 
 fn model() -> (&'static str, &'static str, String) {
-    let detected = crate::hook_handlers::load_detected_model();
     let client = crate::core::client_capabilities::load_persisted(86400)
         .map_or_else(|| "unknown".to_string(), |c| c.client_id);
-    let (model, window) = detected.unwrap_or_else(|| {
-        let w = crate::core::context_radar::default_window_for_client(&client);
-        ("unknown".to_string(), w)
-    });
+    let introspect = crate::proxy::introspect::load_persisted(300)
+        .unwrap_or_else(|| serde_json::json!({ "proxy_active": false }));
+    let (model, window, source) = super::aggregated::resolve_context_model(&introspect, &client);
     let payload = serde_json::json!({
         "model": model,
         "window_size": window,
         "client_id": client,
-        "source": if model == "unknown" { "client_default" } else { "hook_detected" },
+        "source": source,
     });
     let json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
     ("200 OK", "application/json", json)

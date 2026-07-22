@@ -111,6 +111,45 @@ fn capabilities() -> (&'static str, &'static str, String) {
     ("200 OK", "application/json", json)
 }
 
+pub(super) fn resolve_context_model(
+    introspect: &serde_json::Value,
+    client_id: &str,
+) -> (String, usize, &'static str) {
+    let proxy_model = (introspect
+        .get("proxy_active")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true))
+    .then(|| {
+        introspect
+            .get("last_breakdown")?
+            .get("model")?
+            .as_str()
+            .map(str::trim)
+            .filter(|model| {
+                !model.is_empty()
+                    && !model.eq_ignore_ascii_case("unknown")
+                    && !model.to_ascii_lowercase().starts_with("model-")
+            })
+    })
+    .flatten();
+
+    if let Some(model) = proxy_model {
+        return (
+            model.to_string(),
+            crate::core::model_registry::context_window_for_model(model),
+            "proxy_request",
+        );
+    }
+    if let Some((model, window)) = crate::hook_handlers::load_detected_model() {
+        return (model, window, "hook_detected");
+    }
+    (
+        "unknown".to_string(),
+        crate::core::context_radar::default_window_for_client(client_id),
+        "client_default",
+    )
+}
+
 /// Merges introspect + radar + events + model + bounce.
 fn history() -> (&'static str, &'static str, String) {
     let persisted = crate::proxy::introspect::load_persisted(300);
@@ -139,8 +178,8 @@ fn history() -> (&'static str, &'static str, String) {
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let client_id = crate::core::client_capabilities::load_persisted(86400)
         .map_or_else(|| "cursor".to_string(), |c| c.client_id);
-    let window = crate::core::context_radar::default_window_for_client(&client_id);
-    let radar = crate::core::context_radar::ContextRadar::load(&data_dir, window);
+    let (model_name, model_window, model_source) = resolve_context_model(&introspect, &client_id);
+    let radar = crate::core::context_radar::ContextRadar::load(&data_dir, model_window);
     let breakdown = radar.budget_breakdown();
 
     let recent_events: Vec<serde_json::Value> = radar
@@ -168,12 +207,6 @@ fn history() -> (&'static str, &'static str, String) {
         .iter()
         .map(|(path, tokens)| serde_json::json!({ "path": path, "tokens": tokens }))
         .collect();
-
-    let detected = crate::hook_handlers::load_detected_model();
-    let (model_name, model_window) = detected.unwrap_or_else(|| {
-        let w = crate::core::context_radar::default_window_for_client(&client_id);
-        ("unknown".to_string(), w)
-    });
 
     let bounce = match crate::core::bounce_tracker::global().lock() {
         Ok(bt) => {
@@ -204,7 +237,7 @@ fn history() -> (&'static str, &'static str, String) {
             "model": model_name,
             "window_size": model_window,
             "client_id": client_id,
-            "source": if model_name == "unknown" { "client_default" } else { "hook_detected" },
+            "source": model_source,
         },
         "bounce": bounce,
     });

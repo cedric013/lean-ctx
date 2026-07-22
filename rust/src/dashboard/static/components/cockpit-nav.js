@@ -56,7 +56,7 @@ const COCKPIT_NAV_SECTIONS = [
     area: 'context',
     items: [
       { id: 'commander', label: 'Context Triage', desc: 'Context-window pressure and what to trim — your to-do list.' },
-      { id: 'context', label: 'Context Contents', desc: 'Everything currently loaded into the model context.' },
+      { id: 'context', label: 'Context Contents', desc: 'Best available estimate; request tokens are measured when proxy telemetry is active.' },
       { id: 'live', label: 'Live Activity', desc: 'What lean-ctx is doing right now.' },
       { id: 'compression', label: 'Compression Lab', desc: 'Which files and read modes saved the most tokens.' },
       { id: 'settings', label: 'Quick Settings', desc: 'Flip compression, tool profile, structure-first and terse from the UI.' },

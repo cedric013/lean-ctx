@@ -146,7 +146,7 @@ const ROUTE_DESCRIPTIONS = {
   learning: 'How your savings and efficiency change over time.',
   leaderboard: 'Submit your tokens saved to the community leaderboard.',
   commander: 'Context-window pressure and what to trim — your to-do list.',
-  context: 'Everything currently loaded into the model context.',
+  context: 'Best available estimate; request tokens are measured when proxy telemetry is active.',
   live: 'What lean-ctx is doing right now.',
   knowledge: 'Facts lean-ctx has learned about your project.',
   deps: 'How your modules depend on each other.',

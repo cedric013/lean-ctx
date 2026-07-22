@@ -94,6 +94,62 @@ fn api_path_detection() {
 }
 
 #[test]
+fn api_session_exposes_unmodified_session_stats() {
+    let _guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _iso = crate::core::data_dir::isolated_data_dir();
+
+    let (status, _content_type, body) =
+        routes::route_response("/api/session", "", None, None, true, "GET", "");
+    assert_eq!(status, "200 OK");
+
+    let payload: serde_json::Value = serde_json::from_str(&body).expect("session JSON");
+    assert!(payload["session_stats"].is_object());
+    assert_eq!(payload["session_stats"]["total_tool_calls"], 0);
+}
+
+#[test]
+fn context_endpoints_pair_proxy_model_with_its_window() {
+    let _guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let iso = crate::core::data_dir::isolated_data_dir();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let snapshot = serde_json::json!({
+        "ts": now,
+        "proxy_active": true,
+        "last_breakdown": {
+            "model": "gpt-5.5",
+            "total_input_tokens": 64_000
+        }
+    });
+    std::fs::write(
+        iso.path().join("proxy-introspect.json"),
+        snapshot.to_string(),
+    )
+    .expect("proxy snapshot");
+
+    for path in ["/api/context-history", "/api/context-model"] {
+        let (status, _content_type, body) =
+            routes::route_response(path, "", None, None, true, "GET", "");
+        assert_eq!(status, "200 OK");
+        let payload: serde_json::Value = serde_json::from_str(&body).expect("context JSON");
+        let model = if path == "/api/context-history" {
+            &payload["model"]
+        } else {
+            &payload
+        };
+        assert_eq!(model["model"], "gpt-5.5");
+        assert_eq!(model["window_size"], 1_048_576);
+        assert_eq!(model["source"], "proxy_request");
+    }
+}
+
+#[test]
 fn dashboard_responding_true_for_lean_ctx_version_endpoint() {
     use std::io::{Read, Write};
     use std::net::TcpListener;

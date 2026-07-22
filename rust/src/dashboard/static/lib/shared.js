@@ -438,17 +438,17 @@
   registerValueLabelPlugin();
 
   var TIPS = {
-    token_budget: 'Percentage of context window currently in use. Green means plenty of headroom.',
+    token_budget: 'Best available tracked-token share of the reported window. Proxy telemetry measures the latest request.',
     tokens_saved: 'Total tokens saved across all tool calls \u2013 difference between input and output tokens.',
     compression: 'Overall compression rate \u2013 percentage of input tokens that were saved.',
-    pressure: 'Action recommendation based on current token budget utilization.',
-    token_pressure: 'Remaining vs. total token budget with visual fill indicator.',
+    pressure: 'Action recommendation from the persisted lean-ctx ledger, not active model-window occupancy.',
+    token_pressure: 'Persisted ledger tokens versus its configured budget, with a visual fill indicator.',
     mode_distribution: 'Distribution of read modes used: full, map, signatures, aggressive, etc.',
-    context_radar: 'Shows how your context window is currently filled. Token estimates are based on IDE hook events and rule file scans.',
-    context_items: 'Files currently loaded in the context window with their mode, token count, and compression details.',
+    context_radar: 'Shared telemetry estimate from hooks and rule scans; proxy mode measures the latest request.',
+    context_items: 'Files retained in the lean-ctx ledger; this does not prove an IDE currently includes them.',
     overlays: 'Manual context adjustments \u2013 pinned, excluded, or view-mode-changed files. Use the actions in the table above to add overlays.',
     context_plan: 'Auto-generated loading plan: which files to include with which compression mode.',
-    session: 'Current session with tool calls, token savings, and project metadata. Stats are live-merged with global counters.',
+    session: 'Most recent persisted session with tool calls, token savings, and project metadata. Some views merge global counters.',
     pipeline: 'Compression pipeline layers and their input/output token throughput.',
     active_intent: 'Auto-detected task type and target files based on recent tool activity.',
     overlay_history: 'Chronological log of all manual overlay operations in this project.',

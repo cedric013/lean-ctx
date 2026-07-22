@@ -91,6 +91,30 @@ function normalizeLedgerEntries(items) {
   );
 }
 
+function contextScopeLabel(measured, logicalSessionCount) {
+  if (measured && logicalSessionCount === 0) {
+    return 'measured recent request \u00b7 no active editor';
+  }
+  if (measured && Number.isInteger(logicalSessionCount) && logicalSessionCount > 1) {
+    return 'measured latest request \u00b7 ' + logicalSessionCount + ' editor sessions';
+  }
+  if (measured) return 'measured latest request';
+  if (!Number.isInteger(logicalSessionCount)) return 'shared estimate';
+  if (logicalSessionCount === 0) return 'no active editor session';
+  return logicalSessionCount + ' editor session' +
+    (logicalSessionCount === 1 ? '' : 's') + ' \u00b7 shared estimate';
+}
+
+function contextUsage(exact, proxyInputTokens, visibleTokens, windowSize) {
+  const candidate = exact ? proxyInputTokens : visibleTokens;
+  const total = Math.max(0, Number(candidate) || 0);
+  const windowTokens = Math.max(0, Number(windowSize) || 0);
+  return {
+    total,
+    utilization: windowTokens > 0 ? Math.min(1, total / windowTokens) : 0,
+  };
+}
+
 class CockpitContext extends HTMLElement {
   constructor() {
     super();
@@ -118,7 +142,7 @@ class CockpitContext extends HTMLElement {
     const fetch1 = p => fetchJson(p, { timeoutMs: 12000 }).catch(e => ({ __error: e?.error || String(e), __path: p }));
     const ok = r => r && !r.__error;
 
-    const [summary, capabilities, hist, control, overlayHist, plan, pipeline, intent, session, handles, transcript] = await Promise.all([
+    const [summary, capabilities, hist, control, overlayHist, plan, pipeline, intent, session, handles, agents, transcript] = await Promise.all([
       fetch1('/api/context-summary'),
       fetch1('/api/context-capabilities'),
       fetch1('/api/context-history'),
@@ -129,6 +153,7 @@ class CockpitContext extends HTMLElement {
       fetch1('/api/intent'),
       fetch1('/api/session'),
       fetch1('/api/context-handles'),
+      fetch1('/api/agents'),
       fetch1('/api/context-transcript'),
     ]);
 
@@ -161,6 +186,7 @@ class CockpitContext extends HTMLElement {
       handles: ok(handles) ? handles : null,
       contextEvents: Array.isArray(h.events) ? h.events : null,
       modelInfo: h.model || null,
+      agentPresence: ok(agents) ? agents : null,
       transcript: ok(transcript) ? transcript : null,
     };
     if (this._data.history && !Array.isArray(this._data.history)) this._data.history = [];
@@ -232,24 +258,31 @@ class CockpitContext extends HTMLElement {
     const rulesTok = (radar?.rules?.total_tokens) || 0;
     const filesTok = entries.reduce((s, e) => s + (e.sent_tokens || 0), 0);
 
-    // Utilization precedence: exact proxy counts > backend pressure (ledger-
-    // based, ignores transcript noise) > local sum. The raw transcript can
-    // exceed the window (the IDE summarizes old messages), which would pin a
-    // naive estimate at 100% while the triage line below says "Healthy".
-    const estTotal = proxyActive && pb ? (pb.total_input_tokens || 0) : (rulesTok + filesTok + chatTok);
-    const backendUtil = typeof pressure?.utilization === 'number' ? pressure.utilization : null;
-    const util = proxyActive && pb
-      ? Math.min(1, estTotal / win)
-      : (backendUtil ?? Math.min(1, estTotal / win));
+    // Only proxy introspection measures an actual LLM request. Without it,
+    // show the share of the assumed window represented by visible telemetry;
+    // ledger pressure is a separate, historical file-management signal.
+    const exact = proxyActive && !!pb;
+    const usage = contextUsage(
+      exact,
+      pb?.total_input_tokens,
+      rulesTok + filesTok + chatTok,
+      win
+    );
+    const estTotal = usage.total;
+    const util = usage.utilization;
     const pctUsed = Math.round(util * 100);
     const col = gaugeColor(util);
+    const scopeLabel = contextScopeLabel(
+      exact,
+      this._data.agentPresence?.logical_session_count
+    );
 
     const ideName = clientId === 'unknown' ? 'Unknown IDE' : esc(clientId.charAt(0).toUpperCase() + clientId.slice(1));
     const hookTiers = { cursor: 1, claude: 2, windsurf: 3, codex: 4, copilot: 4, gemini: 4 };
     const tierKey = Object.keys(hookTiers).find(k => (clientId || '').toLowerCase().includes(k));
     const tier = tierKey ? hookTiers[tierKey] : 5;
 
-    const st = session?.stats ?? {};
+    const st = session?.session_stats ?? session?.stats ?? {};
     const tokSaved = st.total_tokens_saved || 0;
     const tokInput = st.total_tokens_input || 0;
     const comprPct = tokInput > 0 ? Math.round(tokSaved / tokInput * 100) : 0;
@@ -257,12 +290,19 @@ class CockpitContext extends HTMLElement {
     let h = '<div class="card" style="margin-bottom:16px">';
 
     // Header row: Model + progress bar
-    h += '<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">';
+    h += '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:16px;margin-bottom:12px">';
+    const modelBadge = modelSource === 'proxy_request'
+      ? 'latest proxy request'
+      : modelSource === 'hook_detected' ? 'recent hook' : 'client default';
     if (detectedModel) {
       h += '<div style="font-size:20px;font-weight:700">' + esc(detectedModel) + '</div>';
-      h += '<span class="badge" style="font-size:9px">' + (modelSource === 'hook_detected' ? 'auto-detected' : 'default') + '</span>';
+      h += '<span class="badge" style="font-size:9px">' + modelBadge + '</span>';
     }
-    h += '<div style="margin-left:auto;font-size:13px;color:var(--muted)">' + fmtTok(win) + ' context window</div>';
+    h += '<span class="badge" style="font-size:9px">' + esc(scopeLabel) + '</span>';
+    const windowLabel = modelSource === 'proxy_request'
+      ? 'registered model window'
+      : modelSource === 'hook_detected' ? 'detected window' : 'assumed window';
+    h += '<div style="margin-left:auto;font-size:13px;color:var(--muted)">' + fmtTok(win) + ' ' + windowLabel + '</div>';
     h += '</div>';
 
     // Progress bar
@@ -298,17 +338,19 @@ class CockpitContext extends HTMLElement {
     const hookLabel = hookLabels[tier] || 'MCP Only';
     const hookCol = tier <= 2 ? 'var(--green)' : tier <= 3 ? 'var(--yellow)' : 'var(--muted)';
 
+    const contextLabel = exact ? 'Context' : 'Tracked';
+    const contextPrefix = exact ? '' : '\u2248';
     h += cell('IDE', ideName, hookLabel, hookCol);
-    h += cell('Context', (proxyActive ? '' : '\u2248') + pctUsed + '%', fmtTok(Math.round(util * win)) + ' / ' + fmtTok(win), col);
-    h += cell('Files', String(entries.length), fmtTok(filesTok) + ' tokens');
-    h += cell('Saved', fmtTok(tokSaved), comprPct + '% compression', 'var(--green)');
-    h += cell('Tool Calls', ff(st.total_tool_calls || 0), ff(st.files_read || 0) + ' reads');
+    h += cell(contextLabel, contextPrefix + pctUsed + '%', fmtTok(estTotal) + ' / ' + fmtTok(win), col);
+    h += cell('Files Shown', String(entries.length), fmtTok(filesTok) + ' tokens');
+    h += cell('Saved', fmtTok(tokSaved), 'session \u00b7 ' + comprPct + '% compression', 'var(--green)');
+    h += cell('Tool Calls', ff(st.total_tool_calls || 0), 'session \u00b7 ' + ff(st.files_read || 0) + ' reads');
     h += '</div>';
 
     // Breakdown table
     if (proxyActive && pb) {
       h += '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">';
-      h += '<span class="badge" style="background:#10b981;color:#fff;font-size:9px;margin-right:6px">PROXY</span>Exact counts from LLM API request.</div>';
+      h += '<span class="badge" style="background:#10b981;color:#fff;font-size:9px;margin-right:6px">PROXY</span>Measured counts from latest LLM API request.</div>';
       const cats = [
         { l: 'System prompt', t: pb.system_prompt_tokens || 0, c: '#6b7280' },
         { l: 'Tools', t: pb.tool_definition_tokens || 0, c: '#8b5cf6' },
@@ -373,10 +415,9 @@ class CockpitContext extends HTMLElement {
 
   // Maps the backend pressure band to a concrete operator action.
   _renderTriageBanner(esc, pressure, util, exact) {
-    // Prefer the backend recommendation; fall back to the local utilization band.
-    // With exact proxy counts the hero already shows the authoritative number,
-    // so the triage band must use the same value or the card contradicts itself.
-    const rec = pressure?.recommendation || '';
+    // Measured proxy tokens describe the request. Otherwise this banner reports
+    // the ledger's historical pressure heuristic, not model-window occupancy.
+    const rec = exact ? '' : (pressure?.recommendation || '');
     const u = exact ? util
       : (typeof pressure?.utilization === 'number' ? pressure.utilization : util);
     let band;
@@ -395,7 +436,7 @@ class CockpitContext extends HTMLElement {
     }
     let h = '<div style="margin-top:12px;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:var(--surface);border-left:3px solid ' + band.color + '">';
     h += '<span style="color:' + band.color + ';font-size:13px">' + band.icon + '</span>';
-    h += '<div style="font-size:12px"><strong style="color:' + band.color + '">' + band.label + ' \u00b7 ' + Math.round(u * 100) + '%</strong>';
+    h += '<div style="font-size:12px"><strong style="color:' + band.color + '">' + band.label + ' \u00b7 ' + (exact ? 'measured request / window ' : 'historical ledger pressure ') + Math.round(u * 100) + '%</strong>';
     h += '<span style="color:var(--muted);margin-left:8px">' + esc(band.action) + '</span></div>';
     h += '</div>';
     return h;

@@ -106,6 +106,8 @@ fn get_routes(path: &str, query_str: &str) -> Option<(&'static str, &'static str
                         })
                 })
                 .unwrap_or_default();
+            let session_stats =
+                serde_json::to_value(&session.stats).unwrap_or_else(|_| serde_json::json!({}));
             let global = crate::core::stats::load_for_display();
             let g_cmds = global.total_commands;
             let g_input = global.total_input_tokens;
@@ -128,7 +130,12 @@ fn get_routes(path: &str, query_str: &str) -> Option<(&'static str, &'static str
                     session.updated_at = utc;
                 }
             }
-            let json = serde_json::to_string(&session)
+            let mut payload =
+                serde_json::to_value(&session).unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("session_stats".to_string(), session_stats);
+            }
+            let json = serde_json::to_string(&payload)
                 .unwrap_or_else(|_| "{\"error\":\"failed to serialize session\"}".to_string());
             Some(("200 OK", "application/json", json))
         }
