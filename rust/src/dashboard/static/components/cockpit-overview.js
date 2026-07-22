@@ -366,13 +366,19 @@ class CockpitOverview extends HTMLElement {
 
     var trend = roiPayload.trend || [];
     var since = trend.length && trend[0] && trend[0][0] ? String(trend[0][0]) : '';
+    var verificationTag = '<span class="tag ty">unsigned</span>';
+    if (roi.chain_valid === false) {
+      verificationTag = '<span class="tag td">chain BROKEN</span>';
+    } else if (roi.chain_valid && roi.signed) {
+      verificationTag = '<span class="tag tg">verified</span>';
+    }
 
     return (
       '<p class="hs cko-bridge" id="cko-verifiedBridge" role="link" tabindex="0" ' +
       'title="Open ROI & Plan" style="cursor:pointer;margin-top:6px">' +
-      '<span class="tag tg">verified</span> ' +
-      '<b>' + esc(ff(roi.net_saved_tokens)) + '</b> tokens \u00b7 <b>' +
-      esc(fu(roi.saved_usd)) + '</b> in the independent local ledger' +
+      verificationTag + ' ' +
+      '<b>' + esc(ff(roi.net_saved_tokens)) + '</b> net tokens saved \u00b7 <b>' +
+      esc(fu(roi.saved_usd)) + '</b> \u00b7 separate measured ledger' +
       (since ? ' (recording since ' + esc(since) + ')' : '') +
       ' <span class="hc-health-go">ROI &amp; Plan \u2192</span></p>'
     );
