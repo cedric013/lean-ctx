@@ -19,12 +19,65 @@ pub enum JobState {
     Cancelled { output: String },
 }
 
+const MAX_RETAINED_COMPLETED_JOBS: usize = 64;
+const MAX_RETAINED_COMPLETED_BYTES: usize = 16 * 1024 * 1024;
+const COMPLETED_JOB_TTL: Duration = Duration::from_mins(5);
+
 struct Job {
     cancel: Arc<AtomicBool>,
     state: JobState,
+    finished_at: Option<Instant>,
 }
 
 static JOBS: LazyLock<Mutex<HashMap<String, Job>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn prune_finished_jobs(jobs: &mut HashMap<String, Job>, now: Instant) {
+    prune_finished_jobs_with_limits(
+        jobs,
+        now,
+        MAX_RETAINED_COMPLETED_JOBS,
+        MAX_RETAINED_COMPLETED_BYTES,
+    );
+}
+
+fn prune_finished_jobs_with_limits(
+    jobs: &mut HashMap<String, Job>,
+    now: Instant,
+    max_completed_jobs: usize,
+    max_completed_bytes: usize,
+) {
+    jobs.retain(|_, job| {
+        job.finished_at
+            .is_none_or(|finished_at| now.duration_since(finished_at) < COMPLETED_JOB_TTL)
+    });
+
+    let mut completed: Vec<_> = jobs
+        .iter()
+        .filter_map(|(id, job)| {
+            let finished_at = job.finished_at?;
+            let output_bytes = match &job.state {
+                JobState::Completed { output, .. } | JobState::Cancelled { output } => output.len(),
+                JobState::Running => 0,
+            };
+            Some((finished_at, id.clone(), output_bytes))
+        })
+        .collect();
+    completed.sort_unstable_by_key(|(finished_at, _, _)| *finished_at);
+
+    let mut retained_bytes = completed.iter().map(|(_, _, bytes)| bytes).sum::<usize>();
+    let mut retained_jobs = completed.len();
+    for (_, id, output_bytes) in completed {
+        if retained_jobs <= max_completed_jobs && retained_bytes <= max_completed_bytes {
+            break;
+        }
+        if retained_jobs == 1 {
+            break;
+        }
+        jobs.remove(&id);
+        retained_jobs -= 1;
+        retained_bytes = retained_bytes.saturating_sub(output_bytes);
+    }
+}
 
 pub fn start(
     command: String,
@@ -56,6 +109,7 @@ pub fn start(
         let mut jobs = JOBS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        prune_finished_jobs(&mut jobs, Instant::now());
         if matches!(jobs.get(&id).map(|job| &job.state), Some(JobState::Running)) {
             return id;
         }
@@ -64,6 +118,7 @@ pub fn start(
             Job {
                 cancel,
                 state: JobState::Running,
+                finished_at: None,
             },
         );
     }
@@ -88,6 +143,8 @@ pub fn start(
         } else {
             JobState::Completed { output, exit_code }
         };
+        job.finished_at = Some(Instant::now());
+        prune_finished_jobs(&mut jobs, Instant::now());
     });
     id
 }
@@ -173,6 +230,66 @@ pub fn cancel(id: &str) -> Option<JobState> {
 mod tests {
     use super::{ForegroundResult, JobState, cancel, run_foreground_or_detach, start, status};
     use std::time::Duration;
+
+    #[test]
+    fn completed_job_retention_is_bounded() {
+        let now = std::time::Instant::now();
+        let mut jobs = std::collections::HashMap::new();
+        for index in 0..=super::MAX_RETAINED_COMPLETED_JOBS {
+            jobs.insert(
+                format!("job_{index}"),
+                super::Job {
+                    cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    state: JobState::Completed {
+                        output: "x".repeat(1024),
+                        exit_code: 0,
+                    },
+                    finished_at: Some(now - Duration::from_secs((index + 1) as u64)),
+                },
+            );
+        }
+        jobs.insert(
+            "expired".to_string(),
+            super::Job {
+                cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                state: JobState::Completed {
+                    output: "expired".to_string(),
+                    exit_code: 0,
+                },
+                finished_at: Some(now - super::COMPLETED_JOB_TTL - Duration::from_secs(1)),
+            },
+        );
+
+        super::prune_finished_jobs(&mut jobs, now);
+
+        assert_eq!(jobs.len(), super::MAX_RETAINED_COMPLETED_JOBS);
+        assert!(!jobs.contains_key("expired"));
+        assert!(!jobs.contains_key(&format!("job_{}", super::MAX_RETAINED_COMPLETED_JOBS)));
+    }
+
+    #[test]
+    fn completed_job_output_bytes_are_bounded() {
+        let now = std::time::Instant::now();
+        let mut jobs = std::collections::HashMap::new();
+        for index in 0..3 {
+            jobs.insert(
+                format!("job_{index}"),
+                super::Job {
+                    cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    state: JobState::Completed {
+                        output: "x".repeat(8),
+                        exit_code: 0,
+                    },
+                    finished_at: Some(now - Duration::from_secs((3 - index) as u64)),
+                },
+            );
+        }
+
+        super::prune_finished_jobs_with_limits(&mut jobs, now, 10, 16);
+
+        assert_eq!(jobs.len(), 2);
+        assert!(!jobs.contains_key("job_0"));
+    }
 
     #[test]
     #[cfg_attr(windows, ignore)]
