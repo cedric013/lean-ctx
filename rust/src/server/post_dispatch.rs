@@ -148,6 +148,16 @@ impl LeanCtxServer {
                     call_number: 1,
                 },
             );
+
+            // Evidence pipeline: MCP data → envelope → normalizer → receipt chain.
+            let mcp_call_data = crate::core::context_kernel::mcp_bridge::McpCallData {
+                tool_name: name_owned.clone(),
+                input_tokens: input_token_count as usize,
+                output_tokens: output_token_count_u64 as usize,
+                is_retry: false,
+                call_number: 1,
+            };
+            crate::core::context_kernel::envelope_wiring::process_mcp_evidence(&mcp_call_data);
             crate::core::context_kernel::mcp_receipt::record_receipt(
                 crate::core::context_kernel::mcp_receipt::McpReceipt {
                     tool: name_owned,

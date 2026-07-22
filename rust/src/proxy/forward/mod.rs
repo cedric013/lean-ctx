@@ -230,7 +230,14 @@ pub async fn forward_request(
             request_count: 1,
             ..Default::default()
         };
-        let _ = crate::core::context_kernel::proxy_bridge::process_proxy_request(&kernel_data);
+
+        // Evidence pipeline: proxy data → envelope → normalizer → receipt chain.
+        let kernel_result =
+            crate::core::context_kernel::proxy_bridge::process_proxy_request(&kernel_data);
+        crate::core::context_kernel::envelope_wiring::process_proxy_evidence(
+            &kernel_data,
+            &kernel_result,
+        );
     }
 
     let model = parsed

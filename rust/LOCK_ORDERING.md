@@ -82,6 +82,17 @@ All `std::sync::Mutex` unless noted otherwise.
 | L69 | `DASHBOARD_PROJECT` | `core/runtime_flags.rs:10` | `OnceLock<Mutex<Option<String>>>` | Caches the active project name for dashboard display; independent leaf lock, never nested |
 | L70 | `ALLOW_PATHS` | `core/runtime_flags.rs:11` | `OnceLock<Mutex<Vec<PathBuf>>>` | Runtime-configured additional allowed paths for PathJail; independent leaf lock, never nested |
 | L71 | `GRPC_TASK` | `core/ocla/grpc_bridge.rs:20` | `OnceLock<Mutex<Option<JoinHandle<()>>>>` | Handle to the spawned OCLA gRPC listener task, checked/replaced by `start_grpc_server`/`stop_grpc_server`; critical section never spans an `.await`, independent leaf lock, never nested |
+| L72 | `IDENTITY_LEDGER` | `core/context_kernel/proxy_bridge.rs:13` | `OnceLock<Mutex<IdentityLedger>>` | Per-user identity tracking in the proxy-to-kernel bridge; independent leaf lock, never nested |
+| L73 | `ETPAO_TRACKER` | `core/context_kernel/proxy_bridge.rs:14` | `OnceLock<Mutex<EtpaoLive>>` | ETPAO efficiency tracking for proxy requests; independent leaf lock, never nested |
+| L74 | `CHAIN` | `core/context_kernel/receipt_chain.rs:37` | `OnceLock<Mutex<ReceiptChain>>` | Evidence chain for context delivery lifecycles; independent leaf lock, never nested |
+| L75 | `RECEIPTS` | `core/context_kernel/mcp_receipt.rs:46` | `OnceLock<Mutex<McpReceiptStore>>` | Receipt recording and honest accounting for MCP tool calls; independent leaf lock, never nested |
+| L76 | `DEDUP` | `core/context_kernel/dedup_wiring.rs:8` | `OnceLock<Mutex<ContextDedup>>` | Global content-deduplication cache for context delivery hot paths; independent leaf lock, never nested |
+| L77 | `SEEN_PATHS` | `core/context_kernel/dedup_wiring.rs:9` | `OnceLock<Mutex<HashSet<String>>>` | Tracks previously-seen file paths for dedup modified-vs-fresh distinction; independent leaf lock, never nested |
+| L78 | `MCP_ETPAO` | `core/context_kernel/mcp_bridge.rs:12` | `OnceLock<Mutex<EtpaoLive>>` | ETPAO efficiency tracking for MCP tool calls; independent leaf lock, never nested |
+| L79 | `MCP_IDENTITY` | `core/context_kernel/mcp_bridge.rs:13` | `OnceLock<Mutex<IdentityLedger>>` | Per-user identity tracking for MCP clients; independent leaf lock, never nested |
+| L80 | `SAVINGS` | `core/context_kernel/schema_wiring.rs:47` | `OnceLock<Mutex<SavingsState>>` | Cumulative schema optimization savings tracking; independent leaf lock, never nested |
+| L81 | `NORMALIZER` | `core/context_kernel/usage_normalizer.rs:73` | `OnceLock<Mutex<SessionUsage>>` | Session-level token usage aggregation from canonical envelopes; independent leaf lock, never nested |
+| L82 | `FEATURES` | `core/context_kernel/kernel_config.rs:47` | `OnceLock<Mutex<KernelFeatures>>` | Central runtime feature toggles for all kernel modules; independent leaf lock, never nested |
 
 ### Test / Environment Locks (serialise env-var mutations)
 
@@ -213,9 +224,9 @@ Override via `LEAN_CTX_WORKER_THREADS` (positive integer) for environments with 
 concurrent subagents. Example: `LEAN_CTX_WORKER_THREADS=8`. The blocking thread pool
 is always `worker_threads * 4`, clamped to `[8, 32]`.
 
-### Independent Static Locks (L3–L67)
+### Independent Static Locks (L3–L82)
 
-All other static locks (L3–L67) — **except the L22 → L4 pair documented above** — are
+All other static locks (L3–L82) — **except the L22 → L4 pair documented above** — are
 **independent singletons**: they protect isolated subsystem state and are never nested inside
 each other. Each should be acquired in isolation:
 

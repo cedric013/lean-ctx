@@ -2,6 +2,16 @@
 
 #[cfg(test)]
 mod tests {
+    use std::sync::MutexGuard;
+
+    fn isolated() -> MutexGuard<'static, ()> {
+        let guard = crate::core::context_kernel::kernel_config::KERNEL_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::core::context_kernel::proxy_bridge::reset_state();
+        crate::core::context_kernel::mcp_bridge::reset_mcp_state();
+        guard
+    }
     use super::super::accounting_fix;
     use super::super::coverage_class::CoverageClass;
     use super::super::hotpath_wiring;
@@ -22,7 +32,7 @@ mod tests {
 
     #[test]
     fn full_proxy_lifecycle() {
-        proxy_bridge::reset_state();
+        let _guard = isolated();
         let request = ProxyRequestData {
             headers: vec![
                 ("x-user-id".to_owned(), "alice".to_owned()),
@@ -45,7 +55,7 @@ mod tests {
 
     #[test]
     fn proxy_records_etpao() {
-        proxy_bridge::reset_state();
+        let _guard = isolated();
         for _ in 0..5 {
             let _ = proxy_bridge::process_proxy_request(&request_for("alice"));
         }
@@ -55,7 +65,7 @@ mod tests {
 
     #[test]
     fn proxy_records_identity_ledger() {
-        proxy_bridge::reset_state();
+        let _guard = isolated();
         for _ in 0..3 {
             let _ = proxy_bridge::process_proxy_request(&request_for("bob"));
         }
@@ -65,7 +75,7 @@ mod tests {
 
     #[test]
     fn tool_optimization_saves_tokens() {
-        proxy_bridge::reset_state();
+        let _guard = isolated();
         let schemas = (0..15)
             .map(|index| tool_surface::ToolSchema {
                 name: format!("tool-{index}"),
@@ -84,7 +94,7 @@ mod tests {
 
     #[test]
     fn honest_accounting_detects_phantom() {
-        proxy_bridge::reset_state();
+        let _guard = isolated();
         let accounting = accounting_fix::account_proxy_request(1_000, 300, 200, 50);
 
         assert!(accounting.phantom_savings_pct > 0.0);
@@ -93,7 +103,7 @@ mod tests {
 
     #[test]
     fn mcp_integration_respects_coverage() {
-        proxy_bridge::reset_state();
+        let _guard = isolated();
         let managed = hotpath_wiring::integrate_for_mcp("q", "/tmp", &[], 1_000, 300);
         let unmanaged_headers = vec![("x-coverage-class".to_owned(), "unmanaged".to_owned())];
         let unmanaged =
@@ -105,7 +115,7 @@ mod tests {
 
     #[test]
     fn end_to_end_identity_to_etpao() {
-        proxy_bridge::reset_state();
+        let _guard = isolated();
         for index in 0..10 {
             let user = format!("user-{}", index % 3);
             let _ = proxy_bridge::process_proxy_request(&request_for(&user));
@@ -119,7 +129,7 @@ mod tests {
 
     #[test]
     fn outcome_signal_integrated() {
-        proxy_bridge::reset_state();
+        let _guard = isolated();
         let request = ProxyRequestData {
             is_retry: true,
             request_count: 3,

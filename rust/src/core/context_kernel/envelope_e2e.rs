@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::MutexGuard;
 
     use super::super::accounting_fix;
     use super::super::live_dashboard;
@@ -13,16 +13,15 @@ mod tests {
     use super::super::types::ReceiptOutcome;
     use super::super::usage_normalizer;
 
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
     fn isolated_test() -> MutexGuard<'static, ()> {
-        let guard = TEST_LOCK
+        let guard = crate::core::context_kernel::kernel_config::KERNEL_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         proxy_bridge::reset_state();
         mcp_bridge::reset_mcp_state();
         usage_normalizer::reset_usage();
         receipt_chain::reset_chain();
+        crate::core::context_kernel::kernel_config::reset_features();
         guard
     }
 
