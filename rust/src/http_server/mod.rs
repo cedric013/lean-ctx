@@ -871,6 +871,18 @@ fn build_app_router_with_auth(cfg: &HttpServerConfig, require_auth: bool) -> Rou
             axum::routing::post(v1_agents_deregister),
         )
         .route("/v1/agents/events", get(v1_agents_events_sse))
+        .route("/v1/kernel/dashboard", get(kernel_api::dashboard))
+        .route("/v1/kernel/etpao", get(kernel_api::etpao))
+        .route("/v1/kernel/config", get(kernel_api::get_config))
+        .route(
+            "/v1/kernel/config",
+            axum::routing::post(kernel_api::set_config),
+        )
+        .route("/v1/kernel/evidence", get(kernel_api::evidence))
+        .route(
+            "/v1/kernel/reset",
+            axum::routing::post(kernel_api::reset_state),
+        )
         .fallback_service(mcp_http)
         .layer(axum::extract::DefaultBodyLimit::max(cfg.max_body_bytes))
         .layer(middleware::from_fn_with_state(
