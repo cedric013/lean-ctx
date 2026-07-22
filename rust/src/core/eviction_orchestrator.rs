@@ -282,6 +282,10 @@ mod tests {
 
     #[test]
     fn registry_fans_out_and_prunes_dropped_targets() {
+        // #685/#975-class: on_pressure(Critical) floors to EmergencyDrop, which
+        // clears the process-wide ann_cache — hold its cross-module test lock
+        // so a concurrent ann_cache test can't observe a wiped cache mid-assertion.
+        let _ann_lock = crate::core::ann_cache::test_lock();
         let first = Arc::new(make_orchestrator());
         let second = Arc::new(make_orchestrator());
         let first_cache = first.cache.clone();
@@ -323,6 +327,9 @@ mod tests {
 
     #[test]
     fn emergency_clears_cache() {
+        // See `registry_fans_out_and_prunes_dropped_targets` above: EmergencyDrop
+        // clears the shared ann_cache, so hold its cross-module test lock.
+        let _ann_lock = crate::core::ann_cache::test_lock();
         let cache = Arc::new(tokio::sync::RwLock::new(SessionCache::new()));
         {
             let mut c = cache.blocking_write();

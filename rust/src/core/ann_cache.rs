@@ -131,6 +131,20 @@ fn fingerprint(embeddings: &FlatEmbeddings) -> u64 {
     h
 }
 
+/// Cross-module test lock for the process-wide cache slot above. `clear()`
+/// is called from more than one module's tests (this module's own HNSW-path
+/// tests, and `eviction_orchestrator`'s eviction tests) — every test that
+/// builds/reads/clears the shared cache must hold this for its duration, or
+/// a parallel `clear()` from an unrelated test can wipe it mid-assertion.
+/// Poison is recovered since a panic in one test must not cascade into others.
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,16 +154,8 @@ mod tests {
     // switches to HNSW at 1000 vectors, so 1000 here exercises the real graph).
     const TEST_GATE: usize = 1000;
 
-    // The cache is a single process-wide slot, so tests that drive the HNSW path
-    // must not interleave or they would clobber each other's cached index. This
-    // lock serializes them; poison is recovered since a panic in one test must
-    // not cascade into the others.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
     fn serial() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        super::test_lock()
     }
 
     /// Reads the fingerprint of the currently cached index (test-only

