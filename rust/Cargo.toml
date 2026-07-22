@@ -487,9 +487,9 @@ harness = false
 name = "efficiency"
 harness = false
 
-# rmcp 2.2.0 on crates.io calls SseStream::from_bytes_stream but sse-stream 0.2.x
-# only has from_byte_stream (singular). The upstream git rev has the fix; pin to it
-# until rmcp publishes a corrected version.
+# rmcp 2.0.0 keeps completed response-send tasks in a JoinSet until shutdown,
+# which grows RSS for long-lived MCP sessions. Keep this vendored patch until
+# modelcontextprotocol/rust-sdk ships the continuous drain fix.
 [patch.crates-io]
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "67a3085", package = "rmcp" }
-rmcp-macros = { git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "67a3085", package = "rmcp-macros" }
+rmcp = { path = "crates/vendor/rmcp" }
+rmcp-macros = { path = "crates/vendor/rmcp-macros" }
