@@ -211,9 +211,12 @@ pub async fn forward_request(
         .and_then(|m| m.as_str());
     let cache_prompt_hash = super::ocla_cache_bridge::prompt_hash(&body_bytes);
     if let (Some(cache), Some(model)) = (&state.ocla_cache, model)
-        && let Some(body) = cache.try_cache_hit(model, &cache_prompt_hash, 0.0, 0)
+        && let Some(cached) = cache.try_cache_hit(model, &cache_prompt_hash, 0.0, 0)
     {
-        let mut response = Response::new(Body::from(body));
+        let mut response = Response::builder()
+            .status(cached.status)
+            .body(Body::from(cached.body))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         trace_id::inject_trace_id(&mut response, &trace_id);
         return Ok(response);
     }

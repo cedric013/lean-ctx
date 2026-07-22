@@ -65,6 +65,7 @@ impl ResponseCacheKey {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CachedResponse {
     pub body: Vec<u8>,
+    pub status: u16,
     pub tokens: u64,
     pub created_at: Instant,
     pub ttl: Duration,
@@ -265,6 +266,7 @@ mod tests {
     fn response(body: &[u8], created_at: Instant, ttl: Duration) -> CachedResponse {
         CachedResponse {
             body: body.to_vec(),
+            status: 200,
             tokens: body.len() as u64,
             created_at,
             ttl,

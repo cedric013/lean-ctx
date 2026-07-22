@@ -3,12 +3,20 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use axum::http::StatusCode;
+
 use crate::core::ocla::response_cache::{CachedResponse, ResponseCache, ResponseCacheKey};
 
 /// Shared proxy adapter for the OCLA response cache.
 #[derive(Clone, Debug)]
 pub struct OclaCacheBridge {
     cache: Arc<ResponseCache>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CachedProviderResponse {
+    pub body: Vec<u8>,
+    pub status: StatusCode,
 }
 
 impl OclaCacheBridge {
@@ -24,10 +32,13 @@ impl OclaCacheBridge {
         prompt_hash: &str,
         temp: f32,
         max_tokens: u32,
-    ) -> Option<Vec<u8>> {
+    ) -> Option<CachedProviderResponse> {
         self.cache
             .get(&cache_key(model, prompt_hash, temp, max_tokens))
-            .map(|response| response.body)
+            .map(|response| CachedProviderResponse {
+                body: response.body,
+                status: StatusCode::from_u16(response.status).unwrap_or(StatusCode::OK),
+            })
     }
 
     /// Records a response for matching request fields.
@@ -37,6 +48,7 @@ impl OclaCacheBridge {
         prompt_hash: &str,
         temp: f32,
         max_tokens: u32,
+        status: StatusCode,
         body: &[u8],
         tokens: u64,
     ) {
@@ -44,6 +56,7 @@ impl OclaCacheBridge {
             cache_key(model, prompt_hash, temp, max_tokens),
             CachedResponse {
                 body: body.to_vec(),
+                status: status.as_u16(),
                 tokens,
                 created_at: Instant::now(),
                 ttl: Duration::ZERO,
@@ -85,11 +98,22 @@ mod tests {
         let hash = prompt_hash(br#"{"prompt":"hello"}"#);
 
         assert!(bridge.try_cache_hit("model", &hash, 0.2, 128).is_none());
-        bridge.record_response("model", &hash, 0.2, 128, b"answer", 7);
+        bridge.record_response(
+            "model",
+            &hash,
+            0.2,
+            128,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            b"answer",
+            7,
+        );
 
         assert_eq!(
             bridge.try_cache_hit("model", &hash, 0.2, 128),
-            Some(b"answer".to_vec())
+            Some(CachedProviderResponse {
+                body: b"answer".to_vec(),
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+            })
         );
         assert!(bridge.try_cache_hit("model", &hash, 0.3, 128).is_none());
         assert!(

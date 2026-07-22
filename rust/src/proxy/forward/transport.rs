@@ -172,6 +172,7 @@ pub(crate) async fn build_response(
             cache_prompt_hash,
             0.0,
             0,
+            status,
             &resp_bytes,
             measured_output_tokens,
         );
