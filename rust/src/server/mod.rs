@@ -9,6 +9,7 @@ pub mod elicitation;
 pub(crate) mod execute;
 pub mod helpers;
 pub mod multi_path;
+pub mod schema_hook;
 pub mod notifications;
 pub mod permission_inheritance;
 pub mod policy_guard;

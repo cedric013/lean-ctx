@@ -91,6 +91,10 @@ impl ReadConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct CompressionConfig {
+    /// Enable adaptive compression depth (#1195). When true, compression
+    /// aggressiveness is reduced dynamically based on bounce rate and session
+    /// length. Default: true.
+    pub adaptive: Option<bool>,
     pub crp_mode: Option<String>,
     pub output_density: Option<String>,
     pub entropy_threshold: Option<f64>,
@@ -109,6 +113,9 @@ impl CompressionConfig {
     }
     pub fn terse_mode_effective(&self) -> bool {
         self.terse_mode.unwrap_or(false)
+    }
+    pub fn adaptive_effective(&self) -> bool {
+        self.adaptive.unwrap_or(true)
     }
 }
 
@@ -602,6 +609,7 @@ fn builtin_passthrough() -> Profile {
             output_density: Some("normal".to_string()),
             entropy_threshold: None,
             terse_mode: Some(false),
+            adaptive: None,
         },
         translation: TranslationConfig {
             enabled: Some(false),
@@ -770,6 +778,10 @@ fn merge_profiles(parent: Profile, child: Profile) -> Profile {
             .compression
             .terse_mode
             .or(parent.compression.terse_mode),
+        adaptive: child
+            .compression
+            .adaptive
+            .or(parent.compression.adaptive),
     };
     let translation = TranslationConfig {
         enabled: child.translation.enabled.or(parent.translation.enabled),
