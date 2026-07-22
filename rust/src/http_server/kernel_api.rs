@@ -134,7 +134,7 @@ mod tests {
         assert_eq!(response_json(response).await, modified);
         assert_eq!(response_json(get_config().await).await, modified);
 
-        set_config(Json(original))
+        let _ = set_config(Json(original))
             .await
             .expect("original configuration should be restored");
     }
