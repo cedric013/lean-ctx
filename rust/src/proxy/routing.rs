@@ -169,9 +169,6 @@ pub fn route_request(
         local: resolved.local,
         xlat: resolved.xlat,
     };
-    ROUTING_FEEDBACK
-        .get_or_init(RoutingFeedback::new)
-        .record_decision(&decision.routed_from, &decision.model, "routing");
     Some(decision)
 }
 
@@ -379,6 +376,26 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
         }
+    }
+
+    #[test]
+    fn route_decision_does_not_record_feedback_before_outcome() {
+        let feedback = ROUTING_FEEDBACK.get_or_init(RoutingFeedback::new);
+        let before = feedback.stats();
+        let mut body = json!({"model":"expensive","messages":[{"role":"user","content":"hi"}]});
+
+        let decision = route_request(
+            &mut body,
+            "OpenAI",
+            &upstreams_with_foundry(),
+            &rules(&[("expensive", "fast")], &[]),
+            false,
+        )
+        .expect("alias should route");
+
+        assert_eq!(decision.routed_from, "expensive");
+        assert_eq!(decision.model, "fast");
+        assert_eq!(feedback.stats(), before);
     }
 
     #[test]
