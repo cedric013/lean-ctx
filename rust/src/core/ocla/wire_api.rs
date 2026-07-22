@@ -57,6 +57,30 @@ fn budget_store() -> &'static Mutex<BudgetStore> {
     BUDGET_STORE.get_or_init(|| Mutex::new(BudgetStore::default()))
 }
 
+pub fn admit_budgeted_request(scope: &str, tokens: u64, usd: f64) -> Result<(), String> {
+    let scope = parse_budget_scope(scope)?;
+    let mut store = budget_store()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    store
+        .ledger
+        .check_budget_with_cost(&scope, tokens, usd)
+        .map_err(|err| err.to_string())?;
+    store.ledger.record_consumption(&scope, tokens, usd);
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_budget_limit(limit: BudgetLimit) {
+    let mut store = budget_store()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    store.ledger = BudgetLedger::new();
+    store.limits.clear();
+    store.ledger.set_limit(limit.clone());
+    store.limits.insert(limit.scope.clone(), limit);
+}
+
 #[derive(Debug, Deserialize)]
 struct SetBudgetRequest {
     scope: String,
