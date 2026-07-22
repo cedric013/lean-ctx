@@ -182,6 +182,7 @@ fn test_full_pipeline() {
         key.clone(),
         CachedResponse {
             body: b"cached response".to_vec(),
+            status: 200,
             tokens: 40,
             created_at: Instant::now(),
             ttl: Duration::ZERO,
