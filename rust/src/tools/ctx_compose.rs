@@ -497,14 +497,25 @@ pub fn handle(task: &str, project_root: &str, crp_mode: CrpMode) -> (String, usi
     //    Episodic, and Procedural memory that the lexical pipeline misses.
     //    Budget: 20% of symbol budget. Graceful no-op if kernel returns None.
     {
-        let kernel_budget = symbol_budget_tokens() / 5;
+        use crate::core::context_kernel::activation::{load_config, supplement_budget};
+        use crate::core::context_kernel::context_dedup::dedup_kernel_blocks;
+
+        let config = load_config(project_root);
+        let budget = symbol_budget_tokens() / 5;
+        let budget = budget
+            .min(config.max_supplement_tokens)
+            .min(supplement_budget(&config));
         if let Some(enrichment) =
-            crate::core::context_kernel::bridge::kernel_enrich(task, project_root, kernel_budget)
+            crate::core::context_kernel::bridge::kernel_enrich(task, project_root, budget)
                 .filter(|enrichment| !enrichment.blocks.is_empty())
         {
-            out.push_str("\n## Context Kernel\n");
-            out.push_str(&enrichment.blocks);
-            out.push('\n');
+            let blocks =
+                dedup_kernel_blocks(&enrichment.blocks, &mut std::collections::HashSet::new());
+            if !blocks.is_empty() {
+                out.push_str("\n## Context Kernel\n");
+                out.push_str(&blocks);
+                out.push('\n');
+            }
         }
     }
 
