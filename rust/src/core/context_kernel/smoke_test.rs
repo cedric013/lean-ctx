@@ -18,6 +18,8 @@ mod tests {
         proxy_bridge::reset_state();
         mcp_bridge::reset_mcp_state();
         startup::reset();
+        crate::core::context_kernel::ctx_read_dedup::reset();
+        list_tools_opt::reset();
         guard
     }
 
