@@ -104,10 +104,46 @@ pub fn detect_negative_savings(accounting: &PostDeliveryAccounting) -> bool {
     accounting.delivered_tokens > accounting.original_tokens
 }
 
+/// Bridge: compute honest accounting from proxy request data.
+///
+/// Takes raw proxy metrics and produces a complete accounting record
+/// including phantom savings detection.
+pub fn account_proxy_request(
+    original_tokens: usize,
+    compressed_tokens: usize,
+    kernel_supplement_tokens: usize,
+    injection_overhead_tokens: usize,
+) -> PostDeliveryAccounting {
+    compute_honest_accounting(
+        original_tokens,
+        compressed_tokens,
+        kernel_supplement_tokens,
+        injection_overhead_tokens,
+    )
+}
+
+/// Formats a one-line accounting summary suitable for logging.
+pub fn format_proxy_accounting(accounting: &PostDeliveryAccounting) -> String {
+    format!(
+        "delivered={} actual={:.1}% reported={:.1}% phantom={:.1}%",
+        accounting.delivered_tokens,
+        accounting.actual_compression_ratio * 100.0,
+        accounting.reported_compression_ratio * 100.0,
+        accounting.phantom_savings_pct * 100.0,
+    )
+}
+
+/// Returns true if the accounting shows negative net savings (kernel adds
+/// more tokens than compression removes).
+pub fn has_negative_savings(accounting: &PostDeliveryAccounting) -> bool {
+    detect_negative_savings(accounting)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_honest_accounting, detect_negative_savings, format_honest_summary, validate_savings,
+        account_proxy_request, compute_honest_accounting, detect_negative_savings,
+        format_honest_summary, format_proxy_accounting, has_negative_savings, validate_savings,
     };
 
     fn assert_close(actual: f64, expected: f64) {
@@ -184,5 +220,33 @@ mod tests {
 
         assert_eq!(validation.phantom, 5);
         assert!(!validation.is_valid);
+    }
+
+    #[test]
+    fn account_proxy_standard() {
+        let accounting = account_proxy_request(1_000, 300, 50, 20);
+
+        assert_eq!(accounting.delivered_tokens, 370);
+        assert_close(accounting.actual_compression_ratio, 0.63);
+        assert_close(accounting.reported_compression_ratio, 0.70);
+        assert_close(accounting.phantom_savings_pct, 0.07);
+    }
+
+    #[test]
+    fn format_includes_all_fields() {
+        let accounting = account_proxy_request(1_000, 300, 50, 20);
+        let summary = format_proxy_accounting(&accounting);
+
+        assert!(summary.contains("delivered=370"));
+        assert!(summary.contains("actual=63.0%"));
+        assert!(summary.contains("reported=70.0%"));
+        assert!(summary.contains("phantom=7.0%"));
+    }
+
+    #[test]
+    fn negative_savings_detected() {
+        let accounting = account_proxy_request(100, 80, 30, 0);
+
+        assert!(has_negative_savings(&accounting));
     }
 }

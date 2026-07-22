@@ -70,12 +70,49 @@ fn finish_integration(
     }
 }
 
+/// Bridge: integrate kernel context for an MCP tool call.
+///
+/// Unlike [`kernel_integrate`], which takes raw token counts, this function
+/// takes headers and determines the optimal integration strategy based on
+/// the client's coverage class and profile.
+pub fn integrate_for_mcp(
+    query: &str,
+    project_root: &str,
+    headers: &[(String, String)],
+    original_tokens: usize,
+    compressed_tokens: usize,
+) -> KernelIntegration {
+    let profile = super::client_profile::detect_from_headers(headers);
+    let coverage = profile.coverage;
+
+    if !super::coverage_class::is_addressable(coverage) {
+        return KernelIntegration {
+            supplement: None,
+            suppress: false,
+            accounting: compute_honest_accounting(original_tokens, compressed_tokens, 0, 0),
+            budget_used: 0,
+        };
+    }
+
+    kernel_integrate(query, project_root, original_tokens, compressed_tokens)
+}
+
+/// Returns the coverage-aware kernel budget for an MCP request.
+pub fn mcp_kernel_budget(headers: &[(String, String)]) -> usize {
+    let profile = super::client_profile::detect_from_headers(headers);
+    let broker = super::context_broker::ContextBroker::new(profile);
+    broker.compute_budget().kernel_tokens
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::fs;
 
-    use super::{KernelIntegration, finish_integration, integration_overhead, kernel_integrate};
+    use super::{
+        KernelIntegration, finish_integration, integrate_for_mcp, integration_overhead,
+        kernel_integrate, mcp_kernel_budget,
+    };
     use crate::core::context_kernel::accounting_fix::detect_negative_savings;
     use crate::core::context_kernel::activation::KernelModeConfig;
     use crate::core::context_kernel::bridge::{KernelEnrichment, KernelVerdict};
@@ -181,5 +218,43 @@ mod tests {
         );
 
         assert!(detect_negative_savings(&result.accounting));
+    }
+
+    #[test]
+    fn mcp_unmanaged_no_enrichment() {
+        let root = tempfile::tempdir().expect("temporary project root");
+        let headers = vec![("x-coverage-class".to_owned(), "unmanaged".to_owned())];
+
+        let result = integrate_for_mcp(
+            "query with no project candidates",
+            root.path().to_str().expect("UTF-8 project path"),
+            &headers,
+            100,
+            50,
+        );
+
+        assert_eq!(result.budget_used, 0);
+        assert!(result.supplement.is_none());
+    }
+
+    #[test]
+    fn mcp_full_inline_enriches() {
+        let root = tempfile::tempdir().expect("temporary project root");
+        let project_root = root.path().to_str().expect("UTF-8 project path");
+        let headers = vec![("x-coverage-class".to_owned(), "full_inline".to_owned())];
+        let expected = kernel_integrate("bridge query", project_root, 100, 50);
+
+        let result = integrate_for_mcp("bridge query", project_root, &headers, 100, 50);
+
+        assert_eq!(result.supplement, expected.supplement);
+        assert_eq!(result.budget_used, expected.budget_used);
+        assert_eq!(result.suppress, expected.suppress);
+    }
+
+    #[test]
+    fn mcp_budget_from_profile() {
+        let headers = vec![("x-context-window".to_owned(), "64000".to_owned())];
+
+        assert_eq!(mcp_kernel_budget(&headers), 6_400);
     }
 }
