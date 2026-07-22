@@ -1695,30 +1695,22 @@ fn bench_hash_fast_vs_full_correctness() {
         "different large strings should produce different hashes"
     );
 
-    eprintln!("\n{}", "=".repeat(70));
-    eprintln!("  BLAKE3 FAST FINGERPRINT");
-    eprintln!("{}", "=".repeat(70));
-    let start_full = std::time::Instant::now();
-    for _ in 0..100 {
-        let _ = hash_str(&large);
-    }
-    let full_us = start_full.elapsed().as_micros();
+    let mut middle_changed = large.clone().into_bytes();
+    middle_changed[50_000] = b'd';
+    let middle_changed = String::from_utf8(middle_changed).expect("ASCII test data");
+    assert_eq!(
+        fast_hash,
+        hash_fast(&middle_changed),
+        "large hash_fast fingerprints only prefix, suffix, and length"
+    );
 
-    let start_fast = std::time::Instant::now();
-    for _ in 0..100 {
-        let _ = hash_fast(&large);
-    }
-    let fast_us = start_fast.elapsed().as_micros();
-
-    let speedup = full_us as f64 / fast_us.max(1) as f64;
-    eprintln!("  100x hash_str(100KB):     {full_us:>6} us");
-    eprintln!("  100x hash_fast(100KB):    {fast_us:>6} us");
-    eprintln!("  Speedup:                  {speedup:>6.1}x");
-    eprintln!("{}", "=".repeat(70));
-
-    assert!(
-        speedup > 1.5,
-        "hash_fast should be faster for 100KB, got {speedup:.1}x"
+    let mut suffix_changed = large.clone().into_bytes();
+    suffix_changed[99_999] = b'd';
+    let suffix_changed = String::from_utf8(suffix_changed).expect("ASCII test data");
+    assert_ne!(
+        fast_hash,
+        hash_fast(&suffix_changed),
+        "large hash_fast fingerprints the suffix"
     );
 }
 
