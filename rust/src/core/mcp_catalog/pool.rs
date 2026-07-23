@@ -59,11 +59,9 @@ fn pool_identity(transport: &ResolvedTransport) -> String {
             args,
             env,
             binary_sha256,
-            secret_fingerprints,
             capabilities,
         } => format!(
-            "stdio|command={command:?}|args={args:?}|env={:?}|binary_sha256={binary_sha256:?}|secrets={secret_fingerprints:?}|capabilities={capabilities:?}",
-            public_values(env, secret_fingerprints)
+            "stdio|command={command:?}|args={args:?}|env={env:?}|binary_sha256={binary_sha256:?}|capabilities={capabilities:?}"
         ),
         ResolvedTransport::Http {
             url,
@@ -161,7 +159,6 @@ mod tests {
             args: vec![],
             env: BTreeMap::new(),
             binary_sha256: String::new(),
-            secret_fingerprints: BTreeMap::new(),
             capabilities: None,
         }
     }
@@ -187,7 +184,6 @@ mod tests {
             args: vec![],
             env: env.clone(),
             binary_sha256: String::new(),
-            secret_fingerprints: secrets.clone(),
             capabilities: None,
         };
         assert!(!pool_identity(&first).contains("raw-token-one"));
@@ -197,7 +193,6 @@ mod tests {
             args: vec![],
             env,
             binary_sha256: String::new(),
-            secret_fingerprints: secrets.clone(),
             capabilities: None,
         };
         assert_eq!(key(&first), key(&same_fingerprint));
@@ -207,7 +202,6 @@ mod tests {
             args: vec![],
             env: BTreeMap::from([("GITLAB_TOKEN".into(), "raw-token-two".into())]),
             binary_sha256: String::new(),
-            secret_fingerprints: secrets,
             capabilities: None,
         };
         assert_ne!(key(&first), key(&rotated));

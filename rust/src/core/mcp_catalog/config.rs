@@ -153,7 +153,6 @@ pub enum ResolvedTransport {
         env: BTreeMap<String, String>,
         /// SHA-256 pin of `command` to verify before spawn (empty = unpinned).
         binary_sha256: String,
-        secret_fingerprints: BTreeMap<String, String>,
         /// Declared capabilities to enforce at spawn (`None` = legacy path).
         capabilities: Option<AddonCapabilities>,
     },
@@ -172,18 +171,13 @@ impl fmt::Debug for ResolvedTransport {
                 args,
                 env,
                 binary_sha256,
-                secret_fingerprints,
                 capabilities,
             } => formatter
                 .debug_struct("Stdio")
                 .field("command", command)
                 .field("args", args)
-                .field("env", &redacted_values(env, secret_fingerprints))
+                .field("env", env)
                 .field("binary_sha256", binary_sha256)
-                .field(
-                    "secret_fields",
-                    &secret_fingerprints.keys().collect::<Vec<_>>(),
-                )
                 .field("capabilities", capabilities)
                 .finish(),
             Self::Http {
@@ -236,11 +230,9 @@ impl GatewayServer {
                     ));
                 }
                 let mut env = self.env.clone();
-                let mut secret_fingerprints = BTreeMap::new();
                 for (name, memento) in &self.secret_env {
-                    let (value, fingerprint) = memento.restore(name)?;
+                    let (value, _) = memento.restore(name)?;
                     env.insert(name.clone(), value);
-                    secret_fingerprints.insert(name.clone(), fingerprint);
                 }
 
                 Ok(ResolvedTransport::Stdio {
@@ -248,7 +240,6 @@ impl GatewayServer {
                     args: self.args.clone(),
                     env,
                     binary_sha256: self.binary_sha256.clone(),
-                    secret_fingerprints,
                     capabilities: self.capabilities.clone(),
                 })
             }
@@ -443,7 +434,6 @@ integration = "codebase-pack"
                 args: vec!["/tmp".into()],
                 env: BTreeMap::new(),
                 binary_sha256: String::new(),
-                secret_fingerprints: BTreeMap::new(),
                 capabilities: None,
             }
         );
@@ -497,16 +487,11 @@ integration = "codebase-pack"
         };
         let resolved = s.resolve().expect("resolve");
         match resolved {
-            ResolvedTransport::Stdio {
-                env,
-                secret_fingerprints,
-                ..
-            } => {
+            ResolvedTransport::Stdio { env, .. } => {
                 assert_eq!(
                     env.get("GITLAB_TOKEN").map(String::as_str),
                     Some("test-secret")
                 );
-                assert!(secret_fingerprints.contains_key("GITLAB_TOKEN"));
             }
             _ => panic!("expected stdio"),
         }
