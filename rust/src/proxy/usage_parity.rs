@@ -26,7 +26,9 @@ pub fn real_usage_to_envelope(usage: &super::usage::RealUsage, label: &str) -> T
         cache_read_tokens: usage.cache_read_tokens as usize,
         cache_write_tokens: usage.cache_write_tokens as usize,
         reasoning_tokens: usage.reasoning_tokens as usize,
-        estimated_cost_usd: usage.provider_cost_usd,
+        cost_usd: usage.provider_cost_usd,
+        tokens_saved: 0,
+        is_retry: false,
     }
 }
 
@@ -101,7 +103,7 @@ mod tests {
         assert_eq!(envelope.cache_read_tokens, 13);
         assert_eq!(envelope.cache_write_tokens, 14);
         assert_eq!(envelope.reasoning_tokens, 15);
-        assert_eq!(envelope.estimated_cost_usd, Some(0.25));
+        assert_eq!(envelope.cost_usd, Some(0.25));
     }
 
     #[test]

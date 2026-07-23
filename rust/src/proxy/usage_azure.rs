@@ -22,7 +22,7 @@ pub fn is_azure_response(headers: &HeaderMap) -> bool {
         || headers.contains_key("x-ms-rai-invoked")
         || headers
             .keys()
-            .map(|name| name.as_str())
+            .map(http::HeaderName::as_str)
             .any(|name| name.starts_with("x-ms-") && name.contains("azure"))
 }
 

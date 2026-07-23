@@ -10,7 +10,7 @@ use super::token_envelope::{ProviderKind, TokenEnvelope};
 use super::{evidence_wiring, kernel_config, usage_normalizer};
 
 /// Aggregate request statistics for one provider.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ProviderStat {
     /// Provider represented by this aggregate.
     pub provider: ProviderKind,
@@ -61,7 +61,7 @@ pub fn record_proxy_envelope(envelope: &TokenEnvelope) {
         evidence_wiring::record_from_proxy_dispatch(
             envelope.input_tokens,
             envelope.output_tokens,
-            envelope.reasoning_tokens,
+            envelope.tokens_saved,
             Some(&envelope.model),
             Some(&provider),
         );
@@ -77,7 +77,7 @@ pub fn record_mcp_envelope(tool_name: &str, envelope: &TokenEnvelope) {
             tool_name,
             envelope.input_tokens,
             envelope.output_tokens,
-            envelope.reasoning_tokens,
+            envelope.tokens_saved,
         );
         usage_normalizer::record_envelope(envelope);
     }
