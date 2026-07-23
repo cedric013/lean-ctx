@@ -390,7 +390,9 @@ fn should_passthrough_claude_auto_memory() {
         "/home/jules/.claude/projects/-home-jules-Projects-blockposters/memory/debugging.md"
     ));
     assert!(
-        !should_passthrough("/home/jules/.claude/projects/-home-jules-Projects-blockposters/abc.jsonl"),
+        !should_passthrough(
+            "/home/jules/.claude/projects/-home-jules-Projects-blockposters/abc.jsonl"
+        ),
         "session transcripts must not passthrough as memory"
     );
 }
