@@ -68,11 +68,8 @@ fn episodic_lock(project_hash: &str) -> Arc<Mutex<()>> {
     let mut locks = LOCKS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    locks
-        .entry(project_hash.to_string())
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    locks.entry(project_hash.to_string()).or_default().clone()
 }
 
 fn acquire_file_lock(path: &Path) -> Option<std::fs::File> {
@@ -286,7 +283,7 @@ impl EpisodicStore {
         let lock = episodic_lock(project_hash);
         let _guard = lock
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let path = Self::store_path(project_hash)
             .ok_or_else(|| "Cannot determine data directory".to_string())?;
@@ -403,7 +400,7 @@ pub fn record_session_episode(
 
     let (_, episode_id) = EpisodicStore::mutate_locked(project_hash, |store| {
         let mut episode = create_episode_from_session(session, tool_calls);
-        episode.agent_id = normalized_agent_id.clone();
+        episode.agent_id.clone_from(&normalized_agent_id);
 
         if deduplicate
             && store.episodes.iter().any(|existing| {
@@ -572,14 +569,18 @@ mod tests {
 
         let store = EpisodicStore::load_or_create(project_hash);
         assert_eq!(store.episodes.len(), 2);
-        assert!(store
-            .episodes
-            .iter()
-            .any(|episode| episode.agent_id.as_deref() == Some("agent-a")));
-        assert!(store
-            .episodes
-            .iter()
-            .any(|episode| episode.agent_id.as_deref() == Some("agent-b")));
+        assert!(
+            store
+                .episodes
+                .iter()
+                .any(|episode| episode.agent_id.as_deref() == Some("agent-a"))
+        );
+        assert!(
+            store
+                .episodes
+                .iter()
+                .any(|episode| episode.agent_id.as_deref() == Some("agent-b"))
+        );
     }
 
     #[test]
@@ -592,36 +593,42 @@ mod tests {
         session.set_task("same task", None);
         let tool_calls = vec![("ctx_read".to_string(), 10)];
 
-        assert!(record_session_episode(
-            project_hash,
-            &session,
-            &tool_calls,
-            Some("agent-a"),
-            &policy,
-            true,
-        )
-        .unwrap()
-        .is_some());
-        assert!(record_session_episode(
-            project_hash,
-            &session,
-            &tool_calls,
-            Some("agent-a"),
-            &policy,
-            true,
-        )
-        .unwrap()
-        .is_none());
-        assert!(record_session_episode(
-            project_hash,
-            &session,
-            &tool_calls,
-            Some("agent-b"),
-            &policy,
-            true,
-        )
-        .unwrap()
-        .is_some());
+        assert!(
+            record_session_episode(
+                project_hash,
+                &session,
+                &tool_calls,
+                Some("agent-a"),
+                &policy,
+                true,
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            record_session_episode(
+                project_hash,
+                &session,
+                &tool_calls,
+                Some("agent-a"),
+                &policy,
+                true,
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            record_session_episode(
+                project_hash,
+                &session,
+                &tool_calls,
+                Some("agent-b"),
+                &policy,
+                true,
+            )
+            .unwrap()
+            .is_some()
+        );
 
         let store = EpisodicStore::load_or_create(project_hash);
         assert_eq!(store.episodes.len(), 2);
