@@ -6,7 +6,7 @@
 //! hole of the agent era), lifecycle state, best-effort attestation and a
 //! SPIFFE-compatible identity string for workload-IAM integration.
 //!
-//! Storage: `<data_dir>/agents/registry.json`, advisory-file-locked like
+//! Storage: `<data_dir>/agents/identity-registry.json`, advisory-file-locked like
 //! the audit trail (multiple concurrent agent processes are LeanCTX's
 //! normal operating mode). Every lifecycle transition writes a
 //! tamper-evident audit entry (OCP Part 4, additive event types).
@@ -74,13 +74,26 @@ fn registry_path() -> Result<PathBuf, String> {
         .map_err(|e| format!("data dir: {e}"))?
         .join("agents");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.join("registry.json"))
+    Ok(dir.join("identity-registry.json"))
+}
+
+fn legacy_registry_path() -> Result<PathBuf, String> {
+    registry_path().map(|path| path.with_file_name("registry.json"))
 }
 
 fn load_unlocked(path: &PathBuf) -> BTreeMap<String, AgentRecord> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_default()
+}
+
+fn load_registry(path: &PathBuf) -> BTreeMap<String, AgentRecord> {
+    if path.exists() {
+        return load_unlocked(path);
+    }
+    legacy_registry_path()
+        .map(|legacy| load_unlocked(&legacy))
         .unwrap_or_default()
 }
 
@@ -101,7 +114,7 @@ fn with_registry<T>(
     lock.lock_exclusive()
         .map_err(|e| format!("registry lock: {e}"))?;
 
-    let mut registry = load_unlocked(&path);
+    let mut registry = load_registry(&path);
     let result = f(&mut registry);
     if result.is_ok() {
         let json =
@@ -115,14 +128,14 @@ fn with_registry<T>(
 /// Read-only registry snapshot.
 pub fn list() -> Vec<AgentRecord> {
     registry_path()
-        .map(|p| load_unlocked(&p).into_values().collect())
+        .map(|p| load_registry(&p).into_values().collect())
         .unwrap_or_default()
 }
 
 pub fn get(agent_id: &str) -> Option<AgentRecord> {
     registry_path()
         .ok()
-        .and_then(|p| load_unlocked(&p).remove(agent_id))
+        .and_then(|p| load_registry(&p).remove(agent_id))
 }
 
 fn audit(event_type: AuditEventType, agent_id: &str, role: &str, detail: Option<String>) {
@@ -424,6 +437,51 @@ mod tests {
         assert!(register("a1", "coder", " ").is_err());
         assert!(register("a1", "no-such-role", "yves@org").is_err());
         assert!(register("a/1", "coder", "yves@org").is_err());
+    }
+
+    #[test]
+    fn identity_registry_does_not_overwrite_mcp_presence_registry() {
+        let iso = isolated();
+        let agents_dir = iso.path().join("agents");
+        std::fs::create_dir_all(&agents_dir).expect("agents dir");
+        let presence_path = agents_dir.join("registry.json");
+        let presence = r#"{"agents":[{"agent_id":"mcp-1"}]}"#;
+        std::fs::write(&presence_path, presence).expect("presence registry");
+
+        register("identity-1", "coder", "yves@org").expect("register identity");
+
+        assert_eq!(
+            std::fs::read_to_string(presence_path).expect("presence survives"),
+            presence
+        );
+        assert!(agents_dir.join("identity-registry.json").exists());
+    }
+
+    #[test]
+    fn legacy_identity_registry_migrates_on_next_write() {
+        let iso = isolated();
+        let agents_dir = iso.path().join("agents");
+        std::fs::create_dir_all(&agents_dir).expect("agents dir");
+        let legacy_path = agents_dir.join("registry.json");
+        let legacy = AgentRecord {
+            agent_id: "legacy-1".to_string(),
+            role: "coder".to_string(),
+            owner: "yves@org".to_string(),
+            status: AgentStatus::Active,
+            created_at: String::new(),
+            public_key: String::new(),
+            attestation: None,
+            last_heartbeat: None,
+            suspended_reason: None,
+            decommissioned_at: None,
+        };
+        let records = BTreeMap::from([(legacy.agent_id.clone(), legacy)]);
+        std::fs::write(&legacy_path, serde_json::to_string(&records).expect("JSON"))
+            .expect("legacy registry");
+
+        assert!(get("legacy-1").is_some());
+        heartbeat("legacy-1").expect("migrate heartbeat");
+        assert!(agents_dir.join("identity-registry.json").exists());
     }
 
     #[test]
