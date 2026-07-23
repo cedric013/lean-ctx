@@ -27,7 +27,7 @@ pub(super) fn edge_weight(kind: &str) -> f64 {
 
 pub(super) struct AdjGraph {
     pub(super) node_ids: Vec<String>,
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(test), allow(dead_code))] // read by community integration tests
     pub(super) node_to_idx: HashMap<String, usize>,
     /// Symmetric adjacency: every undirected edge `{i,j}` appears as `(i→j)` in
     /// `adj[i]` and `(j→i)` in `adj[j]`. Neighbor lists are sorted by index.

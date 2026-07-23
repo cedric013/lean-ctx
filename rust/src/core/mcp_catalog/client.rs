@@ -109,21 +109,73 @@ fn http_headers(
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Whether `err` indicates the pooled connection is broken (so a fresh reopen +
+/// retry of an *idempotent* op is safe), as opposed to a timeout (the request
+/// may still be running) or a higher-level failure. Errors here are produced by
+/// this module, so the match is on our own stable strings.
+fn is_broken_connection(err: &str) -> bool {
+    !err.contains("timed out")
+}
 
-    #[test]
-    fn memento_headers_are_marked_sensitive() {
-        let headers = BTreeMap::from([
-            ("Accept".into(), "application/json".into()),
-            ("Authorization".into(), "Bearer private-token".into()),
-        ]);
-        let secrets = BTreeMap::from([("authorization".into(), "fingerprint".into())]);
-        let converted = http_headers(&headers, &secrets).expect("valid headers");
+/// Flatten a downstream [`CallToolResult`] into plain text. Text blocks are
+/// concatenated; non-text blocks (images/resources) are summarized so the proxy
+/// never returns binary blobs into the model context.
+pub fn result_to_text(result: &CallToolResult) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for c in &result.content {
+        if let Some(t) = c.as_text() {
+            parts.push(t.text.clone());
+        } else if c.as_image().is_some() {
+            parts.push("[image content omitted by gateway]".to_string());
+        } else {
+            parts.push("[non-text content omitted by gateway]".to_string());
+        }
+    }
+    parts.join("\n")
+}
 
-        assert!(!converted[&http::header::ACCEPT].is_sensitive());
-        assert!(converted[&http::header::AUTHORIZATION].is_sensitive());
+/// Proxy a single tool call to a downstream server over a pooled session
+/// (`tools/call`). [`super::pool::acquire`] only returns a live session, so the
+/// request is never sent into a dead pipe. A failed call is **never** retried:
+/// a downstream tool may be non-idempotent, so re-issuing could double-execute a
+/// side effect. On any failure we evict the (now-suspect) session — the next
+/// call reopens cleanly — and surface the error for the caller to decide.
+pub async fn proxy_call(
+    transport: &ResolvedTransport,
+    tool: &str,
+    arguments: Map<String, Value>,
+    timeout: Duration,
+) -> Result<CallToolResult, String> {
+    let key = super::pool::key(transport);
+    let service = super::pool::acquire(transport, timeout).await?;
+    let result = call_tool_on(&service, tool, arguments, timeout).await;
+    if result.is_err() {
+        super::pool::evict(key);
+    }
+    result
+}
+
+/// List a downstream server's tools over a pooled session (`tools/list`).
+/// [`super::pool::acquire`] guarantees a live session, so the only failure left
+/// is a rare mid-flight transport death; because listing is idempotent we evict
+/// the suspect session and reopen once. A timeout is surfaced (not retried).
+pub async fn fetch_tools(
+    transport: &ResolvedTransport,
+    timeout: Duration,
+) -> Result<Vec<Tool>, String> {
+    let key = super::pool::key(transport);
+    let service = super::pool::acquire(transport, timeout).await?;
+    match list_tools_on(&service, timeout).await {
+        Ok(tools) => Ok(tools),
+        Err(e) => {
+            super::pool::evict(key);
+            if is_broken_connection(&e) {
+                let service = super::pool::acquire(transport, timeout).await?;
+                list_tools_on(&service, timeout).await
+            } else {
+                Err(e)
+            }
+        }
     }
 }
 
@@ -152,72 +204,20 @@ pub async fn call_tool_on(
         .and_then(|r| r.map_err(|e| format!("downstream tools/call failed: {e}")))
 }
 
-/// List a downstream server's tools over a pooled session (`tools/list`).
-/// [`super::pool::acquire`] guarantees a live session, so the only failure left
-/// is a rare mid-flight transport death; because listing is idempotent we evict
-/// the suspect session and reopen once. A timeout is surfaced (not retried).
-pub async fn fetch_tools(
-    transport: &ResolvedTransport,
-    timeout: Duration,
-) -> Result<Vec<Tool>, String> {
-    let key = super::pool::key(transport);
-    let service = super::pool::acquire(transport, timeout).await?;
-    match list_tools_on(&service, timeout).await {
-        Ok(tools) => Ok(tools),
-        Err(e) => {
-            super::pool::evict(key);
-            if is_broken_connection(&e) {
-                let service = super::pool::acquire(transport, timeout).await?;
-                list_tools_on(&service, timeout).await
-            } else {
-                Err(e)
-            }
-        }
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Proxy a single tool call to a downstream server over a pooled session
-/// (`tools/call`). [`super::pool::acquire`] only returns a live session, so the
-/// request is never sent into a dead pipe. A failed call is **never** retried:
-/// a downstream tool may be non-idempotent, so re-issuing could double-execute a
-/// side effect. On any failure we evict the (now-suspect) session — the next
-/// call reopens cleanly — and surface the error for the caller to decide.
-pub async fn proxy_call(
-    transport: &ResolvedTransport,
-    tool: &str,
-    arguments: Map<String, Value>,
-    timeout: Duration,
-) -> Result<CallToolResult, String> {
-    let key = super::pool::key(transport);
-    let service = super::pool::acquire(transport, timeout).await?;
-    let result = call_tool_on(&service, tool, arguments, timeout).await;
-    if result.is_err() {
-        super::pool::evict(key);
-    }
-    result
-}
+    #[test]
+    fn memento_headers_are_marked_sensitive() {
+        let headers = BTreeMap::from([
+            ("Accept".into(), "application/json".into()),
+            ("Authorization".into(), "Bearer private-token".into()),
+        ]);
+        let secrets = BTreeMap::from([("authorization".into(), "fingerprint".into())]);
+        let converted = http_headers(&headers, &secrets).expect("valid headers");
 
-/// Whether `err` indicates the pooled connection is broken (so a fresh reopen +
-/// retry of an *idempotent* op is safe), as opposed to a timeout (the request
-/// may still be running) or a higher-level failure. Errors here are produced by
-/// this module, so the match is on our own stable strings.
-fn is_broken_connection(err: &str) -> bool {
-    !err.contains("timed out")
-}
-
-/// Flatten a downstream [`CallToolResult`] into plain text. Text blocks are
-/// concatenated; non-text blocks (images/resources) are summarized so the proxy
-/// never returns binary blobs into the model context.
-pub fn result_to_text(result: &CallToolResult) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    for c in &result.content {
-        if let Some(t) = c.as_text() {
-            parts.push(t.text.clone());
-        } else if c.as_image().is_some() {
-            parts.push("[image content omitted by gateway]".to_string());
-        } else {
-            parts.push("[non-text content omitted by gateway]".to_string());
-        }
+        assert!(!converted[&http::header::ACCEPT].is_sensitive());
+        assert!(converted[&http::header::AUTHORIZATION].is_sensitive());
     }
-    parts.join("\n")
 }

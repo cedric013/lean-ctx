@@ -240,7 +240,7 @@ fn apply_shadow_permissions_inplace(obj: &mut serde_json::Map<String, serde_json
 /// Apply permission denies for native tools in opencode.json — forces the
 /// agent to use ctx_* equivalents from the MCP server. Always overwrites
 /// regardless of any user-set permission values.
-#[allow(dead_code)]
+#[cfg(test)]
 fn apply_shadow_permissions(config_path: &std::path::Path, display_path: &str) {
     let content = std::fs::read_to_string(config_path).unwrap_or_default();
     let mut json = crate::core::jsonc::parse_jsonc(&content)
@@ -284,7 +284,7 @@ fn remove_shadow_permissions_inplace(obj: &mut serde_json::Map<String, serde_jso
 /// Remove shadow-mode permission denies from opencode.json. Only removes
 /// entries WE set — tools with value "deny" that are in our deny list.
 /// Leaves other permission entries and other values for these tools untouched.
-#[allow(dead_code)]
+#[cfg(test)]
 fn remove_shadow_permissions(config_path: &std::path::Path, display_path: &str) {
     let Ok(content) = std::fs::read_to_string(config_path) else {
         return;

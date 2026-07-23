@@ -63,8 +63,7 @@ pub(crate) const CODEX_CHATGPT_PROVIDER_ID: &str = "leanctx-chatgpt";
 pub(crate) fn install_codex_env_at(config_dir: &Path, port: u16, quiet: bool) {
     install_codex_env_at_mode(config_dir, port, quiet, CodexProxyMode::ApiKey, false);
 }
-
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))] // test helper entrypoint
 pub(crate) fn install_codex_env_at_mode(
     config_dir: &Path,
     port: u16,

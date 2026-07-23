@@ -6,8 +6,6 @@
 //! threshold are moved to a dormant pool and only activated on context change.
 //!
 //! Determinism (#498): same rules + same context → same scores + same selection.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 const CHARS_PER_TOKEN: usize = 4;

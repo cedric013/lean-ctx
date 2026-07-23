@@ -3,6 +3,7 @@
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use axum::http::HeaderMap;
 
 fn valid() -> PublishPayload {
     PublishPayload {

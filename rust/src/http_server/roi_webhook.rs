@@ -258,7 +258,7 @@ fn post_webhook(url: &str, payload: &serde_json::Value) -> Result<(), String> {
 }
 
 /// Expose the state path for ops/debugging (`lean-ctx team … status` later).
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))] // test helper for webhook state file path
 pub fn state_path(savings_dir: &Path) -> PathBuf {
     savings_dir.join(STATE_FILE)
 }

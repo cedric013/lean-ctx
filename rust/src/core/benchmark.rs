@@ -32,7 +32,6 @@ pub struct ModeMeasurement {
 
 #[derive(Debug, Clone)]
 pub struct FileMeasurement {
-    #[allow(dead_code)]
     pub path: String,
     pub ext: String,
     pub raw_tokens: usize,
@@ -77,7 +76,6 @@ pub struct ProjectBenchmark {
     pub languages: Vec<LanguageStats>,
     pub mode_summaries: Vec<ModeSummary>,
     pub session_sim: SessionSimResult,
-    #[allow(dead_code)]
     pub file_results: Vec<FileMeasurement>,
 }
 

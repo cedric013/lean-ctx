@@ -1,3 +1,4 @@
+#![allow(dead_code)] // Reserved: rule budget enforcer pending proxy wiring
 //! Context budget enforcement (#1141): ensures agent config never exceeds
 //! a configurable token budget, automatically evicting low-relevance rules.
 //!
@@ -5,8 +6,6 @@
 //! that fits within the attention budget. Tracks metrics for observability.
 //!
 //! Determinism (#498): same rules + same context + same budget → same output.
-#![allow(dead_code)]
-
 use super::rule_scorer::{AgentRule, BudgetAllocation, SessionContext};
 
 const DEFAULT_MAX_CONFIG_TOKENS: usize = 800;
@@ -230,7 +229,7 @@ mod tests {
         let output2 = enforcer.enforce(&rules, &ctx2);
 
         // Different contexts should produce different outputs (or at least trigger rebalance)
-        assert!(enforcer.metrics().context_changes_since_last_rebalance == 0);
+        assert_eq!(enforcer.metrics().context_changes_since_last_rebalance, 0);
         let _ = (output1, output2); // used
     }
 
@@ -272,7 +271,7 @@ mod tests {
         let m = enforcer.metrics();
         assert_eq!(m.total_rules, 10);
         assert!(m.injected_rules > 0);
-        assert!(m.tokens_budget == 100);
+        assert_eq!(m.tokens_budget, 100);
         assert!(m.budget_utilization > 0.0);
         assert!(m.budget_utilization <= 1.0);
     }

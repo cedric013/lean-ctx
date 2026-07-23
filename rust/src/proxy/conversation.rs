@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 #![allow(clippy::cast_precision_loss)]
 //! Conversation history compression (#1123): reduces token cost of long
 //! multi-turn sessions by scoring and tiering messages.

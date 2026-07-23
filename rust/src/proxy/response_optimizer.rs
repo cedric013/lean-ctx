@@ -82,8 +82,6 @@ impl Default for ResponseOptimizerConfig {
 struct CacheEntry {
     response_body: String,
     created_at: Instant,
-    #[allow(dead_code)] // read in future stats aggregation
-    output_tokens_saved: u64,
 }
 
 /// The response cache — bounded LRU with TTL eviction.
@@ -115,7 +113,7 @@ impl ResponseCache {
     }
 
     /// Insert a response into the cache.
-    pub fn put(&mut self, key: u64, response: String, output_tokens: u64) {
+    pub fn put(&mut self, key: u64, response: String, _output_tokens: u64) {
         self.evict_expired();
         // Remove existing entry with same key (update).
         self.entries.retain(|(k, _)| *k != key);
@@ -128,7 +126,6 @@ impl ResponseCache {
             CacheEntry {
                 response_body: response,
                 created_at: Instant::now(),
-                output_tokens_saved: output_tokens,
             },
         ));
     }

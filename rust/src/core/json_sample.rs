@@ -133,9 +133,6 @@ pub fn sample_text_if_beneficial(text: &str, opts: &SampleOpts) -> Option<Sample
 #[derive(Debug, Clone)]
 struct FieldScore {
     name: String,
-    /// Distinct-value ratio (0.0 = constant, 1.0 = all unique).
-    #[allow(dead_code)]
-    uniqueness: f64,
     /// Whether the field contains numeric values (enables outlier detection).
     is_numeric: bool,
     /// Whether field values frequently contain error indicators.
@@ -190,7 +187,6 @@ fn score_fields(arr: &[Value]) -> Vec<FieldScore> {
 
         scores.push(FieldScore {
             name: key.clone(),
-            uniqueness,
             is_numeric,
             is_error_field,
             info_score,

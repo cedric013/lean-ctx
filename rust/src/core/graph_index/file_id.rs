@@ -9,16 +9,11 @@ use std::fmt;
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FileId(u32);
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Reserved for graph index consumers
 impl FileId {
     /// Sentinel for "no file" / placeholder contexts. Never returned by
     /// [`PathInterner::intern`]; safe to use as a default or error marker.
     pub const NONE: Self = Self(u32::MAX);
-
-    #[inline]
-    pub(crate) fn raw(self) -> u32 {
-        self.0
-    }
 }
 
 impl fmt::Debug for FileId {
@@ -65,8 +60,10 @@ impl PathInterner {
         self.to_id.insert(path.to_owned(), id);
         id
     }
+}
 
-    #[allow(dead_code)]
+#[allow(dead_code)] // Reserved for graph index consumers
+impl PathInterner {
     /// Intern an already-owned `String`, avoiding a clone when the path is new.
     pub fn intern_owned(&mut self, path: String) -> FileId {
         if let Some(&id) = self.to_id.get(&path) {
@@ -78,13 +75,11 @@ impl PathInterner {
         id
     }
 
-    #[allow(dead_code)]
     /// Look up a path without interning it.
     pub fn get(&self, path: &str) -> Option<FileId> {
         self.to_id.get(path).copied()
     }
 
-    #[allow(dead_code)]
     /// Resolve a [`FileId`] back to its repository-relative path.
     ///
     /// # Panics
@@ -94,24 +89,20 @@ impl PathInterner {
         &self.to_path[id.0 as usize]
     }
 
-    #[allow(dead_code)]
     /// Non-panicking resolve — returns `None` for out-of-range ids.
     pub fn try_resolve(&self, id: FileId) -> Option<&str> {
         self.to_path.get(id.0 as usize).map(String::as_str)
     }
 
-    #[allow(dead_code)]
     /// Number of distinct interned paths.
     pub fn len(&self) -> usize {
         self.to_path.len()
     }
 
-    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.to_path.is_empty()
     }
 
-    #[allow(dead_code)]
     /// Iterate over all `(FileId, path)` pairs in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = (FileId, &str)> {
         self.to_path

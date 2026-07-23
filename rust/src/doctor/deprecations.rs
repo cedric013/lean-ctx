@@ -25,7 +25,6 @@ struct Deprecation {
     #[serde(default)]
     replacement: String,
     #[serde(default)]
-    #[allow(dead_code)]
     note: String,
 }
 
@@ -54,8 +53,13 @@ pub(super) fn deprecations_outcome() -> Outcome {
                 } else {
                     format!("use {}", d.replacement)
                 };
+                let note = if d.note.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {DIM}— {}{RST}", d.note)
+                };
                 line.push_str(&format!(
-                    "\n      {YELLOW}•{RST} [{}] {} {DIM}({}){RST} — announced {}, removal ≥ {} — {DIM}{replacement}{RST}",
+                    "\n      {YELLOW}•{RST} [{}] {} {DIM}({}){RST} — announced {}, removal ≥ {} — {DIM}{replacement}{RST}{note}",
                     d.surface, d.subject, d.id, d.announced_in, d.earliest_removal
                 ));
             }

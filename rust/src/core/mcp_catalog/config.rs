@@ -512,7 +512,7 @@ integration = "codebase-pack"
                     Some("test-secret")
                 );
             }
-            _ => panic!("expected stdio"),
+            ResolvedTransport::Http { .. } => panic!("expected stdio"),
         }
         crate::core::mcp_catalog::memento::SecretMementoStore::global()
             .remove("mcp/gitlab/default");
@@ -548,7 +548,7 @@ integration = "codebase-pack"
                 );
                 assert!(secret_fingerprints.contains_key("Authorization"));
             }
-            _ => panic!("expected http"),
+            ResolvedTransport::Stdio { .. } => panic!("expected http"),
         }
         crate::core::mcp_catalog::memento::SecretMementoStore::global().remove("mcp/gitlab/header");
     }
@@ -587,7 +587,7 @@ integration = "codebase-pack"
                 assert_eq!(secret_fingerprints.len(), 1);
                 assert!(secret_fingerprints.contains_key("Authorization"));
             }
-            _ => panic!("expected http"),
+            ResolvedTransport::Stdio { .. } => panic!("expected http"),
         }
         store.remove("mcp/gitlab/header-case");
     }

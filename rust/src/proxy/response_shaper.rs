@@ -8,14 +8,14 @@
 //!
 //! Determinism (#498): same response bytes → same shaped output. All pattern
 //! matching is deterministic (static regex set, no randomness).
-#![allow(dead_code)]
-
 use regex::Regex;
 use std::sync::LazyLock;
 
 /// Result of shaping a response.
 pub(crate) struct ShapingResult {
+    #[cfg_attr(not(test), allow(dead_code))] // Read by proxy forward path once wired (#1125)
     pub bytes: Vec<u8>,
+    #[cfg_attr(not(test), allow(dead_code))] // Read by proxy forward path once wired (#1125)
     pub tokens_saved: usize,
 }
 

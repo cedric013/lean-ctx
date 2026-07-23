@@ -6,13 +6,12 @@
 //! 2. Conversation compression (score+tier messages on long conversations)
 //!
 //! Both are gated on `Config::response_shaping_mode` / `Config::conversation_compression`.
-#![allow(dead_code)]
-
 use super::conversation;
 use super::response_shaper::{self, ShapingMode, ShapingResult};
 
 /// Apply response shaping to non-streaming response bytes.
 /// Returns shaped bytes + tokens saved, or `None` if shaping didn't apply.
+#[cfg_attr(not(test), allow(dead_code))] // Reserved: proxy forward integration pending (#1125)
 pub(crate) fn shape_response(resp_bytes: &[u8], mode: &str) -> Option<ShapingResult> {
     let shaping_mode = ShapingMode::from_str_config(mode);
     response_shaper::shape_response(resp_bytes, shaping_mode)
@@ -20,6 +19,7 @@ pub(crate) fn shape_response(resp_bytes: &[u8], mode: &str) -> Option<ShapingRes
 
 /// Compress conversation messages if the request exceeds thresholds.
 /// Returns compressed messages array + savings stats, or `None` if not applicable.
+#[cfg_attr(not(test), allow(dead_code))] // Reserved: proxy forward integration pending (#1123)
 pub(crate) fn compress_conversation(body_bytes: &[u8]) -> Option<(Vec<u8>, usize, usize, usize)> {
     let mut parsed: serde_json::Value = serde_json::from_slice(body_bytes).ok()?;
 

@@ -25,8 +25,7 @@ pub(crate) fn intern(conn: &Connection, path: &str) -> anyhow::Result<FileId> {
     )?;
     Ok(FileId(id))
 }
-
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))] // round-trip tested
 pub(crate) fn get(conn: &Connection, path: &str) -> anyhow::Result<Option<FileId>> {
     Ok(conn
         .query_row(
@@ -36,8 +35,7 @@ pub(crate) fn get(conn: &Connection, path: &str) -> anyhow::Result<Option<FileId
         )
         .optional()?)
 }
-
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))] // round-trip tested
 pub(crate) fn resolve(conn: &Connection, id: FileId) -> anyhow::Result<Option<String>> {
     Ok(conn
         .query_row(
