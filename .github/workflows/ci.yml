@@ -116,6 +116,15 @@ jobs:
             /usr/local/share/boost /usr/lib/jvm /usr/local/julia* || true
           sudo docker system prune -af --volumes >/dev/null 2>&1 || true
           df -h /
+      # mold is a much faster drop-in ELF linker. The ~60 integration-test
+      # binaries each statically link the full lib (tree-sitter ×18, rten,
+      # aws-lc, resvg, …), so linking — not compilation — dominates the Linux
+      # job. mold is Linux/ELF only, so macOS and the Windows-GNU target keep
+      # their default linkers.
+      - name: Install mold linker
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y mold
       - name: Run tests
         working-directory: rust
         shell: bash
@@ -129,6 +138,11 @@ jobs:
             JEMALLOC_OVERRIDE="${{ steps.jemalloc.outputs.jemalloc-override }}" \
             CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS="-L ${{ steps.jemalloc.outputs.dummy-dir }}" \
             "$CARGO" test --target x86_64-pc-windows-gnu --all-features -- --test-threads=1
+          elif [[ "${{ runner.os }}" == "Linux" ]]; then
+            # `mold -run` redirects child linker invocations to mold without
+            # touching RUSTFLAGS (which is pinned to `-Dwarnings` job-wide and
+            # would override any .cargo/config.toml rustflags).
+            mold -run "$CARGO" test --all-features -- --test-threads=1
           else
             "$CARGO" test --all-features -- --test-threads=1
           fi
