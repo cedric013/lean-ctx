@@ -880,6 +880,7 @@ fn build_app_router_with_auth(cfg: &HttpServerConfig, require_auth: bool) -> Rou
         )
         .route("/v1/kernel/evidence", get(kernel_api::evidence))
         .route("/v1/kernel/health", get(kernel_api::health))
+        .route("/v1/kernel/report", get(kernel_api::report))
         .route(
             "/v1/kernel/reset",
             axum::routing::post(kernel_api::reset_state),

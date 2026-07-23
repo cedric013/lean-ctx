@@ -22,12 +22,13 @@ pub struct EtpaoResponse {
 #[allow(clippy::unused_async)]
 pub async fn dashboard() -> Json<serde_json::Value> {
     let snapshot = live_dashboard::snapshot_json();
-    Json(serde_json::from_str(&snapshot).unwrap_or_else(|error| {
-        serde_json::json!({
-            "error": "invalid dashboard snapshot",
-            "detail": error.to_string(),
-        })
-    }))
+    let report = crate::core::context_kernel::dashboard_report::generate_report();
+    let mut base = serde_json::from_str::<serde_json::Value>(&snapshot)
+        .unwrap_or_else(|_| serde_json::json!({}));
+    if let (Some(obj), Ok(report_val)) = (base.as_object_mut(), serde_json::to_value(&report)) {
+        obj.insert("report".to_string(), report_val);
+    }
+    Json(base)
 }
 
 /// Returns current ETPAO values for both active integration paths.
@@ -97,6 +98,13 @@ pub async fn health() -> Json<serde_json::Value> {
             "detail": error.to_string(),
         })
     }))
+}
+
+/// Returns a structured kernel dashboard report.
+#[allow(clippy::unused_async)]
+pub async fn report() -> Json<serde_json::Value> {
+    let r = crate::core::context_kernel::dashboard_report::generate_report();
+    Json(serde_json::to_value(&r).unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() })))
 }
 
 #[cfg(test)]
