@@ -56,6 +56,10 @@ impl McpTool for CtxSessionTool {
             let tc = tool_calls_handle.blocking_read();
             tc.iter().map(|c| (c.tool.clone(), c.duration_ms)).collect()
         };
+        let agent_id = ctx
+            .agent_id
+            .as_ref()
+            .and_then(|agent_id| agent_id.blocking_read().clone());
 
         let session_handle = ctx
             .session
@@ -74,6 +78,7 @@ impl McpTool for CtxSessionTool {
                 write,
                 privacy: privacy.as_deref(),
                 terse,
+                agent_id: agent_id.as_deref(),
             },
         );
 

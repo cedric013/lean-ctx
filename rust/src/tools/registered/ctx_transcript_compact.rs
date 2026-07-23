@@ -90,6 +90,7 @@ impl McpTool for CtxTranscriptCompactTool {
                         write: false,
                         privacy: None,
                         terse: Some(true),
+                        agent_id: None,
                     },
                 );
             }

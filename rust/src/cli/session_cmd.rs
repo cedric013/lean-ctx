@@ -176,6 +176,7 @@ fn default_opts() -> SessionToolOptions<'static> {
         write: false,
         privacy: None,
         terse: None,
+        agent_id: None,
     }
 }
 

@@ -5,7 +5,11 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
+};
 
 use crate::core::memory_policy::EpisodicPolicy;
 
@@ -27,6 +31,8 @@ pub struct Episode {
     pub summary: String,
     pub duration_secs: u64,
     pub tokens_used: u64,
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +61,38 @@ impl Outcome {
             Outcome::Unknown => "unknown",
         }
     }
+}
+
+fn episodic_lock(project_hash: &str) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks
+        .entry(project_hash.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+fn acquire_file_lock(path: &Path) -> Option<std::fs::File> {
+    use fs2::FileExt;
+    let parent = path.parent()?;
+    let name = path.file_name()?.to_string_lossy();
+    let lock_path = parent.join(format!(".{name}.lock"));
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600));
+    }
+    file.lock_exclusive().ok()?;
+    Some(file)
 }
 
 impl EpisodicStore {
@@ -241,6 +279,28 @@ impl EpisodicStore {
         Self::load(project_hash).unwrap_or_else(|| Self::new(project_hash))
     }
 
+    pub fn mutate_locked<T>(
+        project_hash: &str,
+        mutate: impl FnOnce(&mut Self) -> T,
+    ) -> Result<(Self, T), String> {
+        let lock = episodic_lock(project_hash);
+        let _guard = lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let path = Self::store_path(project_hash)
+            .ok_or_else(|| "Cannot determine data directory".to_string())?;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{e}"))?;
+        }
+        let _file_lock = acquire_file_lock(&path);
+
+        let mut store = Self::load_or_create(project_hash);
+        let result = mutate(&mut store);
+        store.save()?;
+        Ok((store, result))
+    }
+
     pub fn save(&self) -> Result<(), String> {
         let path = Self::store_path(&self.project_hash)
             .ok_or_else(|| "Cannot determine data directory".to_string())?;
@@ -248,7 +308,7 @@ impl EpisodicStore {
             std::fs::create_dir_all(dir).map_err(|e| format!("{e}"))?;
         }
         let json = serde_json::to_string_pretty(self).map_err(|e| format!("{e}"))?;
-        std::fs::write(path, json).map_err(|e| format!("{e}"))
+        crate::core::atomic_fs::write_bytes_with_fallback(&path, json.as_bytes(), None)
     }
 }
 
@@ -324,7 +384,44 @@ pub fn create_episode_from_session(
         // Cumulative session counter at record time; the caller converts
         // this into a per-task delta (see `finalize_episode_metrics`).
         tokens_used: session.stats.total_tokens_saved,
+        agent_id: None,
     }
+}
+
+pub fn record_session_episode(
+    project_hash: &str,
+    session: &super::session::SessionState,
+    tool_calls: &[(String, u64)],
+    agent_id: Option<&str>,
+    policy: &EpisodicPolicy,
+    deduplicate: bool,
+) -> Result<Option<String>, String> {
+    let normalized_agent_id = agent_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
+
+    let (_, episode_id) = EpisodicStore::mutate_locked(project_hash, |store| {
+        let mut episode = create_episode_from_session(session, tool_calls);
+        episode.agent_id = normalized_agent_id.clone();
+
+        if deduplicate
+            && store.episodes.iter().any(|existing| {
+                existing.session_id == episode.session_id
+                    && existing.agent_id == episode.agent_id
+                    && existing.task_description == episode.task_description
+            })
+        {
+            return None;
+        }
+
+        finalize_episode_metrics(&mut episode, store, session.started_at);
+        let id = episode.id.clone();
+        store.record_episode(episode, policy);
+        Some(id)
+    })?;
+
+    Ok(episode_id)
 }
 
 /// Converts the cumulative session counters captured by
@@ -449,7 +546,85 @@ mod tests {
             summary: String::new(),
             duration_secs: 60,
             tokens_used: 5000,
+            agent_id: None,
         }
+    }
+
+    #[test]
+    fn mutate_locked_preserves_successive_agent_episodes() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::test_env::set_var("LEAN_CTX_DATA_DIR", tmp.path());
+        let policy = EpisodicPolicy::default();
+        let project_hash = "episodic-locked-writes";
+
+        EpisodicStore::mutate_locked(project_hash, |store| {
+            let mut episode = make_episode("Task from agent A", Outcome::Unknown);
+            episode.agent_id = Some("agent-a".to_string());
+            store.record_episode(episode, &policy);
+        })
+        .unwrap();
+        EpisodicStore::mutate_locked(project_hash, |store| {
+            let mut episode = make_episode("Task from agent B", Outcome::Unknown);
+            episode.agent_id = Some("agent-b".to_string());
+            store.record_episode(episode, &policy);
+        })
+        .unwrap();
+
+        let store = EpisodicStore::load_or_create(project_hash);
+        assert_eq!(store.episodes.len(), 2);
+        assert!(store
+            .episodes
+            .iter()
+            .any(|episode| episode.agent_id.as_deref() == Some("agent-a")));
+        assert!(store
+            .episodes
+            .iter()
+            .any(|episode| episode.agent_id.as_deref() == Some("agent-b")));
+    }
+
+    #[test]
+    fn record_session_episode_deduplicates_per_agent() {
+        let tmp = tempfile::tempdir().unwrap();
+        crate::test_env::set_var("LEAN_CTX_DATA_DIR", tmp.path());
+        let policy = EpisodicPolicy::default();
+        let project_hash = "episodic-agent-dedup";
+        let mut session = super::super::session::SessionState::new();
+        session.set_task("same task", None);
+        let tool_calls = vec![("ctx_read".to_string(), 10)];
+
+        assert!(record_session_episode(
+            project_hash,
+            &session,
+            &tool_calls,
+            Some("agent-a"),
+            &policy,
+            true,
+        )
+        .unwrap()
+        .is_some());
+        assert!(record_session_episode(
+            project_hash,
+            &session,
+            &tool_calls,
+            Some("agent-a"),
+            &policy,
+            true,
+        )
+        .unwrap()
+        .is_none());
+        assert!(record_session_episode(
+            project_hash,
+            &session,
+            &tool_calls,
+            Some("agent-b"),
+            &policy,
+            true,
+        )
+        .unwrap()
+        .is_some());
+
+        let store = EpisodicStore::load_or_create(project_hash);
+        assert_eq!(store.episodes.len(), 2);
     }
 
     #[test]

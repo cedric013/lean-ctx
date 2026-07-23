@@ -363,6 +363,7 @@ mod tests {
             summary: String::new(),
             duration_secs: 60,
             tokens_used: 1000,
+            agent_id: None,
         }
     }
 

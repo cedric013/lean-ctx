@@ -8,6 +8,7 @@ pub struct SessionToolOptions<'a> {
     pub privacy: Option<&'a str>,
     /// For `action=configure`: set terse output mode when `Some`.
     pub terse: Option<bool>,
+    pub agent_id: Option<&'a str>,
 }
 
 pub fn handle(
@@ -235,7 +236,7 @@ stale_files: {}\n",
                 desc.contains("[100%]") || lower.contains("[done]") || lower.contains("[complete]");
             let mut note = String::new();
             if completed {
-                match auto_record_episode(session, tool_calls) {
+                match auto_record_episode(session, tool_calls, opts.agent_id) {
                     Ok(Some(id)) => {
                         note = format!("\nEpisode auto-recorded: {id}");
                     }
@@ -562,18 +563,20 @@ stale_files: {}\n",
                 }
             };
             let hash = crate::core::project_hash::hash_project_root(&project_root);
-            let mut store = crate::core::episodic_memory::EpisodicStore::load_or_create(&hash);
-
             match value {
                 Some("record") => {
-                    let ep = crate::core::episodic_memory::create_episode_from_session(
-                        session, tool_calls,
-                    );
-                    let id = ep.id.clone();
-                    store.record_episode(ep, &policy.episodic);
-                    if let Err(e) = store.save() {
-                        return format!("Episode record failed: {e}");
-                    }
+                    let id = match crate::core::episodic_memory::record_session_episode(
+                        &hash,
+                        session,
+                        tool_calls,
+                        opts.agent_id,
+                        &policy.episodic,
+                        false,
+                    ) {
+                        Ok(Some(id)) => id,
+                        Ok(None) => return "Episode already recorded.".to_string(),
+                        Err(e) => return format!("Episode record failed: {e}"),
+                    };
                     crate::core::events::emit(crate::core::events::EventKind::KnowledgeUpdate {
                         category: "episodic".to_string(),
                         key: id.clone(),
@@ -596,6 +599,7 @@ stale_files: {}\n",
                 }
                 Some(v) if v.starts_with("search ") => {
                     let q = v.trim_start_matches("search ").trim();
+                    let store = crate::core::episodic_memory::EpisodicStore::load_or_create(&hash);
                     let hits = store.search(q);
                     if hits.is_empty() {
                         return "No episodes matched.".to_string();
@@ -615,6 +619,7 @@ stale_files: {}\n",
                 }
                 Some(v) if v.starts_with("file ") => {
                     let f = v.trim_start_matches("file ").trim();
+                    let store = crate::core::episodic_memory::EpisodicStore::load_or_create(&hash);
                     let hits = store.by_file(f);
                     let mut out = format!("Episodes for file match '{f}' ({}):", hits.len());
                     for ep in hits.into_iter().take(10) {
@@ -631,6 +636,7 @@ stale_files: {}\n",
                 }
                 Some(v) if v.starts_with("outcome ") => {
                     let label = v.trim_start_matches("outcome ").trim();
+                    let store = crate::core::episodic_memory::EpisodicStore::load_or_create(&hash);
                     let hits = store.by_outcome(label);
                     let mut out = format!("Episodes outcome '{label}' ({}):", hits.len());
                     for ep in hits.into_iter().take(10) {
@@ -640,6 +646,7 @@ stale_files: {}\n",
                     out
                 }
                 _ => {
+                    let store = crate::core::episodic_memory::EpisodicStore::load_or_create(&hash);
                     let stats = store.stats();
                     let recent = store.recent(10);
                     let mut out = format!(
@@ -776,6 +783,7 @@ stale_files: {}\n",
 fn auto_record_episode(
     session: &SessionState,
     tool_calls: &[(String, u64)],
+    agent_id: Option<&str>,
 ) -> Result<Option<String>, String> {
     let project_root = session.project_root.clone().unwrap_or_else(|| {
         std::env::current_dir().map_or_else(
@@ -787,20 +795,17 @@ fn auto_record_episode(
         .memory_policy_effective()
         .map_err(|e| format!("invalid memory policy: {e}"))?;
     let hash = crate::core::project_hash::hash_project_root(&project_root);
-    let mut store = crate::core::episodic_memory::EpisodicStore::load_or_create(&hash);
-
-    let mut ep = crate::core::episodic_memory::create_episode_from_session(session, tool_calls);
-    if let Some(last) = store.recent(1).first()
-        && last.task_description == ep.task_description
-    {
-        return Ok(None);
-    }
-    // Convert cumulative session counters into per-task delta + duration.
-    crate::core::episodic_memory::finalize_episode_metrics(&mut ep, &store, session.started_at);
-
-    let id = ep.id.clone();
-    store.record_episode(ep, &policy.episodic);
-    store.save()?;
+    let id = match crate::core::episodic_memory::record_session_episode(
+        &hash,
+        session,
+        tool_calls,
+        agent_id,
+        &policy.episodic,
+        true,
+    )? {
+        Some(id) => id,
+        None => return Ok(None),
+    };
     crate::core::events::emit(crate::core::events::EventKind::KnowledgeUpdate {
         category: "episodic".to_string(),
         key: id.clone(),
@@ -810,6 +815,7 @@ fn auto_record_episode(
     // Each new episode is a chance to learn a procedure: mine the episode
     // history for repeated tool sequences. Best-effort — pattern detection
     // must never fail the task update itself (#478).
+    let store = crate::core::episodic_memory::EpisodicStore::load_or_create(&hash);
     let episodes: Vec<crate::core::episodic_memory::Episode> =
         store.recent(50).into_iter().cloned().collect();
     let mut procs = crate::core::procedural_memory::ProceduralStore::load_or_create(&hash);

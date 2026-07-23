@@ -242,8 +242,53 @@ impl LeanCtxServer {
         *self.last_call.write().await = Instant::now();
     }
 
+    async fn record_shutdown_episode(&self) {
+        let tool_calls: Vec<(String, u64)> = self
+            .tool_calls
+            .read()
+            .await
+            .iter()
+            .map(|call| (call.tool.clone(), call.duration_ms))
+            .collect();
+        if tool_calls.is_empty() {
+            return;
+        }
+
+        let session = self.session.read().await.clone();
+        let Some(project_root) = session
+            .project_root
+            .clone()
+            .or_else(|| self.startup_project_root.clone())
+        else {
+            return;
+        };
+        let agent_id = self.agent_id.read().await.clone();
+        let agent_id = match agent_id {
+            Some(agent_id) => Some(agent_id),
+            None => self.presence_agent_id.read().await.clone(),
+        };
+        let policy = crate::core::config::Config::load()
+            .memory_policy_effective()
+            .unwrap_or_default();
+        let project_hash = crate::core::project_hash::hash_project_root(&project_root);
+
+        match crate::core::episodic_memory::record_session_episode(
+            &project_hash,
+            &session,
+            &tool_calls,
+            agent_id.as_deref(),
+            &policy.episodic,
+            true,
+        ) {
+            Ok(Some(id)) => tracing::info!("lean-ctx: recorded shutdown episode {id}"),
+            Ok(None) => {}
+            Err(error) => tracing::warn!("lean-ctx: failed to record shutdown episode: {error}"),
+        }
+    }
+
     /// Aggressive cleanup on connection drop: save session, consolidate knowledge, clear caches.
     pub async fn shutdown(&self) {
+        self.record_shutdown_episode().await;
         if let Some(agent_id) = self.presence_agent_id.read().await.clone()
             && let Err(error) = crate::core::agents::AgentRegistry::finish_persistent(&agent_id)
         {
