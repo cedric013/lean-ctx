@@ -103,6 +103,7 @@ class CockpitRoi extends HTMLElement {
         // Org usage breakdown (enterprise#20): central admin API when
         // [gateway_server].admin_url is set, else this machine's snapshot.
         fetchJson('/api/usage-breakdown', { timeoutMs: 12000 }).catch(function () { return null; }),
+        fetchJson('/api/kernel', { timeoutMs: 8000 }).catch(function () { return null; }),
       ]);
       this._data = results[0];
       this._stats = results[1];
@@ -110,6 +111,7 @@ class CockpitRoi extends HTMLElement {
       // estimated cost model de-hardcodes its blended rate (GL #486 follow-up).
       this._spend = results[2];
       this._usage = results[3];
+      this._kernel = results[4];
       var Fp = croiFmt();
       if (this._spend && this._spend.pricing && Fp.applyServerPricing) {
         Fp.applyServerPricing(this._spend.pricing);
@@ -186,6 +188,7 @@ class CockpitRoi extends HTMLElement {
     body += this._renderPlan(esc);
     body += this._renderTrendCard(esc);
     body += this._renderBreakdown(esc);
+    body += this._renderProviders(esc);
     body += this._renderShare(esc);
     this.innerHTML = body;
   }
@@ -768,6 +771,37 @@ class CockpitRoi extends HTMLElement {
       '<p class="hs">Export a signed, shareable report for your manager, finance, or README:</p>' +
       '<pre class="mono" style="background:var(--bg-elev,#0d1117);padding:10px;border-radius:8px;overflow:auto">' +
       'lean-ctx roi --export roi.md</pre></div>'
+    );
+  }
+
+  _renderProviders(esc) {
+    var k = this._kernel;
+    if (!k || !Array.isArray(k.providers) || k.providers.length === 0) return '';
+    var F = croiFmt();
+    var ff = F.ff || function (n) { return String(n); };
+    var rows = '';
+    var totalIn = 0;
+    var totalOut = 0;
+    for (var i = 0; i < k.providers.length; i++) {
+      var p = k.providers[i];
+      totalIn += p.input_tokens || 0;
+      totalOut += p.output_tokens || 0;
+      rows +=
+        '<tr><td>' + esc(p.provider || '—') + '</td>' +
+        '<td class="r">' + esc(ff(p.requests || 0)) + '</td>' +
+        '<td class="r">' + esc(ff(p.input_tokens || 0)) + '</td>' +
+        '<td class="r">' + esc(ff(p.output_tokens || 0)) + '</td>' +
+        '<td class="r">' + esc(ff(p.cache_read_tokens || 0)) + '</td></tr>';
+    }
+    return (
+      '<div class="card" style="margin-bottom:16px">' +
+      '<div class="card-header"><h3>Provider Distribution</h3>' +
+      '<span class="badge">' + esc(ff(totalIn + totalOut)) + ' tok total</span></div>' +
+      '<div class="table-scroll"><table>' +
+      '<thead><tr><th>Provider</th><th class="r">Requests</th>' +
+      '<th class="r">Input tok</th><th class="r">Output tok</th>' +
+      '<th class="r">Cache read</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div></div>'
     );
   }
 }

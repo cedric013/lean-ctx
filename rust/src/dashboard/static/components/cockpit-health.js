@@ -7,6 +7,7 @@ var CKH_TABS = [
   { id: 'verification', label: 'Verification' },
   { id: 'bugmemory', label: 'Bug Memory' },
   { id: 'toolbudget', label: 'Tool Budget' },
+  { id: 'kernel', label: 'Kernel' },
 ];
 
 function ckhApi() {
@@ -38,6 +39,7 @@ class CockpitHealth extends HTMLElement {
     this._verificationData = null;
     this._gotchaData = null;
     this._toolBudgetData = null;
+    this._kernelData = null;
     this._onRefresh = this._onRefresh.bind(this);
   }
 
@@ -98,6 +100,9 @@ class CockpitHealth extends HTMLElement {
       fetchJson('/api/tools-health', { timeoutMs: 10000 }).catch(function (e) {
         return { __error: e && e.error ? e.error : String(e || 'error') };
       }),
+      fetchJson('/api/kernel', { timeoutMs: 10000 }).catch(function (e) {
+        return { __error: e && e.error ? e.error : String(e || 'error') };
+      }),
     ]);
 
     this._sloData = results[0] && !results[0].__error ? results[0] : null;
@@ -105,6 +110,7 @@ class CockpitHealth extends HTMLElement {
     this._verificationData = results[2] && !results[2].__error ? results[2] : null;
     this._gotchaData = results[3] && !results[3].__error ? results[3] : null;
     this._toolBudgetData = results[4] && !results[4].__error ? results[4] : null;
+    this._kernelData = results[5] && !results[5].__error ? results[5] : null;
 
     if (!this._sloData && !this._anomalyData &&
         !this._verificationData && !this._gotchaData && !this._toolBudgetData) {
@@ -158,6 +164,7 @@ class CockpitHealth extends HTMLElement {
     if (this._tab === 'verification') return this._renderVerification(esc);
     if (this._tab === 'bugmemory') return this._renderBugMemory(esc);
     if (this._tab === 'toolbudget') return this._renderToolBudget(esc);
+    if (this._tab === 'kernel') return this._renderKernel(esc);
     return '';
   }
 
@@ -534,6 +541,93 @@ class CockpitHealth extends HTMLElement {
     }
 
     return summary + rotCard + rulesCard + knowCard;
+  }
+
+  _renderKernel(esc) {
+    var d = this._kernelData;
+    if (!d) {
+      return (
+        '<div class="card"><div class="empty-state">' +
+        '<h2>Context Kernel</h2>' +
+        '<p>Kernel data not available — ensure <code>kernel.enabled = true</code> in config.</p>' +
+        '</div></div>'
+      );
+    }
+    var F = ckhFmt();
+    var ff = F.ff || function (n) { return String(n); };
+    var hl = d.health || 'unknown';
+    var hColor = hl === 'healthy' ? 'var(--green)' : hl === 'degraded' ? 'var(--yellow)' : 'var(--red)';
+    var sav = d.savings || {};
+    var hd = d.health_details || {};
+    var ev = d.evidence || {};
+
+    var hero =
+      '<div class="hero r4 stagger" style="margin-bottom:16px">' +
+      '<div class="hc"><span class="hl">Status</span>' +
+      '<div class="hv" style="color:' + hColor + '">' + esc(hl) + '</div></div>' +
+      '<div class="hc"><span class="hl">Version</span>' +
+      '<div class="hv">' + esc(d.version || '—') + '</div></div>' +
+      '<div class="hc"><span class="hl">Subsystems</span>' +
+      '<div class="hv">' + esc(ff(hd.subsystem_count || 0)) + '</div></div>' +
+      '<div class="hc"><span class="hl">Dedup hit rate</span>' +
+      '<div class="hv">' + esc((100 * (hd.dedup_hit_rate || 0)).toFixed(1) + '%') + '</div></div>' +
+      '</div>';
+
+    var savingsCard =
+      '<div class="card" style="margin-bottom:16px">' +
+      '<div class="card-header"><h3>Kernel Savings</h3></div>' +
+      '<div class="table-scroll"><table>' +
+      '<thead><tr><th>Metric</th><th class="r">Value</th></tr></thead><tbody>' +
+      '<tr><td>Dedup cache hits</td><td class="r">' + esc(ff(sav.dedup_hits || 0)) + '</td></tr>' +
+      '<tr><td>Schema tokens saved</td><td class="r">' + esc(ff(sav.schema_tokens_saved || 0)) + '</td></tr>' +
+      '<tr><td>Evidence dispatches</td><td class="r">' + esc(ff(sav.evidence_dispatches || 0)) + '</td></tr>' +
+      '<tr><td>Response cached</td><td class="r">' + esc(ff(sav.response_cached || 0)) + '</td></tr>' +
+      '</tbody></table></div></div>';
+
+    var provs = Array.isArray(d.providers) ? d.providers : [];
+    var provCard = '';
+    if (provs.length > 0) {
+      var pRows = '';
+      for (var i = 0; i < provs.length; i++) {
+        var p = provs[i];
+        pRows +=
+          '<tr><td>' + esc(p.provider || '—') + '</td>' +
+          '<td class="r">' + esc(ff(p.requests || 0)) + '</td>' +
+          '<td class="r">' + esc(ff(p.input_tokens || 0)) + '</td>' +
+          '<td class="r">' + esc(ff(p.output_tokens || 0)) + '</td>' +
+          '<td class="r">' + esc(ff(p.cache_read_tokens || 0)) + '</td></tr>';
+      }
+      provCard =
+        '<div class="card" style="margin-bottom:16px">' +
+        '<div class="card-header"><h3>Provider Distribution</h3></div>' +
+        '<div class="table-scroll"><table>' +
+        '<thead><tr><th>Provider</th><th class="r">Requests</th>' +
+        '<th class="r">Input tok</th><th class="r">Output tok</th>' +
+        '<th class="r">Cache read</th></tr></thead>' +
+        '<tbody>' + pRows + '</tbody></table></div></div>';
+    }
+
+    var subsystems = Array.isArray(d.subsystems) ? d.subsystems : [];
+    var subCard = '';
+    if (subsystems.length > 0) {
+      var sRows = '';
+      for (var j = 0; j < subsystems.length; j++) {
+        var s = subsystems[j];
+        var color = s.active ? 'var(--green)' : 'var(--muted)';
+        sRows +=
+          '<tr><td>' + esc(s.name || '—') + '</td>' +
+          '<td style="color:' + color + '">' + (s.active ? '✓' : '—') + '</td>' +
+          '<td>' + esc(s.detail || '') + '</td></tr>';
+      }
+      subCard =
+        '<div class="card">' +
+        '<div class="card-header"><h3>Kernel Subsystems</h3></div>' +
+        '<div class="table-scroll"><table>' +
+        '<thead><tr><th>Subsystem</th><th>Active</th><th>Detail</th></tr></thead>' +
+        '<tbody>' + sRows + '</tbody></table></div></div>';
+    }
+
+    return hero + savingsCard + provCard + subCard;
   }
 }
 

@@ -5,6 +5,7 @@ mod context;
 mod doctor;
 mod graph;
 pub mod helpers;
+mod kernel;
 mod knowledge;
 mod leaderboard;
 mod learning;
@@ -173,6 +174,7 @@ pub fn route_response(
         .or_else(|| agents::handle(path, query_str, method, body))
         .or_else(|| tools::handle(path, query_str, method, body))
         .or_else(|| settings::handle(path, query_str, method, body))
+        .or_else(|| kernel::handle(path, query_str, method, body))
         .or_else(|| doctor::handle(path, query_str, method, body))
         .or_else(|| leaderboard::handle(path, query_str, method, body))
         .or_else(|| usage_breakdown::handle(path, query_str, method, body))

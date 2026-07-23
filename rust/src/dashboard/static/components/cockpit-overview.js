@@ -129,6 +129,7 @@ class CockpitOverview extends HTMLElement {
       '/api/roi',
       '/api/spend',
       '/api/workspaces',
+      '/api/kernel',
     ];
 
     var cached = window.LctxApi && window.LctxApi.cachedFetch ? window.LctxApi.cachedFetch : fetchJson;
@@ -163,6 +164,7 @@ class CockpitOverview extends HTMLElement {
       roi: ok(results[7]),
       spend: ok(results[8]),
       workspaces: ok(results[9]),
+      kernel: ok(results[10]),
     };
     // De-hardcode the estimated cost model's blended rate from the server.
     var Fp = fmtLib();
@@ -618,6 +620,7 @@ class CockpitOverview extends HTMLElement {
       chip('Reliability', sloPct + '% <span class="status-chip-sub">(' + sloPassed + '/' + sloTotal + ')</span>', sloCol, 'slo_compliance') +
       chip('Verification', vPct + '% <span class="status-chip-sub">(' + vPassed + '/' + vTotal + ')</span>', vCol, 'verification') +
       chip('Graph', gNodes + ' nodes \u00b7 ' + gEdges + ' edges', null, 'property_graph') +
+      chip('Kernel', (this._data.kernel && this._data.kernel.enabled) ? this._data.kernel.health : 'off', (this._data.kernel && this._data.kernel.health === 'healthy') ? 'var(--green)' : (this._data.kernel && this._data.kernel.health === 'degraded') ? 'var(--yellow)' : 'var(--muted)', 'kernel_status') +
       (session && session.terse_mode ? chip('Terse', '<span class="tag tg">on</span>', null, null) : '') +
       '</div>'
     );
