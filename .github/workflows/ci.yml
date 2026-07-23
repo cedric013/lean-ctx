@@ -53,7 +53,7 @@ jobs:
     # injectable for tests) rather than papering over it with test-groups.
     timeout-minutes: 180
     env:
-      # ~60 integration-test binaries each statically link the full lib
+      # ~50 integration-test binaries each statically link the full lib
       # (tree-sitter ×18, rten, aws-lc, resvg, …). With default full debug
       # info that is 25-40 GB and the ubuntu runner dies with ENOSPC / the
       # linker with SIGBUS. Line tables keep file:line in panic backtraces
@@ -116,11 +116,13 @@ jobs:
             /usr/local/share/boost /usr/lib/jvm /usr/local/julia* || true
           sudo docker system prune -af --volumes >/dev/null 2>&1 || true
           df -h /
-      # mold is a much faster drop-in ELF linker. The ~60 integration-test
+      # mold is a much faster drop-in ELF linker. The ~50 integration-test
       # binaries each statically link the full lib (tree-sitter ×18, rten,
       # aws-lc, resvg, …), so linking — not compilation — dominates the Linux
-      # job. mold is Linux/ELF only, so macOS and the Windows-GNU target keep
-      # their default linkers.
+      # job. (#1146 already merged 93 of the old ~145 test files into one
+      # binary; the ~50 that remain still each pay the full-lib link.) mold is
+      # Linux/ELF only, so macOS and the Windows-GNU target keep their default
+      # linkers.
       - name: Install mold linker
         if: runner.os == 'Linux'
         shell: bash
