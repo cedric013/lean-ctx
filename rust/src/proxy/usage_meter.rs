@@ -266,6 +266,24 @@ pub fn record(u: &super::usage::RealUsage) {
     // the installed sink (no-op locally). Never blocks the request path.
     super::usage_sink::push(u);
 
+    // R33: Feed measured usage into kernel envelope pipeline.
+    {
+        let label = u.wire.as_ref().map_or("Unknown", |w| {
+            // provider_kind_from_label expects a static or owned string;
+            // the label lives long enough for the conversion call.
+            match w.provider.as_str() {
+                "Anthropic" => "Anthropic",
+                "OpenAI" | "ChatGPT" => "OpenAI",
+                "Gemini" => "Gemini",
+                "Bedrock" => "Bedrock",
+                "Azure" => "Azure",
+                _ => "Unknown",
+            }
+        });
+        let envelope = super::usage_parity::real_usage_to_envelope(u, label);
+        crate::core::context_kernel::envelope_bridge::record_proxy_envelope(&envelope);
+    }
+
     // OCLA projection: keep the canonical usage capability on the same single
     // finalized-turn choke-point without feeding back into billing or ledger
     // aggregation. Invalid/missing lineage stays explicitly unmanaged.
