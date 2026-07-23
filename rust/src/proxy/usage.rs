@@ -35,7 +35,7 @@ impl Provider {
     pub fn from_label(label: &str) -> Self {
         match label {
             "Anthropic" | "Bedrock" => Self::Anthropic,
-            "OpenAI" | "ChatGPT" => Self::OpenAi,
+            "OpenAI" | "ChatGPT" | "Azure" => Self::OpenAi,
             _ => Self::Gemini,
         }
     }

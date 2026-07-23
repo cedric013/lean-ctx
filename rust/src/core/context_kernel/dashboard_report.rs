@@ -39,6 +39,8 @@ pub struct DashboardReport {
     pub subsystems: Vec<SubsystemStatus>,
     /// Combined token and evidence savings.
     pub savings: TokenSavingsSummary,
+    /// Per-provider request distribution.
+    pub provider_distribution: Vec<super::envelope_bridge::ProviderStat>,
 }
 
 /// Generates a point-in-time report from all dashboard subsystems.
@@ -118,6 +120,7 @@ pub fn generate_report() -> DashboardReport {
             evidence_dispatches: dispatches,
             response_cached: response.cached_responses,
         },
+        provider_distribution: super::envelope_bridge::provider_stats(),
     }
 }
 
