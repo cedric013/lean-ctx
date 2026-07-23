@@ -573,6 +573,7 @@ integration = "codebase-pack"
             ResolvedTransport::Http {
                 headers,
                 secret_fingerprints,
+                ..
             } => {
                 assert_eq!(headers.len(), 1);
                 assert_eq!(
