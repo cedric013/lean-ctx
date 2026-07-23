@@ -157,6 +157,7 @@ fn session_resume_action() {
             write: false,
             privacy: None,
             terse: None,
+            agent_id: None,
         },
     );
     assert!(

@@ -795,16 +795,16 @@ fn auto_record_episode(
         .memory_policy_effective()
         .map_err(|e| format!("invalid memory policy: {e}"))?;
     let hash = crate::core::project_hash::hash_project_root(&project_root);
-    let id = match crate::core::episodic_memory::record_session_episode(
+    let Some(id) = crate::core::episodic_memory::record_session_episode(
         &hash,
         session,
         tool_calls,
         agent_id,
         &policy.episodic,
         true,
-    )? {
-        Some(id) => id,
-        None => return Ok(None),
+    )?
+    else {
+        return Ok(None);
     };
     crate::core::events::emit(crate::core::events::EventKind::KnowledgeUpdate {
         category: "episodic".to_string(),
