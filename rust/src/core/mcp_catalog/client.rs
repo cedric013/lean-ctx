@@ -122,8 +122,8 @@ mod tests {
         let secrets = BTreeMap::from([("authorization".into(), "fingerprint".into())]);
         let converted = http_headers(&headers, &secrets).expect("valid headers");
 
-        assert!(!converted[http::header::ACCEPT].is_sensitive());
-        assert!(converted[http::header::AUTHORIZATION].is_sensitive());
+        assert!(!converted[&http::header::ACCEPT].is_sensitive());
+        assert!(converted[&http::header::AUTHORIZATION].is_sensitive());
     }
 }
 
