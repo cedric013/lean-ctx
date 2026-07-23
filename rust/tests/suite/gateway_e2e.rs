@@ -201,6 +201,7 @@ fn fixture_transport() -> ResolvedTransport {
         env: BTreeMap::new(),
         binary_sha256: String::new(),
         capabilities: None,
+        secret_fingerprints: BTreeMap::new(),
     }
 }
 
