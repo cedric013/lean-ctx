@@ -59,6 +59,11 @@ TMP_LINK="${BINARY}.tmp.$$"
 ln -sf "$TARGET" "$TMP_LINK"
 mv -f "$TMP_LINK" "$BINARY"
 
+# 3b) Ad-hoc sign for macOS code-signature enforcement (Sequoia+)
+if command -v codesign >/dev/null 2>&1; then
+    codesign --force --sign - "$TARGET" 2>/dev/null && printf "  Signed (ad-hoc)\n" || true
+fi
+
 # 4) Verify
 VERSION=$("$BINARY" --version 2>&1)
 printf "  Installed: %s\n" "$VERSION"
