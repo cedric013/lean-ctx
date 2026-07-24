@@ -270,6 +270,24 @@ fn limit_alone_reads_from_first_line() {
 }
 
 #[test]
+fn limit_preserves_explicit_lines_window() {
+    let mut mode = "lines:90-100".to_string();
+    let mut fresh = false;
+    super::apply_line_window(&mut mode, &mut fresh, true, None, None, Some(5));
+    assert_eq!(mode, "lines:90-100");
+    assert!(!fresh);
+}
+
+#[test]
+fn limit_preserves_explicit_anchored_window() {
+    let mut mode = "anchored:90-100".to_string();
+    let mut fresh = false;
+    super::apply_line_window(&mut mode, &mut fresh, true, None, None, Some(5));
+    assert_eq!(mode, "anchored:90-100");
+    assert!(!fresh);
+}
+
+#[test]
 fn start_line_wins_over_offset_when_both_present() {
     assert_eq!(
         super::resolve_line_window(Some(10), Some(99), None),

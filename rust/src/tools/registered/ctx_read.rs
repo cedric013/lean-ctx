@@ -1206,21 +1206,31 @@ fn anchored_lines_mode(start: i64, limit: Option<i64>) -> String {
     }
 }
 
-/// Apply a resolved line window to `mode`/`fresh`. An explicit non-lines mode
-/// (map/signatures/…) is never clobbered (#259), and `start_line=1` with no
-/// limit is a no-op so it cannot disturb an auto/explicit read (#253). An
-/// explicit `anchored` mode is windowed in place (`anchored:N-M`, #811)
-/// instead of being collapsed to `lines:N-M` — that would silently drop the
-/// hash anchors the caller asked for, and previously let a bounded anchored
-/// read fall through to rendering (and erroring on) the whole file.
+/// Apply a resolved line window to `mode`/`fresh`. Explicit `lines:N-M` and
+/// `anchored:N-M` modes are preserved when `limit` is the only alias (#1254).
+/// A `start_line` or `offset` still overrides any mode to prevent full-file
+/// materialization, while `start_line=1` without a limit remains a no-op (#253).
 fn apply_line_window(
     mode: &mut String,
     fresh: &mut bool,
-    _explicit_mode: bool,
+    explicit_mode: bool,
     start_line: Option<i64>,
     offset: Option<i64>,
     limit: Option<i64>,
 ) {
+    let preserve_explicit_window = explicit_mode
+        && start_line.is_none()
+        && offset.is_none()
+        && limit.is_some_and(|value| value > 0)
+        && matches!(
+            mode.parse::<crate::tools::ctx_read::ReadMode>(),
+            Ok(crate::tools::ctx_read::ReadMode::Lines(_)
+                | crate::tools::ctx_read::ReadMode::Anchored(Some(_)))
+        );
+    if preserve_explicit_window {
+        return;
+    }
+
     let Some((start, limit)) = resolve_line_window(start_line, offset, limit) else {
         return;
     };
