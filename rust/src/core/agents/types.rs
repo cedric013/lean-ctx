@@ -1,0 +1,78 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+use crate::core::a2a::message::{MessagePriority, PrivacyLevel};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRegistry {
+    pub agents: Vec<AgentEntry>,
+    pub scratchpad: Vec<ScratchpadEntry>,
+    #[serde(default)]
+    pub logical_sessions: Vec<LogicalSessionPresence>,
+    #[serde(default)]
+    pub logical_session_telemetry_seen: bool,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LogicalSessionPresence {
+    pub source: String,
+    pub workspace: String,
+    pub session_id: String,
+    pub opened_at: DateTime<Utc>,
+    pub last_heartbeat: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentEntry {
+    pub agent_id: String,
+    pub agent_type: String,
+    pub role: Option<String>,
+    pub project_root: String,
+    pub started_at: DateTime<Utc>,
+    pub last_active: DateTime<Utc>,
+    pub pid: u32,
+    pub status: AgentStatus,
+    pub status_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum AgentStatus {
+    Active,
+    Idle,
+    Finished,
+}
+
+impl std::fmt::Display for AgentStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentStatus::Active => write!(f, "active"),
+            AgentStatus::Idle => write!(f, "idle"),
+            AgentStatus::Finished => write!(f, "finished"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScratchpadEntry {
+    pub id: String,
+    pub from_agent: String,
+    pub to_agent: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    pub category: String,
+    #[serde(default)]
+    pub priority: MessagePriority,
+    #[serde(default)]
+    pub privacy: PrivacyLevel,
+    pub message: String,
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+    #[serde(default)]
+    pub project_root: Option<String>,
+    pub timestamp: DateTime<Utc>,
+    pub read_by: Vec<String>,
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+}
