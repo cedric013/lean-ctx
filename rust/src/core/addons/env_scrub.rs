@@ -9,7 +9,8 @@
 //! `[mcp.env]` values on top.
 //!
 //! Addons *without* a capability declaration keep the legacy inherited
-//! environment, so existing installs do not change.
+//! environment, except gateway memento source variables (`LEAN_CTX_SECRET_*`),
+//! which are always removed before explicitly declared values are layered.
 
 use std::collections::BTreeMap;
 
@@ -19,11 +20,13 @@ use super::capabilities::{AddonCapabilities, BASE_ENV_ALLOWLIST};
 
 /// Configure `cmd`'s environment for a stdio addon spawn.
 ///
-/// - `declared_env` — the addon's `[mcp.env]` (always applied; author-set).
+/// - `declared_env` — the addon's `[mcp.env]`, including restored `secret_env`
+///   targets (always applied; author-set).
 /// - `capabilities`:
 ///   - `Some` → **scrub**: clear the inherited env, re-add [`BASE_ENV_ALLOWLIST`]
 ///     plus the declared capability env names from the host, then `declared_env`.
-///   - `None` → **legacy**: inherit the host env, then apply `declared_env`.
+///   - `None` → **legacy**: inherit the host env, except memento source variables,
+///     then apply `declared_env`.
 pub fn apply_env(
     cmd: &mut Command,
     declared_env: &BTreeMap<String, String>,
@@ -40,6 +43,15 @@ pub fn apply_env(
             if let Ok(val) = std::env::var(name) {
                 cmd.env(name, val);
             }
+        }
+    }
+    // Memento fallback variables contain credentials for gateway transports, not
+    // ambient child-process configuration. Remove them even on the legacy path;
+    // resolved `secret_env` target values are layered back below under the names
+    // explicitly declared for this server.
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("LEAN_CTX_SECRET_") {
+            cmd.env_remove(name);
         }
     }
     for (k, v) in declared_env {
@@ -99,6 +111,49 @@ mod tests {
         let mut cmd = Command::new("true");
         apply_env(&mut cmd, &declared, Some(&caps));
         assert!(env_keys(&cmd).iter().any(|k| k == "ADDON_MODE"));
+    }
+
+    #[test]
+    fn legacy_path_removes_memento_source_variables() {
+        let source = "LEAN_CTX_SECRET_6D63702F74657374";
+        crate::test_env::set_var(source, "source-secret");
+        let mut cmd = Command::new("true");
+
+        apply_env(&mut cmd, &BTreeMap::new(), None);
+
+        let removed = cmd
+            .as_std()
+            .get_envs()
+            .any(|(name, value)| name == source && value.is_none());
+        crate::test_env::remove_var(source);
+        assert!(removed, "memento source variable must be removed");
+    }
+
+    #[test]
+    fn restored_secret_target_is_layered_after_source_removal() {
+        let source = "LEAN_CTX_SECRET_6D63702F746573742F746172676574";
+        crate::test_env::set_var(source, "source-secret");
+        let declared = BTreeMap::from([("GITLAB_TOKEN".into(), "restored-secret".into())]);
+        let mut cmd = Command::new("true");
+
+        apply_env(&mut cmd, &declared, None);
+
+        let env = cmd
+            .as_std()
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        crate::test_env::remove_var(source);
+        assert_eq!(env.get(source), Some(&None));
+        assert_eq!(
+            env.get("GITLAB_TOKEN"),
+            Some(&Some("restored-secret".into()))
+        );
     }
 
     #[test]
