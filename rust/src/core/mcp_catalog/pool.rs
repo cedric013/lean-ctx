@@ -68,20 +68,34 @@ fn pool_identity(transport: &ResolvedTransport) -> String {
             headers,
             secret_fingerprints,
         } => format!(
-            "http|url={url:?}|headers={:?}|secrets={secret_fingerprints:?}",
-            public_values(headers, secret_fingerprints)
+            "http|url={url:?}|headers={:?}|secrets={:?}",
+            public_values_case_insensitive(headers, secret_fingerprints),
+            normalized_secret_fingerprints(secret_fingerprints)
         ),
     }
 }
 
-fn public_values(
+fn public_values_case_insensitive(
     values: &BTreeMap<String, String>,
     secret_fingerprints: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     values
         .iter()
-        .filter(|(name, _)| !secret_fingerprints.contains_key(*name))
+        .filter(|(name, _)| {
+            !secret_fingerprints
+                .keys()
+                .any(|secret| secret.eq_ignore_ascii_case(name))
+        })
         .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
+fn normalized_secret_fingerprints(
+    secret_fingerprints: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    secret_fingerprints
+        .iter()
+        .map(|(name, fingerprint)| (name.to_ascii_lowercase(), fingerprint.clone()))
         .collect()
 }
 
@@ -199,6 +213,23 @@ mod tests {
             secret_fingerprints: secrets,
         };
         assert_ne!(key(&first), key(&rotated));
+    }
+
+    #[test]
+    fn http_key_treats_secret_header_names_case_insensitively() {
+        let upper = ResolvedTransport::Http {
+            url: "https://example.com/mcp".into(),
+            headers: BTreeMap::from([("Authorization".into(), "private-token".into())]),
+            secret_fingerprints: BTreeMap::from([("Authorization".into(), "fingerprint".into())]),
+        };
+        let lower_fingerprint = ResolvedTransport::Http {
+            url: "https://example.com/mcp".into(),
+            headers: BTreeMap::from([("Authorization".into(), "private-token".into())]),
+            secret_fingerprints: BTreeMap::from([("authorization".into(), "fingerprint".into())]),
+        };
+
+        assert!(!pool_identity(&lower_fingerprint).contains("private-token"));
+        assert_eq!(key(&upper), key(&lower_fingerprint));
     }
 
     #[test]

@@ -204,7 +204,10 @@ fn redacted_values<'a>(
     values
         .iter()
         .map(|(name, value)| {
-            let value = if secret_fingerprints.contains_key(name) {
+            let value = if secret_fingerprints
+                .keys()
+                .any(|secret| secret.eq_ignore_ascii_case(name))
+            {
                 "<redacted>"
             } else {
                 value.as_str()
@@ -649,7 +652,7 @@ secret_headers = { Authorization = { id = "mcp/gitlab/toml", format = "Bearer {s
                 ("Accept".into(), "application/json".into()),
                 ("Authorization".into(), "private-value".into()),
             ]),
-            secret_fingerprints: BTreeMap::from([("Authorization".into(), "abc123".into())]),
+            secret_fingerprints: BTreeMap::from([("authorization".into(), "abc123".into())]),
         };
 
         let debug = format!("{transport:?}");
