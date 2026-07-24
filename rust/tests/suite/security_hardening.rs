@@ -2,18 +2,22 @@
 //! bank-readiness audit (2026-05-08).
 
 /// Reads the full `LeanCtxServer` dispatch source across its split submodules
-/// (`mod.rs`, `call_tool.rs`, `server_handler.rs`, plus the extracted
-/// `post_process.rs` / `post_dispatch.rs` stages) so that the security-invariant
-/// checks below stay robust to internal module structure.
+/// so that the security-invariant checks below stay robust to internal module
+/// structure.  After D8/E1 splits, `call_tool.rs` delegates to submodules in
+/// `call_tool/` and `team/mod.rs` delegates to `team/request_pipeline.rs`.
 fn server_dispatch_src() -> String {
-    format!(
-        "{}\n{}\n{}\n{}\n{}",
+    [
         include_str!("../../src/server/mod.rs"),
         include_str!("../../src/server/call_tool.rs"),
+        include_str!("../../src/server/call_tool/pipeline.rs"),
+        include_str!("../../src/server/call_tool/guarded.rs"),
+        include_str!("../../src/server/call_tool/outcome.rs"),
+        include_str!("../../src/server/call_tool/policy.rs"),
         include_str!("../../src/server/server_handler.rs"),
         include_str!("../../src/server/post_process.rs"),
         include_str!("../../src/server/post_dispatch.rs"),
-    )
+    ]
+    .join("\n")
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +222,11 @@ fn event_lineage_applies_redaction() {
 // ---------------------------------------------------------------------------
 #[test]
 fn team_auth_rejects_batch_requests() {
-    let src = include_str!("../../src/http_server/team/mod.rs");
+    let src = [
+        include_str!("../../src/http_server/team/mod.rs"),
+        include_str!("../../src/http_server/team/request_pipeline.rs"),
+    ]
+    .join("\n");
 
     assert!(
         src.contains("batch_requests_not_supported"),

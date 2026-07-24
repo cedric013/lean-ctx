@@ -7,17 +7,21 @@ use lean_ctx::core::protocol::CrpMode;
 use std::io::Write;
 
 /// Reads the full `LeanCtxServer` dispatch source across its split submodules
-/// (`mod.rs`, `call_tool.rs`, `server_handler.rs`) so that the invariant checks
-/// below stay robust to internal module structure.
+/// so that the invariant checks below stay robust to internal module structure.
+/// After D8/E1 splits, `call_tool.rs` delegates to submodules in `call_tool/`.
 fn server_dispatch_src() -> String {
-    format!(
-        "{}\n{}\n{}\n{}\n{}",
+    [
         include_str!("../../src/server/mod.rs"),
         include_str!("../../src/server/call_tool.rs"),
+        include_str!("../../src/server/call_tool/pipeline.rs"),
+        include_str!("../../src/server/call_tool/guarded.rs"),
+        include_str!("../../src/server/call_tool/outcome.rs"),
+        include_str!("../../src/server/call_tool/policy.rs"),
         include_str!("../../src/server/server_handler.rs"),
         include_str!("../../src/server/post_process.rs"),
         include_str!("../../src/server/post_dispatch.rs"),
-    )
+    ]
+    .join("\n")
 }
 
 /// Extract the body of the `fn skip_terse(` guard (everything after the opening
