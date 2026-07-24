@@ -1207,12 +1207,14 @@ fn anchored_lines_mode(start: i64, limit: Option<i64>) -> String {
 }
 
 /// Apply a resolved line window to `mode`/`fresh`. An explicit non-lines mode
-/// (map/signatures/…) is never clobbered (#259), and `start_line=1` with no
-/// limit is a no-op so it cannot disturb an auto/explicit read (#253). An
-/// explicit `anchored` mode is windowed in place (`anchored:N-M`, #811)
-/// instead of being collapsed to `lines:N-M` — that would silently drop the
-/// hash anchors the caller asked for, and previously let a bounded anchored
-/// read fall through to rendering (and erroring on) the whole file.
+/// (map/signatures/...) is never clobbered (#259), and `start_line=1` with no
+/// limit is a no-op so it cannot disturb an auto/explicit read (#253). A bare
+/// `limit` must not replace an already explicit `lines:`/`anchored:N-M` window;
+/// it only exists as shorthand for `lines:1-N` when no window was supplied. An
+/// explicit `anchored` mode is windowed in place (`anchored:N-M`, #811) instead
+/// of being collapsed to `lines:N-M` -- that would silently drop the hash anchors
+/// the caller asked for, and previously let a bounded anchored read fall through
+/// to rendering (and erroring on) the whole file.
 fn apply_line_window(
     mode: &mut String,
     fresh: &mut bool,
@@ -1224,6 +1226,13 @@ fn apply_line_window(
     let Some((start, limit)) = resolve_line_window(start_line, offset, limit) else {
         return;
     };
+    if start_line.is_none()
+        && offset.is_none()
+        && limit.is_some()
+        && (mode.starts_with("lines:") || mode.starts_with("anchored:"))
+    {
+        return;
+    }
     if start <= 1 && limit.is_none() {
         return;
     }
